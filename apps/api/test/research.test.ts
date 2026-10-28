@@ -603,7 +603,11 @@ describe("project scope (decoy project B)", () => {
     const run = await createManualRun(db.db, ctx, w.id, "automation:c1:k1");
     expect(run).toMatchObject({ watchlistId: w.id, trigger: "MANUAL", status: "RUNNING" });
     expect((await createManualRun(db.db, ctx, w.id, "automation:c1:k1")).id).toBe(run.id);
-    const [start] = await db.db.select().from(auditRecords).where(eq(auditRecords.resourceId, run.id));
+    const [start] = await db.db
+      .select()
+      .from(auditRecords)
+      .where(eq(auditRecords.resourceId, run.id))
+      .orderBy(auditRecords.id); // the app's background tick may already have written a later record
     expect(start).toMatchObject({ action: "research.run.start", actor: "automation:test" });
     expect(start!.metadata).toMatchObject({ workspaceId: A.workspaceId, projectId: A.id });
     await db.db.update(researchRuns).set({ status: "FAILED" }).where(eq(researchRuns.id, run.id));
