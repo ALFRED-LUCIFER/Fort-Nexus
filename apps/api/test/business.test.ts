@@ -6,6 +6,7 @@ import pg from "pg";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { TOP_PRODUCTS_LIMIT } from "@nexus/contracts";
 import type {
   ConnectionTestResult,
   Connector,
@@ -14,13 +15,21 @@ import type {
   MetricQuery,
   PaymentFailuresResponse,
   Project,
+  RevenueSummaryResponse,
   SalesSummaryResponse,
+  TopProductsResponse,
   WorkspaceList,
 } from "@nexus/contracts";
-import { listConnectors } from "../src/business/connectors.ts";
+import { listConnectors, testConnector } from "../src/business/connectors.ts";
 import { businessConnectors } from "../src/business/schema.ts";
 import { readOnly } from "../src/business/gateway.ts";
-import { getPaymentFailures, getSalesSummary, type ToolScope } from "../src/business/metrics.ts";
+import {
+  getPaymentFailures,
+  getRevenueSummary,
+  getSalesSummary,
+  getTopProducts,
+  type ToolScope,
+} from "../src/business/metrics.ts";
 import { answer } from "../src/conversations/tools.ts";
 import { createDb } from "../src/db/index.ts";
 import { auditRecords } from "../src/db/schema.ts";
@@ -38,6 +47,9 @@ create schema private;
 create table shop.orders (id serial primary key, created_at timestamptz not null, status text not null,
   amount_cents bigint not null, customer_email text, address text);
 create table shop.payments (id serial primary key, created_at timestamptz not null, status text not null, failure_reason text);
+create table shop.refunds (id serial primary key, order_id int, created_at timestamptz not null, amount numeric(12, 2) not null);
+create table shop.order_items (id serial primary key, order_id int not null, product text, quantity int not null,
+  amount_cents bigint not null);
 create table private.customers (id serial primary key, email text);
 create view shop.slow_orders as select o.* from shop.orders o cross join lateral (select pg_sleep(0.3)) s;
 
@@ -60,6 +72,24 @@ insert into shop.payments (created_at, status, failure_reason) values
 insert into shop.payments (created_at, status, failure_reason)
   select '2026-10-20T08:00:00Z', 'failed', 'code E' || lpad(i::text, 2, '0') from generate_series(1, 25) i;
 
+-- Refunds count on the refund's own Dubai day (major units), whatever day the order was placed.
+insert into shop.refunds (order_id, created_at, amount) values
+  (1, '2026-10-27T06:00:00Z', 5.50),   -- Dubai 27 Oct 10:00
+  (2, '2026-10-27T19:30:00Z', 0.10),   -- Dubai 27 Oct 23:30
+  (2, '2026-10-27T20:30:00Z', 12.34),  -- Dubai 28 Oct 00:30 (UTC: still the 27th); the order was placed on the 27th
+  (5, '2026-10-28T08:00:00Z', 0.01),   -- Dubai 28 Oct 12:00
+  (5, '2026-10-28T11:00:00Z', 99.00);  -- Dubai 28 Oct 15:00, after "now"
+
+-- Order ids follow the insert order above: 5 and 6 are today's paid orders, 7 is pending, 8 is after "now".
+insert into shop.order_items (order_id, product, quantity, amount_cents) values
+  (5, 'Gift card for jane@example.com', 1, 10000),
+  (5, 'Widget', 3, 2345),
+  (6, 'Widget', 1, 199),
+  (7, 'Pending thing', 10, 500),
+  (8, 'Later thing', 1, 7777);
+insert into shop.order_items (order_id, product, quantity, amount_cents)
+  select 2, 'P' || lpad(i::text, 2, '0'), i, i * 100 from generate_series(1, 12) i;
+
 create role nexus_ro login password '${RO_PASSWORD}';
 grant usage on schema shop to nexus_ro;
 grant select on all tables in schema shop to nexus_ro;
@@ -78,6 +108,7 @@ const DICTIONARY: MetricDictionary = {
     amountColumn: "amount_cents",
     amountUnit: "MINOR",
     paidStatuses: ["paid"],
+    idColumn: "id",
   },
   payments: {
     table: "shop.payments",
@@ -85,6 +116,20 @@ const DICTIONARY: MetricDictionary = {
     statusColumn: "status",
     reasonColumn: "failure_reason",
     failedStatuses: ["failed"],
+  },
+  refunds: {
+    table: "shop.refunds",
+    createdAtColumn: "created_at",
+    amountColumn: "amount",
+    amountUnit: "MAJOR",
+  },
+  orderItems: {
+    table: "shop.order_items",
+    orderIdColumn: "order_id",
+    productColumn: "product",
+    quantityColumn: "quantity",
+    amountColumn: "amount_cents",
+    amountUnit: "MINOR",
   },
 };
 
@@ -201,6 +246,18 @@ const sales = async (q: Record<string, string>) => {
   expectNoSecrets(res.body);
   return res.json<SalesSummaryResponse>();
 };
+const revenue = async (q: Record<string, string>) => {
+  const res = await call("GET", `/v1/business/metrics/revenue?${new URLSearchParams(q)}`);
+  expect(res.statusCode, res.body).toBe(200);
+  expectNoSecrets(res.body);
+  return res.json<RevenueSummaryResponse>();
+};
+const topProducts = async (q: Record<string, string>) => {
+  const res = await call("GET", `/v1/business/metrics/top-products?${new URLSearchParams(q)}`);
+  expect(res.statusCode, res.body).toBe(200);
+  expectNoSecrets(res.body);
+  return res.json<TopProductsResponse>();
+};
 const payments = async (q: Record<string, string>) => {
   const res = await call("GET", `/v1/business/metrics/payment-failures?${new URLSearchParams(q)}`);
   expect(res.statusCode, res.body).toBe(200);
@@ -299,9 +356,57 @@ describe("business connector registry", () => {
     expect(ro.detail).toContain("shop.orders");
     const listed = (await call("GET", "/v1/business/connectors")).json<{ items: Connector[] }>();
     expect(listed.items.find((i) => i.id === c.id)).toMatchObject({ status: "FAILED", lastError: ro.detail });
-    expect((await sales({ connectorId: c.id, day: "2026-10-27" })).current).toMatchObject({
-      status: "UNAVAILABLE",
-      reason: "CONNECTOR_FAILED",
+    for (const r of [
+      await sales({ connectorId: c.id, day: "2026-10-27" }),
+      await revenue({ connectorId: c.id, day: "2026-10-27" }),
+      await topProducts({ connectorId: c.id, day: "2026-10-27" }),
+    ])
+      expect(r.current).toMatchObject({ status: "UNAVAILABLE", reason: "CONNECTOR_FAILED" });
+  });
+
+  it("FR-BIZ-04/05 dictionary: refunds and order items stay inside the allowlist, items need orders.idColumn, columns are tested", async () => {
+    const c = await connector({}, null);
+    const put = (d: unknown) => call("PUT", `/v1/business/connectors/${c.id}/dictionary`, d);
+    const outside = await put({
+      ...DICTIONARY,
+      refunds: { ...DICTIONARY.refunds, table: "private.customers" },
+    });
+    expect(outside.statusCode).toBe(400);
+    expect(outside.json()).toMatchObject({
+      error: { message: expect.stringContaining("private.customers") },
+    });
+    expect(
+      (await put({ ...DICTIONARY, orderItems: { ...DICTIONARY.orderItems, table: "private.customers" } }))
+        .statusCode,
+    ).toBe(400);
+    const noId = await put({ ...DICTIONARY, orders: { ...DICTIONARY.orders, idColumn: undefined } });
+    expect(noId.statusCode).toBe(400);
+    expect(noId.body).toContain("orders.idColumn is required");
+    expect(
+      (await put({ ...DICTIONARY, orderItems: { ...DICTIONARY.orderItems, productColumn: "name; --" } }))
+        .statusCode,
+    ).toBe(400);
+
+    // The service directly: the HTTP test route is rate-limited to 10 a minute and other tests here use it.
+    const test = () => testConnector(toolScope(), c.id);
+    const typos = {
+      ...DICTIONARY,
+      orders: { ...DICTIONARY.orders, idColumn: "order_no" },
+      refunds: { ...DICTIONARY.refunds!, amountColumn: "total" },
+      orderItems: { ...DICTIONARY.orderItems!, quantityColumn: "qty" },
+    };
+    expect((await put(typos)).statusCode).toBe(200);
+    const failed = (await test()).checks.at(-1)!;
+    expect(failed).toMatchObject({ name: "dictionary", ok: false });
+    for (const col of ["shop.orders.order_no", "shop.refunds.total", "shop.order_items.qty"])
+      expect(failed.detail).toContain(col);
+    expect((await put(DICTIONARY)).statusCode).toBe(200);
+    expect(await test()).toMatchObject({ ok: true });
+    const [record] = await auditFor(c.id, "connector.dictionary.put").then((r) => r.slice(-1));
+    expect(record!.metadata).toMatchObject({
+      tables: ["shop.orders", "shop.payments", "shop.refunds", "shop.order_items"],
+      refunds: true,
+      orderItems: true,
     });
   });
 
@@ -525,6 +630,116 @@ describe("read-only metric tools", () => {
   });
 });
 
+describe("revenue and top products (FR-BIZ-04/05)", () => {
+  it("FR-BIZ-04: refunds count on the refund's own Dubai day, net = gross − refunds exact to the cent, with both provenances", async () => {
+    const c = await connector();
+    const scope = toolScope();
+    const res = await getRevenueSummary(scope, query(c.id, { compare: true }));
+    // Today 00:00–14:30 Dubai: gross 123.45 + 1.99; refunds 12.34 (00:30, UTC still the 27th, for a 27 Oct order) + 0.01.
+    expect(res.current).toEqual({
+      status: "AVAILABLE",
+      grossSales: "125.44",
+      refunds: "12.35",
+      netSales: "113.09", // a float would give 113.08999999999999
+      currency: "AED",
+      formula:
+        "net sales = gross sales − refunds; gross sales = sum(amount_cents)/100 in AED, where status in (paid) and created_at in [from, to) (by order time); refunds = sum(amount) in AED, where created_at in [from, to) (by refund time, whatever the order day)",
+      provenance: expect.objectContaining({
+        dataset: "shop.orders",
+        timezone: "Asia/Dubai",
+        from: "2026-10-27T20:00:00.000Z",
+        to: "2026-10-28T10:30:00.000Z",
+        partial: true,
+        filters: { status: ["paid"] },
+        latestRecordAt: "2026-10-28T11:00:00.000Z",
+      }),
+      refundsProvenance: expect.objectContaining({
+        connectorId: c.id,
+        dataset: "shop.refunds",
+        timezone: "Asia/Dubai",
+        from: "2026-10-27T20:00:00.000Z",
+        to: "2026-10-28T10:30:00.000Z",
+        partial: true,
+        filters: {},
+        formula: expect.stringContaining("by refund time"),
+        latestRecordAt: "2026-10-28T11:00:00.000Z",
+      }),
+    });
+    // Yesterday's same clock window (00:00–14:30): the 10:00 refund only.
+    expect(res.previous).toMatchObject({
+      grossSales: "20.00",
+      refunds: "5.50",
+      netSales: "14.50",
+      refundsProvenance: { from: "2026-10-26T20:00:00.000Z", to: "2026-10-27T10:30:00.000Z", partial: false },
+    });
+    // The full 27th keeps 23:30 and drops 00:30 on the 28th, though both are 27 Oct in UTC.
+    expect((await revenue({ connectorId: c.id, day: "2026-10-27" })).current).toMatchObject({
+      grossSales: "60.00",
+      refunds: "5.60",
+      netSales: "54.40",
+    });
+    // A day with no orders or refunds in a defined source is a read zero with provenance, not a missing value.
+    expect((await revenue({ connectorId: c.id, day: "2026-10-20" })).current).toMatchObject({
+      status: "AVAILABLE",
+      grossSales: "0.00",
+      refunds: "0",
+      netSales: "0.00",
+    });
+    const [record] = await auditFor(c.id, "business.revenue");
+    expect(record).toMatchObject({
+      outcome: "SUCCEEDED",
+      correlationId: scope.correlationId,
+      metadata: { tool: "revenue", status: "AVAILABLE", projectId: shop.id },
+    });
+  });
+
+  it("FR-BIZ-05: top products of paid orders in the window by revenue, masked in SQL and capped", async () => {
+    const c = await connector();
+    const res = await getTopProducts(toolScope(), query(c.id));
+    expect(res.current).toMatchObject({
+      status: "AVAILABLE",
+      currency: "AED",
+      // The pending order's and the after-now order's items are left out.
+      items: [
+        { product: "Gift card for [email]", quantity: 1, revenue: "100.00" },
+        { product: "Widget", quantity: 4, revenue: "25.44" },
+      ],
+      provenance: {
+        dataset: "shop.order_items",
+        from: "2026-10-27T20:00:00.000Z",
+        to: "2026-10-28T10:30:00.000Z",
+        partial: true,
+        filters: { status: ["paid"] },
+        formula: expect.stringContaining("product names masked"),
+      },
+    });
+    const text = JSON.stringify(res) + JSON.stringify(await auditFor(c.id, "business.top_products"));
+    expect(text).not.toMatch(/jane|@example|Pending thing|Later thing/);
+
+    const day = await topProducts({ connectorId: c.id, day: "2026-10-27" });
+    if (day.current.status !== "AVAILABLE") throw new Error(day.current.message);
+    expect(day.current.items).toHaveLength(TOP_PRODUCTS_LIMIT);
+    expect(day.current.items[0]).toEqual({ product: "P12", quantity: 12, revenue: "12.00" });
+    expect(day.current.items.at(-1)).toEqual({ product: "P03", quantity: 3, revenue: "3.00" });
+  });
+
+  it("DATA-G02: without a refunds or order-items section the tools are NOT_DEFINED, never 0 refunds", async () => {
+    const noRefunds = await connector({}, { ...DICTIONARY, refunds: undefined });
+    const r = await revenue({ connectorId: noRefunds.id, compare: "true" });
+    expect(r).toEqual({
+      current: { status: "UNAVAILABLE", reason: "NOT_DEFINED", message: expect.stringContaining("refunds") },
+      previous: { status: "UNAVAILABLE", reason: "NOT_DEFINED", message: expect.stringContaining("refunds") },
+    });
+    const noItems = await connector({}, { ...DICTIONARY, orderItems: undefined });
+    expect((await topProducts({ connectorId: noItems.id })).current).toMatchObject({
+      status: "UNAVAILABLE",
+      reason: "NOT_DEFINED",
+    });
+    const [record] = await auditFor(noRefunds.id, "business.revenue");
+    expect(record).toMatchObject({ outcome: "FAILED", metadata: { reason: "NOT_DEFINED" } });
+  });
+});
+
 describe("project scope (decoy project B, NFR-CNV-05)", () => {
   const ids = async (q: string) =>
     (await call("GET", `/v1/business/connectors${q}`)).json<{ items: Connector[] }>().items.map((i) => i.id);
@@ -556,6 +771,8 @@ describe("project scope (decoy project B, NFR-CNV-05)", () => {
         reason: "NO_CONNECTOR",
       });
       expect((await getPaymentFailures(s, query(a.id))).current).toMatchObject({ reason: "NO_CONNECTOR" });
+      expect((await getRevenueSummary(s, query(a.id))).current).toMatchObject({ reason: "NO_CONNECTOR" });
+      expect((await getTopProducts(s, query(a.id))).current).toMatchObject({ reason: "NO_CONNECTOR" });
     }
     const stranger = { db: appDb.db, connectorsDir: dir, actor: "user:x", correlationId: randomUUID() };
     expect(await listConnectors({ ...stranger, ownerId: "someone-else" })).toEqual([]);
@@ -601,7 +818,7 @@ describe("project scope (decoy project B, NFR-CNV-05)", () => {
 
 // Last in the file: it disables every other connector in the shop project.
 describe("Talk answers business questions from the gateway (FR-BIZ-07)", () => {
-  const ask = (compare = false) => {
+  const ask = (compare = false, metric: "SALES_SUMMARY" | "REVENUE" | "TOP_PRODUCTS" = "SALES_SUMMARY") => {
     // A variable, not a literal: `projectId` is the thread's project once Talk is project-scoped (wave 2 S3).
     const ctx = {
       db: appDb.db,
@@ -612,7 +829,7 @@ describe("Talk answers business questions from the gateway (FR-BIZ-07)", () => {
       connectorsDir: dir,
       correlationId: randomUUID(),
     };
-    return answer({ kind: "BUSINESS_METRIC", metric: "SALES_SUMMARY", day: "2026-10-27", compare }, ctx);
+    return answer({ kind: "BUSINESS_METRIC", metric, day: "2026-10-27", compare }, ctx);
   };
 
   it("quotes the gateway's figures with a METRIC source, and never picks between several sources", async () => {
@@ -638,5 +855,36 @@ describe("Talk answers business questions from the gateway (FR-BIZ-07)", () => {
       expect.objectContaining({ kind: "METRIC", label: expect.stringContaining("shop.orders") }),
     ]);
     expectNoSecrets(JSON.stringify(r));
+
+    // FR-BIZ-04 in Talk: the gateway's figures, the formula, and a METRIC source for orders and for refunds.
+    const rev = await ask(false, "REVENUE");
+    expect(rev.basis).toBe("OBSERVED");
+    expect(rev.text).toMatch(
+      /^Revenue 2026-10-27, .*gross sales 60\.00 AED, refunds 5\.60 AED, net sales 54\.40 AED/,
+    );
+    expect(rev.text).toContain("Formula: net sales = gross sales − refunds;");
+    expect(rev.sources.map((s) => [s.kind, s.label.split(" · ")[1]])).toEqual([
+      ["METRIC", "shop.orders"],
+      ["METRIC", "shop.refunds"],
+    ]);
+
+    // FR-BIZ-05 in Talk: masked names, quantities and the formula.
+    const top = await ask(false, "TOP_PRODUCTS");
+    expect(top.basis).toBe("OBSERVED");
+    expect(top.text).toMatch(/^Top products 2026-10-27, .*P12 12\.00 AED \(12 sold\)/);
+    expect(top.text).toContain("product names masked");
+    expect(top.sources).toEqual([
+      expect.objectContaining({ kind: "METRIC", label: expect.stringContaining("shop.order_items") }),
+    ]);
+
+    // Unavailable is said plainly, with no figure and no source.
+    expect(
+      (await call("PUT", `/v1/business/connectors/${c.id}/dictionary`, { ...DICTIONARY, refunds: undefined }))
+        .statusCode,
+    ).toBe(200);
+    const none = await ask(true, "REVENUE");
+    expect(none).toMatchObject({ basis: "NONE", sources: [] });
+    expect(none.text).toMatch(/^Revenue 2026-10-27: unavailable \(.*doesn't define refunds\)\./);
+    expect(none.text).not.toMatch(/\d+\.\d{2}/);
   });
 });

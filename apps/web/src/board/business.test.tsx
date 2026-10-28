@@ -5,7 +5,9 @@ import type {
   Connector,
   MetricProvenance,
   PaymentFailuresResponse,
+  RevenueSummaryResponse,
   SalesSummaryResponse,
+  TopProductsResponse,
 } from "@nexus/contracts";
 import { BIZ_PROJECT_ID, IN_PROJECT, ME, json, mockFetch, renderApp } from "../test/helpers.tsx";
 
@@ -92,6 +94,39 @@ const PAYMENTS: PaymentFailuresResponse = {
   previous: unavailable,
 };
 
+const REVENUE_FORMULA =
+  "net sales = gross sales − refunds; gross sales = sum(amount_cents)/100 in AED, where status in (paid) and created_at in [from, to) (by order time); refunds = sum(amount) in AED, where created_at in [from, to) (by refund time, whatever the order day)";
+
+const REVENUE: RevenueSummaryResponse = {
+  current: {
+    status: "AVAILABLE",
+    grossSales: "125.44",
+    refunds: "12.35",
+    netSales: "113.09",
+    currency: "AED",
+    formula: REVENUE_FORMULA,
+    provenance: prov(),
+    refundsProvenance: prov({ dataset: "shop.refunds", filters: {} }),
+  },
+  previous: unavailable,
+};
+
+const TOP: TopProductsResponse = {
+  current: {
+    status: "AVAILABLE",
+    currency: "AED",
+    items: [
+      { product: "Gift card for [email]", quantity: 1, revenue: "100.00" },
+      { product: "Widget", quantity: 4, revenue: "25.44" },
+    ],
+    provenance: prov({
+      dataset: "shop.order_items",
+      formula: "top 10 products by revenue … product names masked",
+    }),
+  },
+  previous: null,
+};
+
 function business(
   items: Connector[],
   payments: PaymentFailuresResponse = NO_PAYMENTS,
@@ -104,6 +139,8 @@ function business(
     "GET /v1/business/connectors": () => json({ items }),
     "GET /v1/business/metrics/sales-summary": () => json(SALES),
     "GET /v1/business/metrics/payment-failures": () => json(payments),
+    "GET /v1/business/metrics/revenue": () => json(REVENUE),
+    "GET /v1/business/metrics/top-products": () => json(TOP),
     ...extra,
   });
 }
@@ -179,6 +216,123 @@ describe("business drawer", () => {
     const reasons = within(drawer).getByRole("region", { name: /Failed payments by reason/ });
     expect(within(reasons).getByText("Card declined for [email]")).toBeTruthy();
     expect(within(drawer).getByText(/excluded statuses: pending/)).toBeTruthy();
+  });
+
+  it("FR-BIZ-04/05: revenue tiles show gross, refunds and net with the formula; top products by revenue, masked", async () => {
+    const calls = business([connector()], PAYMENTS);
+    renderApp("/?drawer=business");
+    const drawer = await screen.findByRole("dialog");
+    const revenue = await within(drawer).findByRole("region", { name: /Revenue today/ });
+    const tiles = await within(revenue).findAllByRole("listitem");
+    await waitFor(() => expect(tiles[2]!.textContent).toContain("AED 113.09"));
+    expect(tiles.map((t) => t.textContent)).toEqual([
+      expect.stringMatching(
+        /^Gross salespartialAED 125\.44paid orders by order time · yesterday same time: no data$/,
+      ),
+      expect.stringMatching(/^RefundspartialAED 12\.35by refund time/),
+      expect.stringMatching(/^Net salespartialAED 113\.09gross − refunds/),
+    ]);
+    expect(within(revenue).getByText(REVENUE_FORMULA)).toBeTruthy();
+    expect(within(revenue).getByText(/source: Acme shop · prod · read-only · shop.refunds/)).toBeTruthy();
+
+    const top = within(drawer).getByRole("region", {
+      name: /Top products today · by revenue · masked · partial/,
+    });
+    const rows = within(top).getAllByRole("row");
+    expect(rows.map((r) => r.textContent)).toEqual([
+      "ProductQtyRevenue",
+      "Gift card for [email]1AED 100.00",
+      "Widget4AED 25.44",
+    ]);
+    expect(within(top).getByText(/product names masked/)).toBeTruthy();
+    for (const path of ["/v1/business/metrics/revenue", "/v1/business/metrics/top-products"])
+      expect(Object.fromEntries(calls.find((c) => c.path === path)!.query)).toEqual({
+        connectorId: CID,
+        day: "today",
+        compare: "true",
+      });
+  });
+
+  it("DATA-G02: undefined refunds or order items read 'no data' with the reason, never 0", async () => {
+    const notDefined = (what: string) =>
+      ({
+        status: "UNAVAILABLE",
+        reason: "NOT_DEFINED",
+        message: `Acme shop doesn't define ${what}`,
+      }) as const;
+    business([connector()], NO_PAYMENTS, {
+      "GET /v1/business/metrics/revenue": () =>
+        json({ current: notDefined("refunds"), previous: notDefined("refunds") }),
+      "GET /v1/business/metrics/top-products": () =>
+        json({ current: notDefined("order items"), previous: null }),
+    });
+    renderApp("/?drawer=business");
+    const drawer = await screen.findByRole("dialog");
+    const revenue = await within(drawer).findByRole("region", { name: /Revenue today/ });
+    await waitFor(() => expect(revenue.textContent).toContain("doesn't define refunds"));
+    for (const t of within(revenue).getAllByRole("listitem")) {
+      expect(t.textContent).toMatch(/unavailableno data/);
+      expect(t.textContent).not.toMatch(/\b0\b|AED/);
+    }
+    const top = within(drawer).getByRole("region", { name: /Top products today/ });
+    expect(top.textContent).toContain("No data: Acme shop doesn't define order items");
+    expect(within(top).queryByRole("table")).toBeNull();
+  });
+
+  it("FR-BIZ-04/05 dictionary: refunds and order items sections, and items need the order id column", async () => {
+    const calls = business([connector({ hasDictionary: false, environment: "DEV" })], NO_PAYMENTS, {
+      [`GET /v1/business/connectors/${CID}/dictionary`]: () =>
+        json({ error: { code: "NOT_FOUND", message: "Metric dictionary not found" }, requestId: "r" }, 404),
+      [`PUT /v1/business/connectors/${CID}/dictionary`]: (c) => json(c.body),
+    });
+    const user = userEvent.setup();
+    renderApp(`${IN_SHOP}&drawer=business`);
+    const drawer = await screen.findByRole("dialog");
+    await user.click(await within(drawer).findByRole("button", { name: "Metric dictionary" }));
+    const dict = await within(drawer).findByRole("form", { name: "Metric dictionary" });
+    await user.clear(within(dict).getByLabelText("Reporting time zone"));
+    await user.type(within(dict).getByLabelText("Reporting time zone"), "Asia/Dubai");
+    await user.type(within(dict).getByLabelText("Currency"), "AED");
+    await user.click(within(dict).getByLabelText("Refunds table (counted on the refund day)"));
+    await user.click(within(dict).getByLabelText("Order items table (top products)"));
+    const orders = within(dict).getByRole("group", { name: "Orders" });
+    await user.type(within(orders).getByLabelText("Table (schema.table)"), "shop.orders");
+    await user.type(within(orders).getByLabelText("Amount column"), "amount_cents");
+    const refunds = within(dict).getByRole("group", { name: "Refunds" });
+    await user.type(within(refunds).getByLabelText("Table (schema.table)"), "shop.refunds");
+    await user.type(within(refunds).getByLabelText("Amount column"), "amount");
+    await user.selectOptions(within(refunds).getByLabelText("Amount unit"), "MAJOR");
+    const items = within(dict).getByRole("group", { name: "Order items" });
+    await user.type(within(items).getByLabelText("Table (schema.table)"), "shop.order_items");
+    await user.type(within(items).getByLabelText("Product column"), "product");
+    await user.type(within(items).getByLabelText("Amount column"), "amount_cents");
+
+    await user.click(within(dict).getByRole("button", { name: "Save dictionary" }));
+    expect((await within(dict).findByRole("alert")).textContent).toMatch(
+      /^orders\.idColumn: orders\.idColumn is required to join order items/,
+    );
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+
+    await user.type(within(orders).getByLabelText("Order id column (for order items)"), "id");
+    await user.click(within(dict).getByRole("button", { name: "Save dictionary" }));
+    expect(await within(dict).findByText(/Saved\./)).toBeTruthy();
+    expect(calls.find((c) => c.method === "PUT")!.body).toMatchObject({
+      orders: { table: "shop.orders", idColumn: "id" },
+      refunds: {
+        table: "shop.refunds",
+        createdAtColumn: "created_at",
+        amountColumn: "amount",
+        amountUnit: "MAJOR",
+      },
+      orderItems: {
+        table: "shop.order_items",
+        orderIdColumn: "order_id",
+        productColumn: "product",
+        quantityColumn: "quantity",
+        amountColumn: "amount_cents",
+        amountUnit: "MINOR",
+      },
+    });
   });
 
   it("registers a connector, tests it and saves its metric dictionary", async () => {

@@ -10,7 +10,9 @@ import {
   MetricQuery,
   PaymentFailuresResponse,
   ProjectFilterQuery,
+  RevenueSummaryResponse,
   SalesSummaryResponse,
+  TopProductsResponse,
   UpdateConnectorRequest,
 } from "@nexus/contracts";
 import type { Deps } from "../app.ts";
@@ -28,7 +30,7 @@ import {
   type BusinessScope,
   type OwnerScope,
 } from "./connectors.ts";
-import { getPaymentFailures, getSalesSummary } from "./metrics.ts";
+import { getPaymentFailures, getRevenueSummary, getSalesSummary, getTopProducts } from "./metrics.ts";
 
 const IdParams = z.object({ id: z.uuid() });
 // Matches no project: an unknown or foreign connector answers NO_CONNECTOR (and is audited) like a missing one.
@@ -112,5 +114,17 @@ export async function businessRoutes(app: FastifyInstance, { db, config }: Deps)
     "/v1/business/metrics/payment-failures",
     { schema: { querystring: MetricQuery, response: { 200: PaymentFailuresResponse } } },
     async (req) => getPaymentFailures(await metricScope(req, req.query.connectorId), req.query),
+  );
+
+  r.get(
+    "/v1/business/metrics/revenue",
+    { schema: { querystring: MetricQuery, response: { 200: RevenueSummaryResponse } } },
+    async (req) => getRevenueSummary(await metricScope(req, req.query.connectorId), req.query),
+  );
+
+  r.get(
+    "/v1/business/metrics/top-products",
+    { schema: { querystring: MetricQuery, response: { 200: TopProductsResponse } } },
+    async (req) => getTopProducts(await metricScope(req, req.query.connectorId), req.query),
   );
 }

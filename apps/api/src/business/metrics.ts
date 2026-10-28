@@ -5,10 +5,15 @@ import type {
   MetricQuery,
   PaymentFailures,
   PaymentFailuresResponse,
+  RevenueSummary,
+  RevenueSummaryResponse,
   SalesSummary,
   SalesSummaryResponse,
+  TopProducts,
+  TopProductsResponse,
   Unavailable,
 } from "@nexus/contracts";
+import { TOP_PRODUCTS_LIMIT } from "@nexus/contracts";
 import { audit } from "../audit.ts";
 import { HttpError } from "../errors.ts";
 import { findConnector, type BusinessScope } from "./connectors.ts";
@@ -25,7 +30,7 @@ export type ToolScope = BusinessScope & { now?: Date };
 const MAX_GROUPS = 20;
 
 // FR-DATA-09: emails and digit runs of 6+ (optionally space/dash separated, e.g. card numbers) are masked inside the
-// source database, so raw values never reach NEXUS. Reason text is capped at 120 chars.
+// source database, so raw values never reach NEXUS. Reason and product text is capped at 120 chars.
 const mask = (expr: string) =>
   `left(regexp_replace(regexp_replace(coalesce(${expr}, '(none)'), '[^[:space:]@]+@[^[:space:]@]+', '[email]', 'g'), '[0-9](?:[ -]?[0-9]){5,}', '[number]', 'g'), 120)`;
 
@@ -57,6 +62,17 @@ const addDays = (date: string, n: number) =>
 const minorDigits = (currency: string) =>
   new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2;
 
+type AmountUnit = MetricDictionary["orders"]["amountUnit"];
+
+/** sum(a) in major currency units as an exact SQL numeric (never a JS float); 0 for no rows. */
+const majorSum = (unit: AmountUnit, digits: number) =>
+  unit === "MINOR"
+    ? `round(coalesce(sum(a), 0)::numeric / power(10::numeric, ${digits}), ${digits})`
+    : `coalesce(sum(a), 0)::numeric`;
+/** The same sum as formula text. */
+const sumText = (column: string, unit: AmountUnit, digits: number) =>
+  unit === "MINOR" ? `sum(${column})/${10 ** digits}` : `sum(${column})`;
+
 const unavailable = (reason: Unavailable["reason"], message: string): Unavailable => ({
   status: "UNAVAILABLE",
   reason,
@@ -65,11 +81,13 @@ const unavailable = (reason: Unavailable["reason"], message: string): Unavailabl
 
 type Ready = { row: BusinessConnectorRow; dict: MetricDictionary; connectionString: string };
 
+type Needs = "orders" | "payments" | "refunds" | "orderItems";
+
 /** Everything that must hold before a tool may touch the source; otherwise the reason it is unavailable. */
 async function resolveSource(
   s: ToolScope,
   row: BusinessConnectorRow | undefined,
-  needs: "orders" | "payments",
+  needs: Needs,
 ): Promise<Ready | Unavailable> {
   if (!row) return unavailable("NO_CONNECTOR", "No business source is connected for this request");
   if (row.status === "DISABLED") return unavailable("CONNECTOR_DISABLED", `${row.name} is disabled`);
@@ -87,6 +105,14 @@ async function resolveSource(
   if (!dict) return unavailable("NOT_DEFINED", `${row.name} has no metric dictionary yet`);
   if (needs === "payments" && !dict.payments)
     return unavailable("NOT_DEFINED", `${row.name}'s metric dictionary doesn't define payments`);
+  // DATA-G02: no refunds section means refunds are unknown, not zero.
+  if (needs === "refunds" && !dict.refunds)
+    return unavailable("NOT_DEFINED", `${row.name}'s metric dictionary doesn't define refunds`);
+  if (needs === "orderItems" && (!dict.orderItems || !dict.orders.idColumn))
+    return unavailable(
+      "NOT_DEFINED",
+      `${row.name}'s metric dictionary doesn't define order items joined on an order id column`,
+    );
   try {
     return { row, dict, connectionString: await loadConnectionString(s.connectorsDir, row.credentialRef) };
   } catch (err) {
@@ -136,8 +162,8 @@ const provenance = (
 async function runTool<R>(
   s: ToolScope,
   query: MetricQuery,
-  tool: "sales_summary" | "payment_failures",
-  needs: "orders" | "payments",
+  tool: "sales_summary" | "payment_failures" | "revenue" | "top_products",
+  needs: Needs,
   run: (c: pg.Client, r: Ready, win: Win) => Promise<R>,
 ): Promise<{ current: R | Unavailable; previous: R | Unavailable | null }> {
   const started = performance.now();
@@ -204,11 +230,7 @@ export async function getSalesSummary(scope: ToolScope, query: MetricQuery): Pro
     const table = quoteTable(o.table, r.row.schemaAllowlist);
     const [created, status, amount] = [o.createdAtColumn, o.statusColumn, o.amountColumn].map(quoteColumn);
     const digits = minorDigits(r.dict.currency);
-    // Exact decimal in SQL numeric, returned as text (never a JS float).
-    const gross =
-      o.amountUnit === "MINOR"
-        ? `round(coalesce(sum(a), 0)::numeric / power(10::numeric, ${digits}), ${digits})::text`
-        : `coalesce(sum(a), 0)::numeric::text`;
+    const gross = `${majorSum(o.amountUnit, digits)}::text`;
     const res = await c.query<
       WindowRow & { groups: { k: string; n: number; p: boolean | null }[]; paid: number; gross: string }
     >(
@@ -225,8 +247,7 @@ export async function getSalesSummary(scope: ToolScope, query: MetricQuery): Pro
       [win.day, r.dict.reportingTimezone, win.now, win.reference, o.paidStatuses],
     );
     const w = res.rows[0]!;
-    const unit =
-      o.amountUnit === "MINOR" ? `sum(${o.amountColumn})/${10 ** digits}` : `sum(${o.amountColumn})`;
+    const unit = sumText(o.amountColumn, o.amountUnit, digits);
     return {
       status: "AVAILABLE",
       paidOrders: w.paid,
@@ -291,4 +312,100 @@ export async function getPaymentFailures(
       };
     },
   );
+}
+
+/**
+ * Gross sales, refunds and net for one local day (FR-BIZ-04). Gross counts paid orders by order time; refunds count by
+ * refund time, whatever day the order was placed; net = gross − refunds, all in SQL numeric.
+ */
+export async function getRevenueSummary(
+  scope: ToolScope,
+  query: MetricQuery,
+): Promise<RevenueSummaryResponse> {
+  return runTool(scope, query, "revenue", "refunds", async (c, r, win): Promise<RevenueSummary> => {
+    const o = r.dict.orders;
+    const rf = r.dict.refunds!; // resolveSource guarantees it
+    const orders = quoteTable(o.table, r.row.schemaAllowlist);
+    const refunds = quoteTable(rf.table, r.row.schemaAllowlist);
+    const [created, status, amount] = [o.createdAtColumn, o.statusColumn, o.amountColumn].map(quoteColumn);
+    const [rCreated, rAmount] = [rf.createdAtColumn, rf.amountColumn].map(quoteColumn);
+    const digits = minorDigits(r.dict.currency);
+    const res = await c.query<
+      WindowRow & { rlatest: Date | null; gross: string; refunds: string; net: string }
+    >(
+      `with ${WINDOW},
+       o as (select x.${amount} as a from ${orders} x, w
+             where x.${created} >= w.f and x.${created} < w.t and x.${status}::text = any($5::text[])),
+       r as (select x.${rAmount} as a from ${refunds} x, w where x.${rCreated} >= w.f and x.${rCreated} < w.t),
+       g as (select ${majorSum(o.amountUnit, digits)} as v from o),
+       rv as (select ${majorSum(rf.amountUnit, digits)} as v from r)
+       select w.f, w.t, w.partial,
+         (select max(x.${created})::timestamptz from ${orders} x) as latest,
+         (select max(x.${rCreated})::timestamptz from ${refunds} x) as rlatest,
+         g.v::text as gross, rv.v::text as refunds, (g.v - rv.v)::text as net
+       from w, g, rv`,
+      [win.day, r.dict.reportingTimezone, win.now, win.reference, o.paidStatuses],
+    );
+    const w = res.rows[0]!;
+    const cur = r.dict.currency;
+    const grossFormula = `gross sales = ${sumText(o.amountColumn, o.amountUnit, digits)} in ${cur}, where ${o.statusColumn} in (${o.paidStatuses.join(", ")}) and ${o.createdAtColumn} in [from, to) (by order time)`;
+    const refundsFormula = `refunds = ${sumText(rf.amountColumn, rf.amountUnit, digits)} in ${cur}, where ${rf.createdAtColumn} in [from, to) (by refund time, whatever the order day)`;
+    return {
+      status: "AVAILABLE",
+      grossSales: w.gross,
+      refunds: w.refunds,
+      netSales: w.net,
+      currency: cur,
+      formula: `net sales = gross sales − refunds; ${grossFormula}; ${refundsFormula}`,
+      provenance: provenance(r, o.table, w, { [o.statusColumn]: o.paidStatuses }, grossFormula),
+      refundsProvenance: provenance(r, rf.table, { ...w, latest: w.rlatest }, {}, refundsFormula),
+    };
+  });
+}
+
+/** The TOP_PRODUCTS_LIMIT products of paid orders by revenue for one local day; names masked in SQL (FR-BIZ-05). */
+export async function getTopProducts(scope: ToolScope, query: MetricQuery): Promise<TopProductsResponse> {
+  return runTool(scope, query, "top_products", "orderItems", async (c, r, win): Promise<TopProducts> => {
+    const o = r.dict.orders;
+    const it = r.dict.orderItems!; // resolveSource guarantees it and orders.idColumn
+    const orders = quoteTable(o.table, r.row.schemaAllowlist);
+    const items = quoteTable(it.table, r.row.schemaAllowlist);
+    const [created, status, id] = [o.createdAtColumn, o.statusColumn, o.idColumn!].map(quoteColumn);
+    const [orderId, product, quantity, amount] = [
+      it.orderIdColumn,
+      it.productColumn,
+      it.quantityColumn,
+      it.amountColumn,
+    ].map(quoteColumn);
+    const digits = minorDigits(r.dict.currency);
+    // shortcut: assumes non-negative integer quantities (no return lines in the items table); a product whose quantities
+    // sum below zero fails response validation (500), add a returns filter to the dictionary when a source needs one.
+    const res = await c.query<WindowRow & { top: { k: string; q: number; v: string }[] }>(
+      `with ${WINDOW},
+       o as (select x.${id} as id from ${orders} x, w
+             where x.${created} >= w.f and x.${created} < w.t and x.${status}::text = any($5::text[])),
+       i as (select ${mask(`y.${product}::text`)} as k, y.${quantity} as q, y.${amount} as a
+             from ${items} y join o on y.${orderId} = o.id),
+       g as (select k, coalesce(sum(q), 0)::bigint as q, ${majorSum(it.amountUnit, digits)} as v from i group by k)
+       select w.f, w.t, w.partial,
+         (select max(x.${created})::timestamptz from ${orders} x) as latest,
+         (select coalesce(json_agg(json_build_object('k', k, 'q', q, 'v', v::text) order by v desc, k), '[]'::json)
+            from (select * from g order by v desc, k limit ${TOP_PRODUCTS_LIMIT}) t) as top
+       from w`,
+      [win.day, r.dict.reportingTimezone, win.now, win.reference, o.paidStatuses],
+    );
+    const w = res.rows[0]!;
+    return {
+      status: "AVAILABLE",
+      currency: r.dict.currency,
+      items: w.top.map((g) => ({ product: g.k, quantity: g.q, revenue: g.v })),
+      provenance: provenance(
+        r,
+        it.table,
+        w,
+        { [o.statusColumn]: o.paidStatuses },
+        `top ${TOP_PRODUCTS_LIMIT} products by revenue = ${sumText(it.amountColumn, it.amountUnit, digits)} in ${r.dict.currency}, quantity = sum(${it.quantityColumn}), over ${it.table} joined on ${it.orderIdColumn} = ${o.table}.${o.idColumn} where ${o.statusColumn} in (${o.paidStatuses.join(", ")}) and ${o.createdAtColumn} in [from, to); product names masked`,
+      ),
+    };
+  });
 }
