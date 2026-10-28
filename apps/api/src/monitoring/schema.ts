@@ -1,6 +1,22 @@
 import { sql } from "drizzle-orm";
-import { boolean, index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import type { CheckError, ConnectorEnvironment, Incident, IncidentStatus } from "@nexus/contracts";
+import {
+  boolean,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
+import type {
+  CheckError,
+  ConnectorEnvironment,
+  Incident,
+  IncidentStatus,
+  IncidentTriage,
+} from "@nexus/contracts";
 import { projects } from "../db/schema.ts";
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, mode: "date" });
@@ -92,4 +108,24 @@ export const healthChecks = pgTable(
     index("health_checks_app_idx").on(t.appId, t.id),
     index("health_checks_incident_idx").on(t.incidentId, t.id),
   ],
+);
+
+// FR-MON-07: one AI triage per incident, written once. The row is the claim: it exists from the moment one request
+// starts the model call, so a racing request never calls the model too.
+export const incidentTriages = pgTable(
+  "incident_triages",
+  {
+    id: id(),
+    ...scope(),
+    incidentId: uuid("incident_id")
+      .notNull()
+      .references(() => incidents.id),
+    model: text("model").notNull(),
+    profileVersionId: uuid("profile_version_id"),
+    claimedAt: ts("claimed_at").notNull(),
+    // null while the model call is in flight; the validated tool output once it succeeded.
+    result: jsonb("result").$type<Pick<IncidentTriage, "hypotheses" | "suggestedNextStep">>(),
+    createdAt: ts("created_at"),
+  },
+  (t) => [uniqueIndex("incident_triages_incident_uq").on(t.incidentId)],
 );

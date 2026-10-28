@@ -13,11 +13,13 @@ import {
   ConnectorList,
   CreateJobResponse,
   Finding,
+  FindingExplanation,
   FindingList,
   GithubStatus,
   HealthCheck,
   IDEMPOTENCY_HEADER,
   Incident,
+  IncidentTriage,
   IssueDetail,
   IssueList,
   Job,
@@ -271,6 +273,9 @@ export const api = {
   },
   readFinding: (id: string) =>
     request(`/v1/research/findings/${encodeURIComponent(id)}/read`, Finding, post()),
+  // Cache-once on the server: a repeat returns the stored explanation without calling the model.
+  explainFinding: (id: string) =>
+    request(`/v1/research/findings/${encodeURIComponent(id)}/explain`, FindingExplanation, post()),
   // projectId omitted = the read-only "All" view.
   automationClients: (projectId?: string) =>
     request(
@@ -303,6 +308,8 @@ export const api = {
   incident: (id: string) => request(`/v1/incidents/${encodeURIComponent(id)}`, Incident),
   setIncidentStatus: (id: string, status: "ACKNOWLEDGED" | "RESOLVED") =>
     request(`/v1/incidents/${encodeURIComponent(id)}/status`, Incident, post({}, { status })),
+  triageIncident: (id: string) =>
+    request(`/v1/incidents/${encodeURIComponent(id)}/triage`, IncidentTriage, post()),
 };
 
 export type FindingFilters = Partial<Omit<FindingSearchQuery, "cursor">>;

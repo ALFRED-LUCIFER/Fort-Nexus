@@ -13,6 +13,7 @@ import {
 import type {
   BriefSchedule,
   Finding,
+  FindingExplanation,
   ResearchRun,
   ResearchRunStatus,
   ResearchSource,
@@ -145,4 +146,27 @@ export const researchFindingSources = pgTable(
     uniqueIndex("research_finding_sources_url_uq").on(t.watchlistId, t.url),
     index("research_finding_sources_finding_idx").on(t.findingId),
   ],
+);
+
+// FR-RES-08: one AI explanation per finding, written once. The row is the claim: it exists from the moment one
+// request starts the model call, so a racing request never calls the model too.
+export const researchFindingExplanations = pgTable(
+  "research_finding_explanations",
+  {
+    id: id(),
+    ...scope(),
+    findingId: uuid("finding_id")
+      .notNull()
+      .references(() => researchFindings.id),
+    model: text("model").notNull(),
+    profileVersionId: uuid("profile_version_id"),
+    claimedAt: ts("claimed_at").notNull(),
+    // null while the model call is in flight; the validated tool output once it succeeded.
+    result:
+      jsonb("result").$type<
+        Pick<FindingExplanation, "whyItMatters" | "recommendedAction" | "confidence" | "citedUrls">
+      >(),
+    createdAt: ts("created_at"),
+  },
+  (t) => [uniqueIndex("research_finding_explanations_finding_uq").on(t.findingId)],
 );

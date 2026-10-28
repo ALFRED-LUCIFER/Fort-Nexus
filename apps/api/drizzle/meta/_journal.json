@@ -50,6 +50,13 @@
       "when": 1793201602218,
       "tag": "0006_p1",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793203056746,
+      "tag": "0007_ai_explanations",
+      "breakpoints": true
     }
   ]
 }

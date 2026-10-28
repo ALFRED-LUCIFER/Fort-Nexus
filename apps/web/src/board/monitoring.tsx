@@ -7,10 +7,12 @@ import {
   type HealthCheck,
   type Incident,
   type IncidentStatus,
+  type IncidentTriage,
   type MonitoredApp,
 } from "@nexus/contracts";
 import { api, keys } from "../lib/api.ts";
 import { ago, clock, useNow } from "../lib/queries.ts";
+import { AiError, AiLabel } from "./aiInference.tsx";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { P1Button } from "./P1Button.tsx";
 import { PICK_PROJECT, useScope, type Scope } from "./scope.tsx";
@@ -424,15 +426,18 @@ function IncidentBody({ incident: i }: { incident: Incident }) {
   const scope = useScope();
   const queryClient = useQueryClient();
   const reasonId = useId();
+  const triageReasonId = useId();
+  const checkId = useId();
   const set = useMutation({
     mutationFn: (status: "ACKNOWLEDGED" | "RESOLVED") => api.setIncidentStatus(i.id, status),
     onSuccess: (updated) => queryClient.setQueryData(keys.incident(i.id), updated),
     onSettled: () => queryClient.invalidateQueries({ queryKey: keys.monitoring }),
   });
+  const triage = useMutation({ mutationFn: () => api.triageIncident(i.id) });
+  // Triage is advice: a resolved incident can still be triaged afterwards; All and archived projects can't.
+  const triageBlocked = writeBlocked(scope, i.projectId);
   const blocked =
-    i.status === "RESOLVED"
-      ? "Resolved is final: a new failure streak opens a new incident."
-      : writeBlocked(scope, i.projectId);
+    i.status === "RESOLVED" ? "Resolved is final: a new failure streak opens a new incident." : triageBlocked;
   const timeline: [string, string | null][] = [
     ["Opened", i.openedAt],
     ["Acknowledged", i.acknowledgedAt],
@@ -473,7 +478,7 @@ function IncidentBody({ incident: i }: { incident: Incident }) {
           </h3>
           <ul aria-labelledby="inc-evidence" className="m-0 flex list-none flex-col gap-1.5 p-0 text-[13px]">
             {i.evidence.map((c) => (
-              <li key={c.id} className="flex gap-3">
+              <li key={c.id} id={`${checkId}-${c.id}`} tabIndex={-1} className="flex gap-3">
                 <span className="w-[86px] flex-none font-mono text-[11.5px] text-ink3">
                   {clock(c.checkedAt)}
                 </span>
@@ -512,27 +517,83 @@ function IncidentBody({ incident: i }: { incident: Incident }) {
                 Resolve
               </button>
             )}
-            <P1Button
-              why="Agent triage (hypotheses from the evidence) arrives with agents."
-              className={ghostBtn}
-            >
-              Agent triage
-            </P1Button>
-            <P1Button
-              why="Creating a fix issue from an incident arrives with agent triage."
-              className={ghostBtn}
-            >
+            {!triage.data && (
+              <button
+                type="button"
+                disabled={!!triageBlocked || triage.isPending}
+                aria-describedby={
+                  triageBlocked ? (triageBlocked === blocked ? reasonId : triageReasonId) : undefined
+                }
+                onClick={() => triage.mutate()}
+                className={ghostBtn}
+              >
+                {triage.isPending ? "Triaging…" : "Triage"}
+              </button>
+            )}
+            <P1Button why="Creating a fix issue from an incident isn't available yet." className={ghostBtn}>
               Create fix issue
             </P1Button>
           </div>
           {blocked && <Reason id={reasonId}>{blocked}</Reason>}
+          {triageBlocked && triageBlocked !== blocked && <Reason id={triageReasonId}>{triageBlocked}</Reason>}
           {set.error && (
             <p role="alert" className="m-0 text-[13px] text-coral">
               {set.error.message}
             </p>
           )}
+          {triage.error && <AiError error={triage.error} />}
         </div>
+        {triage.data && <Triage incident={i} triage={triage.data} checkId={checkId} />}
       </div>
     </>
+  );
+}
+
+/** FR-MON-07: hypotheses labelled as unverified inference, each linking to the failed checks it cites. */
+function Triage({
+  incident,
+  triage,
+  checkId,
+}: {
+  incident: Incident;
+  triage: IncidentTriage;
+  checkId: string;
+}) {
+  const show = (id: string) => {
+    const el = document.getElementById(`${checkId}-${id}`);
+    el?.scrollIntoView?.({ block: "nearest" });
+    el?.focus();
+  };
+  return (
+    <section aria-labelledby="inc-triage" className="flex flex-col gap-2 rounded-xl bg-hair px-3 py-2.5">
+      <h3 id="inc-triage" className="kicker m-0">
+        Triage
+      </h3>
+      <AiLabel model={triage.model} />
+      <ol aria-label="Hypotheses" className="m-0 flex list-none flex-col gap-2 p-0 text-[13px]">
+        {triage.hypotheses.map((h, n) => (
+          <li key={n} className="flex flex-col gap-1">
+            <span className="break-words text-ink">{h.text}</span>
+            <span className="flex flex-wrap gap-x-2 font-mono text-[11.5px] text-ink2">
+              {h.confidence.toLowerCase()} confidence · evidence:
+              {h.evidenceCheckIds.map((id) => {
+                const c = incident.evidence.find((e) => e.id === id);
+                return c ? (
+                  <button key={id} type="button" onClick={() => show(id)} className="text-teal underline">
+                    check at {clock(c.checkedAt)}
+                  </button>
+                ) : (
+                  <span key={id}>an older check</span>
+                );
+              })}
+            </span>
+          </li>
+        ))}
+      </ol>
+      <p className="m-0 text-[13px] break-words text-ink2">
+        <span className="font-medium text-ink">Suggested next step: </span>
+        {triage.suggestedNextStep}
+      </p>
+    </section>
   );
 }
