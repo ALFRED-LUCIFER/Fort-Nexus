@@ -1,3 +1,34 @@
+CREATE TABLE "automation_clients" (
+	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
+	"owner_id" text NOT NULL,
+	"workspace_id" uuid NOT NULL,
+	"project_id" uuid NOT NULL,
+	"name" text NOT NULL,
+	"allowed_actions" jsonb NOT NULL,
+	"allowed_job_types" jsonb NOT NULL,
+	"rate_limit_per_minute" integer NOT NULL,
+	"disabled" boolean DEFAULT false NOT NULL,
+	"key_version" integer DEFAULT 1 NOT NULL,
+	"last_used_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "automation_runs" (
+	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
+	"client_id" uuid NOT NULL,
+	"workspace_id" uuid NOT NULL,
+	"project_id" uuid NOT NULL,
+	"action" text,
+	"idempotency_key" text,
+	"request_hash" text,
+	"status" text NOT NULL,
+	"reason" text,
+	"result" jsonb,
+	"correlation_id" text NOT NULL,
+	"received_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "business_connectors" (
 	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
 	"workspace_id" uuid NOT NULL,
@@ -126,6 +157,57 @@ CREATE TABLE "research_watchlists" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "health_checks" (
+	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
+	"workspace_id" uuid NOT NULL,
+	"project_id" uuid NOT NULL,
+	"app_id" uuid NOT NULL,
+	"incident_id" uuid,
+	"checked_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"ok" boolean NOT NULL,
+	"status_code" integer,
+	"latency_ms" integer,
+	"error" text
+);
+--> statement-breakpoint
+CREATE TABLE "incidents" (
+	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
+	"workspace_id" uuid NOT NULL,
+	"project_id" uuid NOT NULL,
+	"app_id" uuid NOT NULL,
+	"fingerprint" text NOT NULL,
+	"severity" text NOT NULL,
+	"status" text DEFAULT 'OPEN' NOT NULL,
+	"title" text NOT NULL,
+	"opened_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"acknowledged_at" timestamp with time zone,
+	"recovered_at" timestamp with time zone,
+	"resolved_at" timestamp with time zone
+);
+--> statement-breakpoint
+CREATE TABLE "monitored_apps" (
+	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
+	"workspace_id" uuid NOT NULL,
+	"project_id" uuid NOT NULL,
+	"name" text NOT NULL,
+	"environment" text NOT NULL,
+	"health_url" text NOT NULL,
+	"repository_id" text,
+	"interval_seconds" integer NOT NULL,
+	"timeout_ms" integer NOT NULL,
+	"failure_threshold" integer NOT NULL,
+	"disabled" boolean DEFAULT false NOT NULL,
+	"consecutive_failures" integer DEFAULT 0 NOT NULL,
+	"last_checked_at" timestamp with time zone,
+	"next_check_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"created_by" text NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+ALTER TABLE "notifications" ADD COLUMN "incident_id" uuid;--> statement-breakpoint
+ALTER TABLE "automation_clients" ADD CONSTRAINT "automation_clients_owner_id_user_id_fk" FOREIGN KEY ("owner_id") REFERENCES "public"."user"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "automation_runs" ADD CONSTRAINT "automation_runs_client_id_automation_clients_id_fk" FOREIGN KEY ("client_id") REFERENCES "public"."automation_clients"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "action_proposals" ADD CONSTRAINT "action_proposals_thread_id_conversation_threads_id_fk" FOREIGN KEY ("thread_id") REFERENCES "public"."conversation_threads"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "action_proposals" ADD CONSTRAINT "action_proposals_turn_id_conversation_turns_id_fk" FOREIGN KEY ("turn_id") REFERENCES "public"."conversation_turns"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "action_proposals" ADD CONSTRAINT "action_proposals_result_job_id_jobs_id_fk" FOREIGN KEY ("result_job_id") REFERENCES "public"."jobs"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -137,6 +219,16 @@ ALTER TABLE "research_finding_sources" ADD CONSTRAINT "research_finding_sources_
 ALTER TABLE "research_findings" ADD CONSTRAINT "research_findings_watchlist_id_research_watchlists_id_fk" FOREIGN KEY ("watchlist_id") REFERENCES "public"."research_watchlists"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "research_findings" ADD CONSTRAINT "research_findings_first_run_id_research_runs_id_fk" FOREIGN KEY ("first_run_id") REFERENCES "public"."research_runs"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "research_runs" ADD CONSTRAINT "research_runs_watchlist_id_research_watchlists_id_fk" FOREIGN KEY ("watchlist_id") REFERENCES "public"."research_watchlists"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "health_checks" ADD CONSTRAINT "health_checks_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "health_checks" ADD CONSTRAINT "health_checks_app_id_monitored_apps_id_fk" FOREIGN KEY ("app_id") REFERENCES "public"."monitored_apps"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "health_checks" ADD CONSTRAINT "health_checks_incident_id_incidents_id_fk" FOREIGN KEY ("incident_id") REFERENCES "public"."incidents"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "incidents" ADD CONSTRAINT "incidents_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "incidents" ADD CONSTRAINT "incidents_app_id_monitored_apps_id_fk" FOREIGN KEY ("app_id") REFERENCES "public"."monitored_apps"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "monitored_apps" ADD CONSTRAINT "monitored_apps_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "automation_clients_scope_idx" ON "automation_clients" USING btree ("workspace_id","project_id","id");--> statement-breakpoint
+CREATE UNIQUE INDEX "automation_runs_accepted_key_uq" ON "automation_runs" USING btree ("client_id","idempotency_key") WHERE "automation_runs"."status" = 'ACCEPTED';--> statement-breakpoint
+CREATE INDEX "automation_runs_client_idx" ON "automation_runs" USING btree ("client_id","id");--> statement-breakpoint
+CREATE INDEX "automation_runs_scope_idx" ON "automation_runs" USING btree ("workspace_id","project_id","id");--> statement-breakpoint
 CREATE INDEX "business_connectors_scope_idx" ON "business_connectors" USING btree ("workspace_id","project_id","id");--> statement-breakpoint
 CREATE INDEX "action_proposals_thread_idx" ON "action_proposals" USING btree ("thread_id");--> statement-breakpoint
 CREATE INDEX "conversation_threads_scope_idx" ON "conversation_threads" USING btree ("workspace_id","project_id","owner_id","id");--> statement-breakpoint
@@ -155,6 +247,13 @@ CREATE INDEX "research_runs_watchlist_idx" ON "research_runs" USING btree ("work
 CREATE INDEX "research_runs_running_idx" ON "research_runs" USING btree ("started_at") WHERE "research_runs"."status" = 'RUNNING';--> statement-breakpoint
 CREATE INDEX "research_watchlists_scope_idx" ON "research_watchlists" USING btree ("workspace_id","project_id","id");--> statement-breakpoint
 CREATE INDEX "research_watchlists_due_idx" ON "research_watchlists" USING btree ("next_run_at") WHERE "research_watchlists"."next_run_at" is not null and "research_watchlists"."archived_at" is null;--> statement-breakpoint
+CREATE INDEX "health_checks_app_idx" ON "health_checks" USING btree ("app_id","id");--> statement-breakpoint
+CREATE INDEX "health_checks_incident_idx" ON "health_checks" USING btree ("incident_id","id");--> statement-breakpoint
+CREATE UNIQUE INDEX "incidents_active_fingerprint_uq" ON "incidents" USING btree ("fingerprint") WHERE "incidents"."status" <> 'RESOLVED';--> statement-breakpoint
+CREATE INDEX "incidents_scope_idx" ON "incidents" USING btree ("workspace_id","project_id","id");--> statement-breakpoint
+CREATE INDEX "incidents_app_idx" ON "incidents" USING btree ("app_id","id");--> statement-breakpoint
+CREATE INDEX "monitored_apps_scope_idx" ON "monitored_apps" USING btree ("workspace_id","project_id","id");--> statement-breakpoint
+CREATE INDEX "monitored_apps_due_idx" ON "monitored_apps" USING btree ("next_check_at") WHERE not "monitored_apps"."disabled";--> statement-breakpoint
 -- FR-CWV-01: turns are the conversation record, never rewritten.
 CREATE TRIGGER conversation_turns_append_only BEFORE UPDATE OR DELETE ON "conversation_turns"
   FOR EACH ROW EXECUTE FUNCTION nexus_forbid_mutation();

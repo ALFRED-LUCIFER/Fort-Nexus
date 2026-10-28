@@ -32,6 +32,8 @@ import { loadGithubAppConfig } from "./github/app-config.ts";
 import { createGithubCatalog, type GithubCatalog } from "./github/catalog.ts";
 import { createExecutor, expireApprovals, type Executor } from "./issue-to-pr.ts";
 import { reapExpiredLeases } from "./jobs.ts";
+import { monitoringRoutes } from "./monitoring/routes.ts";
+import { createMonitoring, type Monitoring } from "./monitoring/service.ts";
 import { createHub, type Hub } from "./notify.ts";
 import { researchRoutes } from "./research/routes.ts";
 import { createResearch, type Research } from "./research/service.ts";
@@ -53,6 +55,7 @@ export type Deps = {
   github: GithubCatalog | null;
   executor: Executor;
   research: Research;
+  monitoring: Monitoring;
 };
 
 const REAPER_INTERVAL_MS = 5_000;
@@ -144,6 +147,7 @@ export async function buildApp(config: Config) {
   const catalog = github ? createGithubCatalog(github, app.log) : null;
   const executor = createExecutor(db, catalog, app.log);
   const research = createResearch(db, app.log, shutdown.signal);
+  const monitoring = createMonitoring(db, app.log, shutdown.signal);
   const deps: Deps = {
     config,
     db,
@@ -153,6 +157,7 @@ export async function buildApp(config: Config) {
     github: catalog,
     executor,
     research,
+    monitoring,
   };
 
   app.addHook("onRequest", async (request, reply) => {
@@ -272,7 +277,8 @@ export async function buildApp(config: Config) {
       .then(() => businessRoutes(scope, deps))
       .then(() => conversationRoutes(scope, deps))
       .then(() => researchRoutes(scope, deps))
-      .then(() => automationRoutes(scope, deps)),
+      .then(() => automationRoutes(scope, deps))
+      .then(() => monitoringRoutes(scope, deps)),
   );
   // n8n's signed trigger: its own scope, outside the owner session (like the runner routes).
   await app.register(async (scope) => automationTriggerRoute(scope, deps));
@@ -299,6 +305,7 @@ export async function buildApp(config: Config) {
         if (n > 0) app.log.info({ count: n }, "pending approvals expired");
       }),
       research.tick(),
+      monitoring.tick(),
     ]).catch((err: unknown) => app.log.error({ err }, "reaper failed"));
   app.addHook("onReady", async () => {
     await reap();
@@ -319,6 +326,7 @@ export async function buildApp(config: Config) {
   });
   app.addHook("onClose", async () => {
     await research.close(); // in-flight runs record their outcome before the pool closes
+    await monitoring.drain();
     await hub.close();
     await pool.end();
   });

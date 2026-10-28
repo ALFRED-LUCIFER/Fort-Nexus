@@ -54,10 +54,13 @@ export function useOpenNotification() {
   });
   return (n: Notification) => {
     if (n.status === "UNREAD") read.mutate(n.id);
-    // The run lives in its own project: open it there so its approval can be decided.
-    void navigate({
-      search: { ...keepOf(n), drawer: n.subject.jobId ? `run:${n.subject.jobId}` : "settings" },
-    });
+    // The run (or incident) lives in its own project: open it there so it can be decided.
+    const drawer = n.subject.jobId
+      ? `run:${n.subject.jobId}`
+      : n.subject.incidentId
+        ? `incident:${n.subject.incidentId}`
+        : "settings";
+    void navigate({ search: { ...keepOf(n), drawer } });
   };
 }
 

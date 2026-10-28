@@ -21,25 +21,26 @@ Coordinator: one combined migration `0003_p1_wave1.sql` (conversation triggers h
 
 Checks on the merged tree: typecheck, lint, prettier, tests (api 126, web 69, runner 136+1 skipped, contracts 13), web build.
 
-## Wave 2 — in progress (spec: `docs/specs/p1-wave-2.md`)
+## Wave 2 — done on `p1` (spec: `docs/specs/p1-wave-2.md`)
 
-`main` (MVP waves 5 + 6) merged into `p1` at `58007e0` (merge, not rebase: one conflict resolution, no force-push). P1 migration is now `0006_p1_wave1` after main's 0003–0005.
+`main` (MVP waves 5 + 6) merged into `p1` (merge, not rebase). All P1 tables are one migration `0006_p1.sql` after main's 0005; the conversation triggers are hand-appended at its end — keep them whenever it is regenerated.
 
-| Agent | Scope | Status |
+| Agent | Delivered | Tests |
 |---|---|---|
-| S1 — Research scope | real projects, decoy tests, pinned `searchFindings` / `getWatchlist` / `createManualRun` | running |
-| S2 — Business scope | Business-mode projects, pinned `BusinessScope`, main's Business empty-state test | running |
-| S3 — Talk scope | thread project confines every tool; proposals carry `projectId`; command bar Ask → Talk; toast Talk button | running |
-| M — Monitoring | apps, SSRF-safe health checks, one incident per fingerprint, UNKNOWN when unobserved | running |
-| N — Automations | n8n clients (HKDF-derived keys), signed typed triggers, runs history, runbook | running |
+| S1 — Research scope | watchlists/findings/runs in real projects; scheduler skips archived projects; `searchFindings(db, ownerId, q)`, `getWatchlist`, `createManualRun` | decoy B, other owner, archived 409 |
+| S2 — Business scope | connectors only in Business projects (403 otherwise); tools see only their project; Dev/All honest states | decoy B, mode 403, archived 409 |
+| S3 — Talk scope | every tool confined to the thread's project; proposals only for repos bound to it; command bar Ask → Talk; toast Talk opens a thread about the run | decoy B, RES-G03 wording, archived 409 |
+| M — Monitoring | apps, SSRF-safe probe (vetted IP, no redirects, 64 KB), one incident per fingerprint, notification once, UNKNOWN when unobserved; Systems zone + `incident:` drawer | MON-G01, MON-G02, SSRF + DNS rebinding |
+| N — Automations | n8n clients (HKDF-derived keys, never stored), signed typed triggers, per-client rate limit, run history; Settings → Automations; `docs/runbooks/n8n.md` | AUTO-G01..G03 |
 
-Coordinator first: `resolveProject` / `ownerWorkspaceIds` in `workspaces.ts` (tested), `projectId` on P1 contracts, `monitoring.ts` / `automations.ts` contracts, `subject.incidentId` on notifications.
-Merge step: remove adapters, delete `scope.ts`, re-squash P1 migration (keep conversation triggers), end-to-end Talk tests per project, all checks, push, update PR #1.
+Coordinator: `resolveProject` / `ownerWorkspaceIds`, contracts, adapters removed, `scope.ts` deleted, migration squashed.
+Checks on the merged tree: typecheck, lint, prettier, tests (api 215, web 114, runner 165+1 skipped, contracts 16), web build.
 
 ## Next
 
 - Owner check: one live Talk turn on Anthropic and on Foundry.
-- Wave 3 candidates: agent registry + orchestrator (V1C), LLM "why it matters" in briefs, FR-BIZ-04..06, voice (FR-CWV-02/03).
+- Owner check: one real n8n workflow against `/v1/automations/trigger` (runbook untested against live n8n).
+- Wave 3 candidates: agent registry + orchestrator (V1C), LLM "why it matters" in briefs and incident triage, FR-BIZ-04..06, voice (FR-CWV-02/03), code-split the web bundle (892 kB).
 
 ## Deferred (named, not built)
 

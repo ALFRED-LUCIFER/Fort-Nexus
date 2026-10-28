@@ -15,13 +15,17 @@ import {
   Finding,
   FindingList,
   GithubStatus,
+  HealthCheck,
   IDEMPOTENCY_HEADER,
+  Incident,
   IssueDetail,
   IssueList,
   Job,
   JobList,
   Me,
   MetricDictionary,
+  MonitoredApp,
+  MonitoredAppList,
   Notification,
   NotificationList,
   OwnerSessionList,
@@ -48,6 +52,7 @@ import {
   type CreateAutomationClientRequest,
   type CreateConnectorRequest,
   type CreateJobRequest,
+  type CreateMonitoredAppRequest,
   type CreateProjectRequest,
   type CreateThreadRequest,
   type CreateWatchlistRequest,
@@ -56,6 +61,7 @@ import {
   type ProposalDecisionRequest,
   type UpdateAutomationClientRequest,
   type UpdateConnectorRequest,
+  type UpdateMonitoredAppRequest,
   type UpdateProjectRequest,
   type UpdateWatchlistRequest,
 } from "@nexus/contracts";
@@ -276,6 +282,21 @@ export const api = {
       `/v1/automations/runs${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`,
       AutomationRunList,
     ).then((l) => l.items),
+  // With a project: its apps. Without: every project's apps (the read-only "All" view).
+  monitoredApps: (projectId?: string) =>
+    request(
+      `/v1/monitoring/apps${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`,
+      MonitoredAppList,
+    ).then((l) => l.items),
+  createMonitoredApp: (body: z.input<typeof CreateMonitoredAppRequest>) =>
+    request("/v1/monitoring/apps", MonitoredApp, post({}, body)),
+  updateMonitoredApp: (id: string, body: UpdateMonitoredAppRequest) =>
+    request(`/v1/monitoring/apps/${encodeURIComponent(id)}`, MonitoredApp, post({}, body, "PATCH")),
+  checkApp: (id: string) =>
+    request(`/v1/monitoring/apps/${encodeURIComponent(id)}/check`, HealthCheck, post()),
+  incident: (id: string) => request(`/v1/incidents/${encodeURIComponent(id)}`, Incident),
+  setIncidentStatus: (id: string, status: "ACKNOWLEDGED" | "RESOLVED") =>
+    request(`/v1/incidents/${encodeURIComponent(id)}/status`, Incident, post({}, { status })),
 };
 
 export type FindingFilters = Partial<Omit<FindingSearchQuery, "cursor">>;
@@ -317,4 +338,7 @@ export const keys = {
   automationClients: (projectId: string | undefined) =>
     ["automations", "clients", projectId ?? "all"] as const,
   automationRuns: (projectId: string | undefined) => ["automations", "runs", projectId ?? "all"] as const,
+  monitoring: ["monitoring"] as const,
+  monitoredApps: (projectId: string | undefined) => ["monitoring", "apps", projectId ?? "all"] as const,
+  incident: (id: string) => ["monitoring", "incident", id] as const,
 };

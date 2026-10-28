@@ -22,6 +22,7 @@ import { P1Button } from "./P1Button.tsx";
 import { BusinessDrawer, BusinessZone, bizSub, useConnectors } from "./business.tsx";
 import { IssueDrawer, RepoDrawer } from "./github.tsx";
 import { InboxDrawer } from "./Inbox.tsx";
+import { AppNodes, IncidentDrawer, SystemsDrawer, appsSub, useMonitoredApps } from "./monitoring.tsx";
 import { NotificationToasts, useScopeNotifications } from "./notifications.tsx";
 import { ResearchDrawer, ResearchZone, researchSub, useWatchlists } from "./research.tsx";
 import { RunDrawer } from "./RunDrawer.tsx";
@@ -66,10 +67,13 @@ export function Board() {
   const connectors = useConnectors();
   const watchlists = useWatchlists();
   const unread = useScopeNotifications().unread ?? 0;
+  const apps = useMonitoredApps(projectId, scope.ready);
 
   const openRun = (id: string) => void navigate({ search: { ...scope.keep, drawer: `run:${id}` } });
   const openRepo = (id: string) => void navigate({ search: { ...scope.keep, drawer: `repo:${id}` } });
   const openResearch = () => void navigate({ search: { ...scope.keep, drawer: "research" } });
+  const openIncident = (id: string) => void navigate({ search: { ...scope.keep, drawer: `incident:${id}` } });
+  const openSystems = () => void navigate({ search: { ...scope.keep, drawer: "systems" } });
   const closeDrawer = () => void navigate({ search: scope.keep });
 
   // Pan / zoom. Positions are in screen px; the board is scaled around its top-left corner.
@@ -207,13 +211,17 @@ export function Board() {
       id: "sys",
       ws: "dev",
       label: "Systems",
-      sub: sysSub(runners.data),
+      sub: [appsSub(apps.data), sysSub(runners.data)].filter(Boolean).join(" · "),
       x: 1460,
       y: 480,
       w: 580,
       h: 640,
       tint: "oklch(0.80 0.07 32 / .14)",
-      body: <SystemsZone query={runners} />,
+      body: (
+        <SystemsZone query={runners}>
+          <AppNodes onOpenIncident={openIncident} onOpenSystems={openSystems} />
+        </SystemsZone>
+      ),
     },
     {
       id: "res",
@@ -470,6 +478,12 @@ export function Board() {
       {drawerKind === "business" && <BusinessDrawer banner={banner} onClose={closeDrawer} />}
       {drawerKind === "talk" && <TalkDrawer threadId={drawerId} banner={banner} onClose={closeDrawer} />}
       {drawerKind === "research" && <ResearchDrawer banner={banner} onClose={closeDrawer} />}
+      {drawerKind === "systems" && (
+        <SystemsDrawer banner={banner} onClose={closeDrawer} onOpenIncident={openIncident} />
+      )}
+      {drawerKind === "incident" && drawerId && (
+        <IncidentDrawer id={drawerId} banner={banner} onClose={closeDrawer} />
+      )}
       {drawerKind === "issue" && drawerId && drawerNumber && (
         <IssueDrawer repoId={drawerId} number={Number(drawerNumber)} banner={banner} onClose={closeDrawer} />
       )}
