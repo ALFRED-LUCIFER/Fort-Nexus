@@ -6,6 +6,8 @@ import { CreateJobRequest } from "./jobs.ts";
 
 export const Thread = z.object({
   id: z.uuid(),
+  // Every turn, tool call and proposal of the thread is confined to this project (FR-CXR-01, FR-CSP-01).
+  projectId: z.uuid(),
   title: z.string(),
   // The job the thread is currently about (FR-CWV-04 follow-ups); set only from a verified source, never by the model.
   subjectJobId: z.uuid().nullable(),
@@ -18,6 +20,7 @@ export const ThreadList = z.object({ items: z.array(Thread), nextCursor: z.strin
 export type ThreadList = z.infer<typeof ThreadList>;
 
 export const CreateThreadRequest = z.strictObject({
+  projectId: z.uuid(),
   title: z.string().trim().min(1).max(120).optional(),
   subjectJobId: z.uuid().optional(),
 });

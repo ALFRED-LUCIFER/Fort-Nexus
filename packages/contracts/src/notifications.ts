@@ -28,6 +28,7 @@ export const Notification = z.object({
   subject: z.object({
     jobId: z.uuid().nullable(),
     approvalId: z.uuid().nullable(),
+    incidentId: z.uuid().nullable().optional(), // EPIC MON incidents (P1)
   }),
   status: NotificationStatus,
   createdAt: z.iso.datetime(),

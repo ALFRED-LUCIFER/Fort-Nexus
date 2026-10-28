@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  HealthUrl,
+  TriggerRequest,
   BriefSchedule,
   ChangesetFile,
   Intent,
@@ -142,5 +144,27 @@ describe("project scoping", () => {
     expect(
       CreateJobRequest.safeParse({ jobType: "DEV_ISSUE_TO_PR", repositoryId: "1", issueNumber: 1 }).success,
     ).toBe(false);
+  });
+});
+
+describe("P1 wave 2 contracts", () => {
+  it("health URLs are https without credentials", () => {
+    expect(HealthUrl.safeParse("https://shop.example/health").success).toBe(true);
+    expect(HealthUrl.safeParse("http://shop.example/health").success).toBe(false);
+    expect(HealthUrl.safeParse("https://u:p@shop.example/health").success).toBe(false);
+  });
+
+  it("AUTO-G03: a trigger can't carry shell text or unknown actions", () => {
+    const base = { idempotencyKey: "n8n-run-0001" };
+    expect(TriggerRequest.safeParse({ ...base, action: { type: "shell", command: "id" } }).success).toBe(
+      false,
+    );
+    expect(
+      TriggerRequest.safeParse({ ...base, action: { type: "research.run", watchlistId: PID, command: "id" } })
+        .success,
+    ).toBe(false);
+    expect(
+      TriggerRequest.safeParse({ ...base, action: { type: "research.run", watchlistId: PID } }).success,
+    ).toBe(true);
   });
 });

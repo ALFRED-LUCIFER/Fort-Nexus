@@ -62,6 +62,7 @@ const sourceUrl = (s: ResearchSource) =>
 
 const toWatchlistDto = (w: WatchlistRow): Watchlist => ({
   id: w.id,
+  projectId: w.projectId,
   name: w.name,
   keywords: w.keywords,
   sources: w.sources,
@@ -108,6 +109,7 @@ async function toFindingDtos(db: Db | Tx, rows: FindingRow[]): Promise<Finding[]
   const weights = new Map(lists.map((l) => [l.id, l.weights]));
   return rows.map((f) => ({
     id: f.id,
+    projectId: f.projectId,
     watchlistId: f.watchlistId,
     title: f.title,
     excerpt: f.excerpt,

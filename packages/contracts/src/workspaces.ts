@@ -46,3 +46,7 @@ export const UpdateProjectRequest = z.strictObject({
 export type UpdateProjectRequest = z.infer<typeof UpdateProjectRequest>;
 
 // PUT / DELETE /v1/projects/:id/repositories/:repoId — binding is an explicit, audited owner action.
+
+// P1 list endpoints: a project, or omitted for the read-only "All" view across the owner's projects (C-05).
+export const ProjectFilterQuery = z.object({ projectId: z.uuid().optional() });
+export type ProjectFilterQuery = z.infer<typeof ProjectFilterQuery>;

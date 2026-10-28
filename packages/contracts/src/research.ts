@@ -67,6 +67,7 @@ export type BriefSchedule = z.infer<typeof BriefSchedule>;
 const Keyword = z.string().trim().min(1).max(80);
 
 export const CreateWatchlistRequest = z.strictObject({
+  projectId: z.uuid(),
   name: z.string().trim().min(1).max(120),
   keywords: z.array(Keyword).max(50).default([]),
   sources: z.array(ResearchSource).min(1).max(50),
@@ -89,6 +90,7 @@ export type UpdateWatchlistRequest = z.infer<typeof UpdateWatchlistRequest>;
 
 export const Watchlist = z.object({
   id: z.uuid(),
+  projectId: z.uuid(),
   name: z.string(),
   keywords: z.array(z.string()),
   sources: z.array(ResearchSource),
@@ -124,6 +126,7 @@ export type FindingSource = z.infer<typeof FindingSource>;
 // One deduplicated story (FR-RES-05): every source that reported it stays linked.
 export const Finding = z.object({
   id: z.uuid(),
+  projectId: z.uuid(),
   watchlistId: z.uuid(),
   title: z.string(),
   // Evidence excerpt from the source, plain text (markup stripped), ≤ 1000 chars. Untrusted text.
@@ -186,6 +189,8 @@ export type ResearchBrief = z.infer<typeof ResearchBrief>;
 
 // FR-RES-09: full-text search over title/excerpt, filters by watchlist, label and first-seen date.
 export const FindingSearchQuery = z.object({
+  // Omitted = the read-only "All" view across the owner's projects.
+  projectId: z.uuid().optional(),
   q: z.string().trim().max(200).optional(),
   watchlistId: z.uuid().optional(),
   label: VerificationLabel.optional(),

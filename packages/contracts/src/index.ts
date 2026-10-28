@@ -11,3 +11,5 @@ export * from "./notifications.ts";
 export * from "./research.ts";
 export * from "./business.ts";
 export * from "./conversations.ts";
+export * from "./monitoring.ts";
+export * from "./automations.ts";

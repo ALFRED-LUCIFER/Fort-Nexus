@@ -19,6 +19,7 @@ import { createDb, migrationsFolder, runMigrations, type Db } from "../src/db/in
 import { approvals } from "../src/db/schema.ts";
 import { buildAction } from "../src/issue-to-pr.ts";
 import { createJob } from "../src/jobs.ts";
+import { ownerWorkspaceIds, resolveProject } from "../src/workspaces.ts";
 import { createTestApp, freshDatabaseUrl, ownerSession, type TestApp } from "./helpers/owner-session.ts";
 
 // NFR-CNV-05: every test runs against decoy data in a second project; nothing may cross the boundary.
@@ -444,5 +445,30 @@ describe("migration", () => {
       await pool.end();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolveProject (P1 modules)", () => {
+  it("fails closed: unknown/foreign 404, archived write 409, wrong mode 403", async () => {
+    const dev = await newProject(devId());
+    const biz = await newProject(bizId());
+    expect(await resolveProject(db, ownerId, dev.id)).toEqual({
+      workspaceId: devId(),
+      projectId: dev.id,
+      mode: "DEV",
+    });
+    await expect(resolveProject(db, ownerId, randomUUID())).rejects.toMatchObject({ statusCode: 404 });
+    await expect(resolveProject(db, "someone-else", dev.id)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(resolveProject(db, ownerId, biz.id, { mode: "DEV" })).rejects.toMatchObject({
+      statusCode: 403,
+    });
+
+    expect((await call("PATCH", `/v1/projects/${dev.id}`, { archived: true })).statusCode).toBe(200);
+    expect(await resolveProject(db, ownerId, dev.id)).toMatchObject({ projectId: dev.id }); // history stays readable
+    await expect(resolveProject(db, ownerId, dev.id, { write: true })).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    expect(await ownerWorkspaceIds(db, ownerId)).toEqual(expect.arrayContaining([devId(), bizId()]));
+    expect(await ownerWorkspaceIds(db, "someone-else")).not.toContain(devId());
   });
 });

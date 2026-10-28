@@ -36,6 +36,7 @@ const DETAIL_TURNS = 200;
 
 const toThreadDto = (t: ThreadRow): Thread => ({
   id: t.id,
+  projectId: t.projectId,
   title: t.title,
   subjectJobId: t.subjectJobId,
   createdAt: t.createdAt.toISOString(),

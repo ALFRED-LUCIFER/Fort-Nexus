@@ -23,6 +23,7 @@ export const SqlIdentifier = z.string().regex(/^[a-z_][a-z0-9_]{0,62}$/);
 export const QualifiedTable = z.string().regex(/^[a-z_][a-z0-9_]{0,62}\.[a-z_][a-z0-9_]{0,62}$/);
 
 export const CreateConnectorRequest = z.strictObject({
+  projectId: z.uuid(), // a Business project (FR-BIZ-01)
   name: z.string().trim().min(1).max(80),
   provider: ConnectorProvider,
   environment: ConnectorEnvironment,
@@ -46,6 +47,7 @@ export type UpdateConnectorRequest = z.infer<typeof UpdateConnectorRequest>;
 
 export const Connector = z.object({
   id: z.uuid(),
+  projectId: z.uuid(),
   name: z.string(),
   provider: ConnectorProvider,
   environment: ConnectorEnvironment,

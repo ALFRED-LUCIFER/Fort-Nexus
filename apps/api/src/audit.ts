@@ -17,7 +17,11 @@ export type AuditEntry = {
     | "research_run"
     | "connector"
     | "conversation"
-    | "action_proposal";
+    | "action_proposal"
+    | "monitored_app"
+    | "incident"
+    | "automation_client"
+    | "automation_run";
   resourceId: string;
   correlationId: string;
   outcome?: "SUCCEEDED" | "DENIED" | "FAILED";

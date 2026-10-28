@@ -27,6 +27,7 @@ type Check = ConnectionTestResult["checks"][number];
 
 export const toConnectorDto = (r: BusinessConnectorRow): Connector => ({
   id: r.id,
+  projectId: r.projectId,
   name: r.name,
   provider: r.provider,
   environment: r.environment,
@@ -80,9 +81,9 @@ export async function createConnector(s: BusinessScope, body: CreateConnectorReq
     const [row] = await tx
       .insert(businessConnectors)
       .values({
-        workspaceId: s.workspaceId,
-        projectId: s.projectId,
         ...body,
+        workspaceId: s.workspaceId,
+        projectId: s.projectId, // shortcut: placeholder scope wins over body.projectId until wave 2 S2 lands
         status: "UNTESTED",
       })
       .returning();
