@@ -36,6 +36,18 @@ Checks on the merged tree: typecheck, lint, prettier, tests (api 126, web 69, ru
 Coordinator: `resolveProject` / `ownerWorkspaceIds`, contracts, adapters removed, `scope.ts` deleted, migration squashed.
 Checks on the merged tree: typecheck, lint, prettier, tests (api 215, web 114, runner 165+1 skipped, contracts 16), web build.
 
+## Wave 3 — in progress (spec: `docs/specs/p1-wave-3.md`)
+
+| Agent | Scope | Status |
+|---|---|---|
+| A — Agent registry | roster, append-only versioned profiles (project > workspace > default), global ceiling, Agents grouping + drawer, Talk pins Chief of Staff version | running |
+| B — Plans | goal → typed step plan, owner approves exact hash, one-step-at-a-time executor, success only from source records, Plans & queue zone, command bar Plan | running |
+| C — AI explanations | finding "why it matters", incident triage: cache-once, citations checked, labelled AI inference | running |
+| D — Revenue + products | gross/refunds/net with exact formula, top products (masked), Talk answers | running |
+
+Coordinator first: contracts `agents.ts`, `plans.ts`, explanation/triage/revenue/top-products, `Thread.profileVersionId`.
+Merge step: delete `agent-profile-adapter.ts` files, re-squash P1 migration (keep conversation + agent-profile triggers), all checks, push, update PR #1.
+
 ## Next
 
 - Owner check: one live Talk turn on Anthropic and on Foundry.
