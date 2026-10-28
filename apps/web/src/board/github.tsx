@@ -19,6 +19,7 @@ import {
 } from "../lib/queries.ts";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { P1Button } from "./P1Button.tsx";
+import { useScope } from "./scope.tsx";
 import { StartRunPreview } from "./StartRun.tsx";
 
 const route = getRouteApi("/");
@@ -114,11 +115,12 @@ export function RepoDrawer({
 }
 
 function RepoBody({ repoId }: { repoId: string }) {
-  const { ws } = route.useSearch();
+  const { keep, project, ready } = useScope();
   const navigate = route.useNavigate();
   const status = useGithubStatus();
   const installed = status.data?.configured === true && status.data.installations.length > 0;
-  const repos = useRepositories(installed);
+  // In a project: only its bound repositories (FR-WKS-03).
+  const repos = useRepositories(installed && ready, project?.id);
   const now = useNow(30_000);
   const repo = repos.data?.items.find((r) => r.id === repoId);
   const installations = status.data?.configured ? status.data.installations : [];
@@ -163,15 +165,18 @@ function RepoBody({ repoId }: { repoId: string }) {
 
         {!repo && (
           <p role="alert" className="m-0 text-[14px] text-coral">
-            This repository isn&apos;t in the NEXUS app&apos;s installations, or the app lost access to it.
+            {project
+              ? `This repository isn't bound to ${project.name}. Bind it in Settings → Workspaces.`
+              : "This repository isn't in the NEXUS app's installations, or the app lost access to it."}
           </p>
         )}
 
         <ul aria-label="Repositories" className="m-0 flex list-none flex-col gap-2 p-0">
           {repos.data.items.length === 0 && (
             <li className="text-[14px] text-ink2">
-              The app&apos;s installations have no repositories yet. Add some in the installation settings on
-              GitHub.
+              {project
+                ? `No repositories are bound to ${project.name} yet. Bind some in Settings → Workspaces.`
+                : "The app's installations have no repositories yet. Add some in the installation settings on GitHub."}
             </li>
           )}
           {repos.data.items.map((r) => (
@@ -179,7 +184,7 @@ function RepoBody({ repoId }: { repoId: string }) {
               <button
                 type="button"
                 aria-current={r.id === repoId ? "true" : undefined}
-                onClick={() => void navigate({ search: { ws, drawer: `repo:${r.id}` } })}
+                onClick={() => void navigate({ search: { ...keep, drawer: `repo:${r.id}` } })}
                 className={`grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border px-4 py-3.5 text-left ${r.id === repoId ? "border-teal" : "border-hair"}`}
               >
                 <span className="flex min-w-0 flex-col gap-1">
@@ -375,6 +380,7 @@ export function IssueDrawer({
 
 function IssueBody({ repoId, number }: { repoId: string; number: number }) {
   const navigate = route.useNavigate();
+  const { project, blocked } = useScope();
   const now = useNow(30_000);
   const detail = useQuery({ queryKey: keys.issue(repoId, number), queryFn: () => api.issue(repoId, number) });
   const status = useGithubStatus();
@@ -406,6 +412,12 @@ function IssueBody({ repoId, number }: { repoId: string; number: number }) {
 
   const d = detail.data;
   const i = d.issue;
+  // No implicit fallback: a run starts only in the selected project, on a repository bound to it.
+  const startBlocked =
+    blocked ??
+    (project!.repositoryIds.includes(repoId)
+      ? null
+      : `${repo?.fullName ?? "This repository"} isn't bound to ${project!.name}. Bind it in Settings → Workspaces.`);
   const facts: [string, string][] = [
     ["repo", repo?.fullName ?? repoId],
     ["base", repo?.defaultBranch ?? "default branch"],
@@ -515,17 +527,25 @@ function IssueBody({ repoId, number }: { repoId: string; number: number }) {
             <button
               ref={startRef}
               type="button"
+              disabled={!!startBlocked}
+              aria-describedby={startBlocked ? "start-blocked" : undefined}
               aria-expanded={previewing}
               aria-controls={previewing ? "run-preview" : undefined}
               onClick={() => setPreviewing(true)}
-              className="rounded-[14px] bg-teal px-[18px] py-3 text-[13px] font-medium text-onacc"
+              className="rounded-[14px] bg-teal px-[18px] py-3 text-[13px] font-medium text-onacc disabled:opacity-45"
             >
               Start run on {runner?.name ?? "home runner"}
             </button>
           </div>
         </div>
-        {previewing && (
+        {startBlocked && (
+          <p id="start-blocked" className="m-0 flex-none text-[12.5px] leading-snug text-ink2">
+            {startBlocked}
+          </p>
+        )}
+        {previewing && !startBlocked && (
           <StartRunPreview
+            projectId={project!.id}
             repoId={repoId}
             repo={repo}
             detail={d}

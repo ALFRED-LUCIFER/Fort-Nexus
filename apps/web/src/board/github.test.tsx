@@ -12,7 +12,9 @@ import {
 } from "@nexus/contracts";
 import {
   FakeEventSource,
+  IN_PROJECT,
   JOB_ID,
+  PROJECT_ID,
   ME,
   apiError,
   job,
@@ -203,10 +205,10 @@ describe("issue drawer", () => {
   it("shows the plain-text body and extracted criteria; Plan only waits for the plan step", async () => {
     const calls = board(installed, { "GET /v1/repositories/101/issues/42": () => json(detail()) });
     const user = userEvent.setup();
-    renderApp("/?drawer=issue:101:42");
+    renderApp(`${IN_PROJECT}&drawer=issue:101:42`);
     const drawer = await screen.findByRole("dialog");
     expect(await within(drawer).findByRole("heading", { name: "#42 Cart totals round wrong" })).toBeTruthy();
-    expect(within(drawer).getByText(/Issue · ready · acme\/web/)).toBeTruthy();
+    expect(await within(drawer).findByText(/Issue · ready · acme\/web/)).toBeTruthy();
 
     // The body is text: the HTML in it is shown, never rendered.
     expect(within(drawer).getByText("Totals are wrong. <img src=x onerror=alert(1)>")).toBeTruthy();
@@ -241,7 +243,7 @@ describe("issue drawer", () => {
       "GET /v1/approvals": () => json({ items: [] }),
     });
     const user = userEvent.setup();
-    const { router } = renderApp("/?drawer=issue:101:42");
+    const { router } = renderApp(`${IN_PROJECT}&drawer=issue:101:42`);
     const start = await screen.findByRole("button", { name: "Start run on test-host" });
     expect(start.getAttribute("aria-expanded")).toBe("false");
     await user.click(start);
@@ -280,6 +282,7 @@ describe("issue drawer", () => {
     expect(posts[1]!.headers.get(IDEMPOTENCY_HEADER)).toBe(key);
     expect(posts[1]!.body).toEqual({
       jobType: "DEV_ISSUE_TO_PR",
+      projectId: PROJECT_ID,
       repositoryId: "101",
       issueNumber: 42,
       baseBranch: "develop",
@@ -291,7 +294,7 @@ describe("issue drawer", () => {
     const calls = board(installed, { "GET /v1/repositories/101/issues/42": () => json(detail()) });
     mockRunners([runner({ status: "OFFLINE" })]);
     const user = userEvent.setup();
-    renderApp("/?drawer=issue:101:42");
+    renderApp(`${IN_PROJECT}&drawer=issue:101:42`);
     await user.click(await screen.findByRole("button", { name: "Start run on test-host" }));
     const preview = screen.getByRole("region", { name: "Here’s exactly what will happen." });
     expect(
@@ -318,7 +321,7 @@ describe("issue drawer", () => {
       "GET /v1/repositories/101/issues/42": () =>
         json(detail({ acceptanceCriteria: [], missingAcceptanceCriteria: true })),
     });
-    renderApp("/?drawer=issue:101:42");
+    renderApp(`${IN_PROJECT}&drawer=issue:101:42`);
     const note = await screen.findByRole("note");
     expect(note.textContent).toMatch(/Missing acceptance criteria.*found no acceptance criteria/);
     expect(screen.getByText(/Issue · needs info/)).toBeTruthy();
@@ -332,7 +335,7 @@ describe("issue drawer", () => {
         json({ items: [issue(42)], page: 1, nextPage: null, syncedAt: SYNCED }),
     });
     const user = userEvent.setup();
-    const { router } = renderApp("/?drawer=issue:101:42&state=closed");
+    const { router } = renderApp(`${IN_PROJECT}&drawer=issue:101:42&state=closed`);
     await user.click(await screen.findByRole("button", { name: /acme\/web issues/ }));
     await waitFor(() =>
       expect(router.state.location.search).toMatchObject({ drawer: "repo:101", state: "closed" }),

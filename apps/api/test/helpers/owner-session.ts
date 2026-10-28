@@ -10,6 +10,7 @@ import { join } from "node:path";
 import pg from "pg";
 import { expect, inject, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
+import type { WorkspaceList } from "@nexus/contracts";
 import { buildApp } from "../../src/app.ts";
 import { loadConfig, type Config } from "../../src/config.ts";
 import type { GithubAppConfig } from "../../src/github/app-config.ts";
@@ -146,4 +147,12 @@ export async function ownerSession(t: TestApp): Promise<string> {
   expect(res.statusCode).toBe(302);
   expect(res.cookie).toMatch(/session_token=/);
   return res.cookie;
+}
+
+/** The owner's default Dev project "home" (created on first use): every job needs a project (FR-WKS-02). */
+export async function homeProjectId(t: Pick<TestApp, "app">, cookie: string): Promise<string> {
+  const res = await t.app.inject({ method: "GET", url: "/v1/workspaces", headers: { cookie } });
+  expect(res.statusCode, res.body).toBe(200);
+  const dev = (res.json() as WorkspaceList).items.find((w) => w.mode === "DEV")!;
+  return dev.projects.find((p) => p.slug === "home")!.id;
 }

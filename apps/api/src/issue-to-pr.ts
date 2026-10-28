@@ -12,6 +12,7 @@ import {
   type PushDraftPrAction,
   type UploadChangesetRequest,
   type UploadChangesetResponse,
+  type Verification,
 } from "@nexus/contracts";
 import { audit } from "./audit.ts";
 import type { Db, Tx } from "./db/index.ts";
@@ -29,6 +30,8 @@ import {
   type NewEvent,
 } from "./jobs.ts";
 import type { RunnerRow } from "./runners.ts";
+import { assertNotStopped } from "./system.ts";
+import { assertProjectActive } from "./workspaces.ts";
 
 // ENG-07: changeset upload → owner approval of the exact action hash → the API pushes and opens a draft PR.
 
@@ -46,6 +49,7 @@ export const workBranch = (issueNumber: number, jobId: string) =>
 export const toApprovalDto = (a: ApprovalRow): Approval => ({
   id: a.id,
   jobId: a.jobId,
+  projectId: a.projectId,
   riskTier: a.riskTier,
   status: a.status,
   action: a.action,
@@ -66,11 +70,40 @@ const fenced = (text: string) => {
 
 const SYMBOL = { added: "A", modified: "M", deleted: "D" } as const;
 
+const seconds = (ms: number) => {
+  const s = Math.round(ms / 1000);
+  return s < 60 ? `${(ms / 1000).toFixed(1)} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
+};
+
+const TESTS_HEADING: Record<Verification["status"], (v: Verification) => string> = {
+  passed: () => "### Tests: passed (run by NEXUS in the sandbox)",
+  failed: (v) => `### Tests: FAILED with exit code ${v.exitCode ?? "?"} (run by NEXUS in the sandbox)`,
+  error: () => "### Tests: could not run (NEXUS tried in the sandbox)",
+  not_configured: () => "### Tests: not verified by NEXUS",
+};
+
+/** FR-DEV-05: what NEXUS itself ran, never the agent's claim. Commands and output are repo-controlled: fenced. */
+function testsSection(v: Verification): string[] {
+  if (v.status === "not_configured")
+    return [
+      TESTS_HEADING.not_configured(v),
+      "No test setup at the base commit: add `.nexus.json` (`verify.test`), or a package.json `test` script with a lockfile.",
+    ];
+  const source =
+    v.source === "nexus.json" ? ".nexus.json at the base commit" : "package.json (auto-detected)";
+  const commands = [v.install, v.test].flatMap((argv) => (argv ? [`$ ${argv.join(" ")}`] : []));
+  return [
+    TESTS_HEADING[v.status](v),
+    `Exit code ${v.exitCode ?? "none"} · ${seconds(v.durationMs)} · from ${source}`,
+    fenced([...commands, "", v.outputTail.trimEnd() || "(no output)"].join("\n")),
+  ];
+}
+
 export function buildAction(
   jobId: string,
   s: IssueSnapshot,
   files: ChangesetFile[],
-  changeset: Pick<UploadChangesetRequest, "stats" | "agentSummary">,
+  changeset: Pick<UploadChangesetRequest, "stats" | "agentSummary" | "verification">,
   changesetSha256: string,
 ): PushDraftPrAction {
   const lines: string[] = [];
@@ -94,7 +127,7 @@ export function buildAction(
     "### Agent report (unverified)",
     fenced(changeset.agentSummary.trim() || "(no summary)"),
     "",
-    "Tests: not independently verified by NEXUS.", // shortcut: until FR-DEV-05 verification evidence lands
+    ...testsSection(changeset.verification),
     "",
     "Opened by NEXUS — human review required, never auto-merged.",
   ].join("\n");
@@ -111,6 +144,7 @@ export function buildAction(
     changesetSha256,
     files: files.map((f) => ({ path: f.path, change: f.change })),
     stats: { added, removed },
+    verification: changeset.verification,
   };
 }
 
@@ -197,6 +231,7 @@ export async function uploadChangeset(
       .insert(approvals)
       .values({
         jobId: job.id,
+        projectId: job.projectId,
         riskTier: "R2",
         status: "PENDING",
         action,
@@ -255,6 +290,7 @@ export async function listApprovals(db: Db, ownerId: string, q: ListApprovalsQue
     .where(
       and(
         eq(jobs.initiatorId, ownerId),
+        q.projectId ? eq(approvals.projectId, q.projectId) : undefined,
         q.status ? eq(approvals.status, q.status) : undefined,
         q.jobId ? eq(approvals.jobId, q.jobId) : undefined,
       ),
@@ -306,6 +342,7 @@ export async function decideApproval(
   const actor = ownerActor(input.ownerId);
   const { decision, actionHash } = input.body;
   const outcome = await db.transaction(async (tx) => {
+    if (decision === "approve") await assertNotStopped(tx); // deny executes nothing, so it stays allowed
     const [row] = await tx
       .select()
       .from(approvals)
@@ -314,6 +351,7 @@ export async function decideApproval(
       .for("update");
     if (!row) throw notFound("Approval");
     const { approvals: a, jobs: job } = row;
+    await assertProjectActive(tx, a.projectId);
     if (a.status !== "PENDING")
       throw new HttpError(409, "CONFLICT", `This approval is already ${a.status.toLowerCase()}`, {
         status: a.status,

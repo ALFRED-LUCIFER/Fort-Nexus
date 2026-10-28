@@ -2,7 +2,7 @@ import { render } from "@testing-library/react";
 import { vi } from "vitest";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
-import type { Job, RunEvent, Runner } from "@nexus/contracts";
+import type { Job, Project, RunEvent, Runner, WorkspaceList } from "@nexus/contracts";
 import { createApp } from "../router.tsx";
 
 export const json = (body: unknown, status = 200) =>
@@ -20,8 +20,12 @@ export interface Call {
 }
 type Handler = (call: Call) => Response | Promise<Response>;
 
-/** Stubs global fetch with `"METHOD /path"` handlers; unknown routes answer 404. Returns the call log. */
+/**
+ * Stubs global fetch with `"METHOD /path"` handlers; unknown routes answer 404, except `GET /v1/workspaces`, which
+ * answers WORKSPACES unless overridden. Returns the call log.
+ */
 export function mockFetch(handlers: Record<string, Handler>) {
+  handlers = { "GET /v1/workspaces": () => json(WORKSPACES), ...handlers };
   const calls: Call[] = [];
   vi.stubGlobal(
     "fetch",
@@ -109,17 +113,59 @@ export const runner = (over: Partial<Runner> = {}): Runner => ({
   ...over,
 });
 
+// One Dev project "home" bound to repo 101 (acme/web), one decoy Dev project, one Business project.
+export const PROJECT_ID = "66666666-6666-4666-8666-666666666666";
+export const OTHER_PROJECT_ID = "77777777-7777-4777-8777-777777777777";
+export const BIZ_PROJECT_ID = "88888888-8888-4888-8888-888888888888";
+const DEV_WS = "99999999-9999-4999-8999-999999999991";
+const BIZ_WS = "99999999-9999-4999-8999-999999999992";
+export const project = (over: Partial<Project> = {}): Project => ({
+  id: PROJECT_ID,
+  workspaceId: DEV_WS,
+  mode: "DEV",
+  slug: "home",
+  name: "Home",
+  repositoryIds: ["101"],
+  archivedAt: null,
+  createdAt: T0,
+  ...over,
+});
+export const workspaces = (dev: Project[], biz: Project[] = []): WorkspaceList => ({
+  items: [
+    { id: DEV_WS, mode: "DEV", name: "Dev", projects: dev },
+    { id: BIZ_WS, mode: "BUSINESS", name: "Business", projects: biz },
+  ],
+});
+export const WORKSPACES = workspaces(
+  [project(), project({ id: OTHER_PROJECT_ID, slug: "decoy", name: "Decoy", repositoryIds: [] })],
+  [
+    project({
+      id: BIZ_PROJECT_ID,
+      workspaceId: BIZ_WS,
+      mode: "BUSINESS",
+      slug: "shop",
+      name: "Shop",
+      repositoryIds: [],
+    }),
+  ],
+);
+/** The board scoped to the Dev project "home", where runs can be started and approved. */
+export const IN_PROJECT = `/?ws=dev&project=${PROJECT_ID}`;
+
 export const JOB_ID = "22222222-2222-4222-8222-222222222222";
 export const job = (over: Partial<Job> = {}): Job => ({
   id: JOB_ID,
+  projectId: PROJECT_ID,
   jobType: "RUNNER_DIAGNOSTIC",
   status: "QUEUED",
   riskTier: "R0",
-  request: { jobType: "RUNNER_DIAGNOSTIC", preset: "node-version" },
+  request: { jobType: "RUNNER_DIAGNOSTIC", preset: "node-version", projectId: PROJECT_ID },
   runnerId: null,
   outcome: null,
   stateVersion: 1,
   lastEventSequence: 0,
+  issue: null,
+  estimatedCostUsd: null,
   createdAt: T0,
   updatedAt: T0,
   ...over,

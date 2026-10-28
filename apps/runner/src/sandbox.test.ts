@@ -16,7 +16,7 @@ import {
   removeLeftovers,
   writableUser,
 } from "./sandbox.ts";
-import { eventsOf, fakeApi, json, leaseFor, stdoutOf, terminal, timeline } from "./test-support.ts";
+import { PROJECT, eventsOf, fakeApi, json, leaseFor, stdoutOf, terminal, timeline } from "./test-support.ts";
 
 // Test-only long-running argv behind an existing key, so cancel/timeout/shutdown can hit a live
 // container. The public allowlist is unchanged (run.test.ts asserts it).
@@ -174,7 +174,7 @@ describe.skipIf(!dockerUp)("real Docker sandbox", () => {
     if (!r.ok) throw new Error(r.stderr);
     return JSON.parse(r.stdout);
   };
-  const SLEEP = { jobType: "RUNNER_DIAGNOSTIC", preset: "git-version" }; // mocked: prints, then sleeps 300 s
+  const SLEEP = { jobType: "RUNNER_DIAGNOSTIC", preset: "git-version", projectId: PROJECT }; // mocked: prints, then sleeps 300 s
 
   beforeAll(async () => {
     if (await imageExists(SANDBOX_IMAGE)) return;
@@ -212,7 +212,11 @@ describe.skipIf(!dockerUp)("real Docker sandbox", () => {
   it("host-info reports the container's Linux kernel, not the host shell", async () => {
     const jobId = randomUUID();
     const { api, appends } = fakeApi({ jobId });
-    await startJob(api, leaseFor({ jobType: "RUNNER_DIAGNOSTIC", preset: "host-info" }, jobId), OPTS).done;
+    await startJob(
+      api,
+      leaseFor({ jobType: "RUNNER_DIAGNOSTIC", preset: "host-info", projectId: PROJECT }, jobId),
+      OPTS,
+    ).done;
 
     expect(terminal(appends)).toEqual({ to: "COMPLETED", outcome: "COMMAND_SUCCEEDED" });
     expect(stdoutOf(appends)).toMatch(/^Linux /);

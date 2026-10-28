@@ -87,7 +87,10 @@ export function CodeZone({
   runners,
   onOpen,
   onOpenRepo,
+  projectName,
 }: {
+  /** Set when the board is scoped to a project: its repositories are the bound ones. */
+  projectName?: string;
   github: UseQueryResult<GithubStatus>;
   repos: UseQueryResult<RepositoryList>;
   query: UseQueryResult<JobList>;
@@ -109,7 +112,11 @@ export function CodeZone({
           (items.length === 0 ? (
             <QueryState
               query={repos}
-              empty="The NEXUS app's installations have no repositories yet. Add some in the installation settings on GitHub."
+              empty={
+                projectName
+                  ? `No repositories are bound to ${projectName} yet. Bind some in Settings → Workspaces.`
+                  : "The NEXUS app's installations have no repositories yet. Add some in the installation settings on GitHub."
+              }
             />
           ) : (
             <ul className={nodeGrid}>

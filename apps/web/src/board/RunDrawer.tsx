@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isTerminal, type JobStatus, type RunEvent } from "@nexus/contracts";
+import { isTerminal, type JobStatus, type RunEvent, type Verification } from "@nexus/contracts";
 import { api, keys } from "../lib/api.ts";
 import {
   duration,
@@ -23,6 +23,7 @@ import {
   runFacts,
   toLine,
   useRunEvents,
+  verificationOf,
   type AgentFacts,
   type ChangeType,
   type Stage,
@@ -110,8 +111,12 @@ function RunBody({ jobId }: { jobId: string }) {
 
   const a = approval.data;
   const agent = issueReq ? agentFacts(events) : undefined;
+  const cost = agent?.costUsd ?? j.estimatedCostUsd ?? undefined;
+  const verification = issueReq ? verificationOf(events, a) : undefined;
   const repoName =
-    a?.action.repositoryFullName ?? repos.data?.items.find((r) => r.id === issueReq?.repositoryId)?.fullName;
+    a?.action.repositoryFullName ??
+    j.issue?.fullName ??
+    repos.data?.items.find((r) => r.id === issueReq?.repositoryId)?.fullName;
   const sandboxStat = facts.sandbox
     ? [facts.sandbox.runtime === "none" ? "none · host" : facts.sandbox.runtime, facts.sandbox.image]
         .filter(Boolean)
@@ -122,8 +127,8 @@ function RunBody({ jobId }: { jobId: string }) {
     <>
       {issueReq ? (
         <DrawerHeader
-          kicker={`Run · issue → draft PR · ${j.id.slice(0, 8)}`}
-          title={`#${issueReq.issueNumber} on ${repoName ?? "its repository"}`}
+          kicker={`Run · issue → draft PR · #${issueReq.issueNumber} on ${repoName ?? "its repository"} · ${j.id.slice(0, 8)}`}
+          title={j.issue?.title ?? `#${issueReq.issueNumber} on ${repoName ?? "its repository"}`}
         />
       ) : (
         <DrawerHeader
@@ -190,10 +195,13 @@ function RunBody({ jobId }: { jobId: string }) {
                   <Stat k="turns" v={`${agent.turns ?? "—"} / ${issueReq.budget.maxTurns}`} />
                   <Stat
                     k="cost (estimate)"
-                    v={`${agent.costUsd === undefined ? "—" : `$${agent.costUsd.toFixed(2)}`} / $${issueReq.budget.maxCostUsd}`}
+                    v={`${cost === undefined ? "—" : `$${cost.toFixed(2)}`} / $${issueReq.budget.maxCostUsd}`}
                   />
                   <Stat k="tokens in / out" v={tokens(agent)} />
-                  <Stat k="branch" v={a?.action.headBranch ?? "named when changes are ready"} />
+                  <Stat
+                    k="branch"
+                    v={a?.action.headBranch ?? j.issue?.workBranch ?? "named when changes are ready"}
+                  />
                   <Stat
                     k="runner"
                     v={runner?.name ?? (j.runnerId ? j.runnerId.slice(0, 8) : "not claimed yet")}
@@ -202,6 +210,7 @@ function RunBody({ jobId }: { jobId: string }) {
                 </div>
               </div>
             </div>
+            {verification && <TestsCard v={verification} />}
             {agent.report && (
               <section
                 aria-labelledby="agent-report"
@@ -244,6 +253,82 @@ function RunBody({ jobId }: { jobId: string }) {
         )}
       </div>
     </>
+  );
+}
+
+const TESTS_TONE: Record<Verification["status"], string> = {
+  passed: "var(--green)",
+  failed: "var(--amber)",
+  error: "var(--amber)",
+  not_configured: "var(--hair)",
+};
+
+/** FR-DEV-05: what NEXUS itself ran after the agent, kept apart from the agent's own (unverified) report. */
+function TestsCard({ v }: { v: Verification }) {
+  const heading = {
+    passed: "Tests passed",
+    failed: `Tests failed${v.exitCode === null ? "" : ` · exit code ${v.exitCode}`}`,
+    error: "Tests couldn't run",
+    not_configured: "Tests not verified by NEXUS",
+  }[v.status];
+  const facts: [string, string][] = [
+    ...(v.install ? ([["install", v.install.join(" ")]] as [string, string][]) : []),
+    ...(v.test ? ([["test", v.test.join(" ")]] as [string, string][]) : []),
+    ["exit code", v.exitCode === null ? "—" : String(v.exitCode)],
+    ["duration", duration(v.durationMs)],
+    [
+      "config",
+      v.source === "nexus.json"
+        ? ".nexus.json (base commit)"
+        : v.source === "package.json"
+          ? "package.json (auto-detected)"
+          : "—",
+    ],
+  ];
+  return (
+    <section
+      aria-labelledby="tests-title"
+      data-status={v.status}
+      className="flex flex-none flex-col gap-2.5 rounded-[18px] border p-4"
+      style={{ borderColor: TESTS_TONE[v.status] }}
+    >
+      <span className="kicker">
+        {v.status === "not_configured" ? "Tests · not run" : "Tests · run by NEXUS in the sandbox"}
+      </span>
+      <h3 id="tests-title" className="m-0 text-[15px] leading-tight font-medium text-ink">
+        {heading}
+      </h3>
+      {v.status === "not_configured" ? (
+        <p className="m-0 text-[12.5px] leading-[1.5] text-ink2">
+          No test setup at the base commit (no <code className="font-mono">.nexus.json</code>, and no
+          package.json test script with a lockfile). Anything the agent says about tests is its own claim: see
+          the agent report (unverified).
+        </p>
+      ) : (
+        <>
+          {v.status === "error" && v.reason && (
+            <p className="m-0 text-[12.5px] leading-[1.5] break-words text-ink2">Why: {v.reason}</p>
+          )}
+          <dl className="m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-[11.5px] leading-[1.45]">
+            {facts.map(([k, val]) => (
+              <div key={k} className="contents">
+                <dt className="text-ink3">{k}</dt>
+                <dd className="m-0 break-words text-ink2">{val}</dd>
+              </div>
+            ))}
+          </dl>
+          <pre
+            // Scrollable output must be keyboard-reachable (WCAG 2.1.1).
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+            tabIndex={0}
+            aria-label="Test output (last lines, redacted)"
+            className="m-0 max-h-56 overflow-auto rounded-xl bg-term p-3 font-mono text-[11.5px] leading-[1.5] break-words whitespace-pre-wrap text-[#d9d4ca]"
+          >
+            {v.outputTail.trim() || "(no output)"}
+          </pre>
+        </>
+      )}
+    </section>
   );
 }
 

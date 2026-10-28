@@ -9,12 +9,14 @@ import type { AppendEventsRequest, HeartbeatRequest, UploadChangesetRequest } fr
 import { createApi } from "./api.ts";
 
 export const JOB = "6f1c1d3e-8a4b-4c1e-9f00-000000000001";
+// Every job belongs to a project (FR-WKS-02); the runner only passes it through.
+export const PROJECT = "6f1c1d3e-8a4b-4c1e-9f00-0000000000a1";
 
 export const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 export const leaseFor = (
-  request: unknown = { jobType: "RUNNER_DIAGNOSTIC", preset: "node-version" },
+  request: unknown = { jobType: "RUNNER_DIAGNOSTIC", preset: "node-version", projectId: PROJECT },
   jobId = JOB,
 ) => ({
   jobId,
@@ -102,11 +104,18 @@ export const git = (args: string[]) =>
     encoding: "utf8",
   }).trim();
 
-// A source repo with one commit on `main`, mirrored bare into <dir>/<owner>/<name>.git.
-export async function bareRepo(dir: string, owner = "acme", name = "demo", defaultBranch = "main") {
+// A source repo with one commit on `main` (README.md + `files`), mirrored bare into <dir>/<owner>/<name>.git.
+export async function bareRepo(
+  dir: string,
+  owner = "acme",
+  name = "demo",
+  defaultBranch = "main",
+  files: Record<string, string> = {},
+) {
   const src = await mkdtemp(join(tmpdir(), "nexus-src-"));
   git(["init", "-q", "-b", defaultBranch, src]);
   await writeFile(join(src, "README.md"), "hello\n");
+  for (const [path, content] of Object.entries(files)) await writeFile(join(src, path), content);
   git(["-C", src, "add", "."]);
   git(["-C", src, "commit", "-q", "-m", "init"]);
   const mirror = join(dir, owner, `${name}.git`);

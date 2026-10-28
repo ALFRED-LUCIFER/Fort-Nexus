@@ -44,7 +44,12 @@ export async function ownerRoutes(app: FastifyInstance, deps: Deps) {
   app.addHook("onRequest", async (request) => {
     const session = await auth.api.getSession({ headers: fromNodeHeaders(request.headers) });
     if (!session) throw new HttpError(401, "UNAUTHENTICATED", "Sign in required");
-    request.owner = { id: session.user.id, email: session.user.email, name: session.user.name };
+    request.owner = {
+      id: session.user.id,
+      email: session.user.email,
+      name: session.user.name,
+      sessionId: session.session.id,
+    };
     if (MUTATING.has(request.method)) {
       const origin = request.headers.origin;
       if (!origin || !config.trustedOrigins.includes(origin))
@@ -84,6 +89,7 @@ export async function ownerRoutes(app: FastifyInstance, deps: Deps) {
         idempotencyKey: req.headers[IDEMPOTENCY_HEADER],
         body: req.body,
         correlationId: req.id,
+        timezone: config.ownerTimezone,
         pinIssue: (b) =>
           requireGithub(deps.github).issueSnapshot(b.repositoryId, b.issueNumber, b.baseBranch),
       });
@@ -161,6 +167,6 @@ export async function ownerRoutes(app: FastifyInstance, deps: Deps) {
 
 declare module "fastify" {
   interface FastifyRequest {
-    owner: { id: string; email: string; name: string } | null;
+    owner: { id: string; email: string; name: string; sessionId: string } | null;
   }
 }

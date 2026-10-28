@@ -70,6 +70,8 @@ export const CreateJobRequest = z.discriminatedUnion("jobType", [
     jobType: z.literal("RUNNER_DIAGNOSTIC"),
     preset: DiagnosticPreset,
     runnerId: z.uuid().optional(),
+    // Every job belongs to exactly one project (FR-WKS-02); the API checks the project and its bindings.
+    projectId: z.uuid(),
   }),
   z.strictObject({
     jobType: z.literal("DEV_ISSUE_TO_PR"),
@@ -78,6 +80,8 @@ export const CreateJobRequest = z.discriminatedUnion("jobType", [
     // Defaults to the repository's default branch; never the work branch (that is always nexus/…).
     baseBranch: z.string().min(1).max(255).optional(),
     runnerId: z.uuid().optional(),
+    // Every job belongs to exactly one project (FR-WKS-02); the API checks the project and its bindings.
+    projectId: z.uuid(),
     budget: z
       .strictObject({
         maxWallClockMinutes: z.int().min(5).max(120).default(45),
@@ -110,6 +114,7 @@ export const IdempotencyKey = z
 
 export const Job = z.object({
   id: z.uuid(),
+  projectId: z.uuid(),
   jobType: JobType,
   status: JobStatus,
   riskTier: RiskTier,
@@ -118,6 +123,17 @@ export const Job = z.object({
   outcome: JobOutcome.nullable(),
   stateVersion: z.int().nonnegative(),
   lastEventSequence: z.int().nonnegative(),
+  // DEV_ISSUE_TO_PR only (from the pinned snapshot); null for other job types.
+  issue: z
+    .object({
+      fullName: z.string(),
+      issueNumber: z.int().positive(),
+      title: z.string(),
+      workBranch: z.string(),
+    })
+    .nullable(),
+  // Provider-reported cost summed from the run's summary events; an estimate, not an invoice (FR-OBS-03).
+  estimatedCostUsd: z.number().nonnegative().nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });
@@ -132,6 +148,8 @@ export type CreateJobResponse = z.infer<typeof CreateJobResponse>;
 
 export const ListJobsQuery = z.object({
   status: JobStatus.optional(),
+  // Omitted = owner-wide aggregate (the read-only "All" view); actions always need a project.
+  projectId: z.uuid().optional(),
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(25),
 });

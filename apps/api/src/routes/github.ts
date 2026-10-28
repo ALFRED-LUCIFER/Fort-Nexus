@@ -14,6 +14,8 @@ import {
 import { HttpError } from "../errors.ts";
 import type { Deps } from "../app.ts";
 import type { GithubCatalog } from "../github/catalog.ts";
+import { boundRepositoryIds } from "../workspaces.ts";
+import { owner } from "./owner.ts";
 
 const RepoParams = z.object({ repoId: RepoId });
 const IssueParams = RepoParams.extend({
@@ -37,7 +39,7 @@ export const requireGithub = (catalog: GithubCatalog | null) => {
 };
 
 /** Read-only GitHub catalog (EPIC GH). Registered inside the owner scope: every route needs the owner session. */
-export async function githubRoutes(app: FastifyInstance, { github: catalog }: Deps) {
+export async function githubRoutes(app: FastifyInstance, { github: catalog, db }: Deps) {
   const need = () => requireGithub(catalog);
 
   const r = app.withTypeProvider<ZodTypeProvider>();
@@ -49,7 +51,13 @@ export async function githubRoutes(app: FastifyInstance, { github: catalog }: De
   r.get(
     "/v1/repositories",
     { schema: { querystring: RepositoryQuery, response: { 200: RepositoryList } } },
-    async (req) => need().repositories(req.query.q),
+    async (req) => {
+      const { q, projectId } = req.query;
+      // Project first: an unknown project is a 404 even when GitHub is down.
+      const bound = projectId ? await boundRepositoryIds(db, owner(req).id, projectId) : null;
+      const list = await need().repositories(q);
+      return bound ? { ...list, items: list.items.filter((r) => bound.has(r.id)) } : list;
+    },
   );
 
   r.get(

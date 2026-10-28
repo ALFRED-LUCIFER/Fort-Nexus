@@ -26,8 +26,29 @@
     {
       "idx": 3,
       "version": "7",
-      "when": 1793178205742,
-      "tag": "0003_p1_wave1",
+      "when": 1793176243570,
+      "tag": "0003_safety_controls",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793177760402,
+      "tag": "0004_workspaces",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793178095588,
+      "tag": "0005_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793199788533,
+      "tag": "0006_p1_wave1",
       "breakpoints": true
     }
   ]

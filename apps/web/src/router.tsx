@@ -24,14 +24,16 @@ const text = (max: number) =>
     .optional()
     .catch(undefined);
 
-// Deep-linkable board state: `/?ws=dev&drawer=run:<uuid>`, `drawer=repo:<repoId>` (with issue filters),
-// `drawer=issue:<repoId>:<number>`, `drawer=inbox`, `drawer=business`, `drawer=research`, `drawer=talk` (threads) / `drawer=talk:<uuid>` (one thread). Bad values fall back instead of erroring.
+// Deep-linkable board state: `/?ws=dev&project=<uuid>&drawer=run:<uuid>`, `drawer=repo:<repoId>` (with issue filters),
+// `drawer=issue:<repoId>:<number>`, `drawer=inbox`, `drawer=settings`, `drawer=business`, `drawer=research`, `drawer=talk` (threads) / `drawer=talk:<uuid>` (one thread). Bad values fall back instead of erroring.
 export const BoardSearch = z.object({
   ws: Workspace.optional().catch(undefined),
+  // The selected project of `ws` (FR-WKS-02); without one the board is a read-only aggregate.
+  project: z.uuid().optional().catch(undefined),
   drawer: z
     .string()
     .regex(
-      /^(run:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|repo:[1-9]\d{0,19}|issue:[1-9]\d{0,19}:[1-9]\d{0,9}|inbox|business|research|talk(?::[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?)$/i,
+      /^(run:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|repo:[1-9]\d{0,19}|issue:[1-9]\d{0,19}:[1-9]\d{0,9}|inbox|settings|business|research|talk(?::[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?)$/i,
     )
     .optional()
     .catch(undefined),

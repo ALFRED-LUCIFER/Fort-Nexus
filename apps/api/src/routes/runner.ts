@@ -18,6 +18,7 @@ import type { Deps } from "../app.ts";
 import { HttpError } from "../errors.ts";
 import { uploadChangeset, workBranch } from "../issue-to-pr.ts";
 import { appendRunnerEvents, failJob, heartbeat, runnerActor, tryLease } from "../jobs.ts";
+import { leaseRequest } from "../system.ts";
 import { ANY_JOB } from "../notify.ts";
 import { authenticateRunner, registerRunner, type RunnerRow } from "../runners.ts";
 
@@ -82,6 +83,17 @@ export async function runnerRoutes(app: FastifyInstance, deps: Deps) {
       );
       if (!job) return reply.code(204).send(null);
       req.log.info({ correlationId: job.id, fencingToken: job.fencingToken }, "job leased");
+      // Daily budget: the run's cost cap shrinks to what is left of today's; nothing left → fail, don't start.
+      const request = await leaseRequest(db, job, config.ownerTimezone);
+      if (!request) {
+        await failJob(db, {
+          jobId: job.id,
+          actor: "system:budget",
+          reason: "BUDGET_EXHAUSTED",
+          message: `Today's AI budget was used up before this run could start. It resets at midnight ${config.ownerTimezone}.`,
+        });
+        return reply.code(204).send(null);
+      }
       let task: IssueToPrTask | undefined;
       if (job.issueSnapshot) {
         const snapshot = job.issueSnapshot;
@@ -104,7 +116,7 @@ export async function runnerRoutes(app: FastifyInstance, deps: Deps) {
       }
       return {
         jobId: job.id,
-        request: job.request,
+        request,
         fencingToken: job.fencingToken,
         leaseExpiresAt: job.leaseExpiresAt!.toISOString(),
         ...(task ? { task } : {}),

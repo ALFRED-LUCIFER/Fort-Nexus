@@ -1,9 +1,11 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Approval, ApprovalDecisionRequest } from "@nexus/contracts";
 import { ApiRequestError, api, keys } from "../lib/api.ts";
 import { shortHash, until, useNow } from "../lib/queries.ts";
+import { TEST_WORD } from "./runEvents.ts";
+import { decisionBlocked, useScope } from "./scope.tsx";
 
 // The API answers 409 when the hash no longer matches, the approval was already decided or expired, or the job moved on.
 const CHANGED =
@@ -32,6 +34,9 @@ export function DecisionButtons({
     </>
   );
   const queryClient = useQueryClient();
+  // Approvals are decided inside their own project only; "All" is read-only (FR-WKS-02, C-05).
+  const blocked = decisionBlocked(useScope(), approval);
+  const blockedId = useId();
   const [confirming, setConfirming] = useState<Approval | null>(null);
   const decide = useMutation({
     mutationFn: ({ a, decision }: { a: Approval; decision: ApprovalDecisionRequest["decision"] }) =>
@@ -43,14 +48,19 @@ export function DecisionButtons({
     },
   });
   const error =
-    decide.error instanceof ApiRequestError && decide.error.status === 409 ? CHANGED : decide.error?.message;
+    decide.error instanceof ApiRequestError &&
+    decide.error.status === 409 &&
+    decide.error.code !== "EMERGENCY_STOP"
+      ? CHANGED
+      : decide.error?.message;
 
   return (
     <div className="flex flex-col gap-2">
       <div className="flex gap-1.5">
         <button
           type="button"
-          disabled={decide.isPending}
+          disabled={decide.isPending || !!blocked}
+          aria-describedby={blocked ? blockedId : undefined}
           onClick={() => decide.mutate({ a: approval, decision: "deny" })}
           className="flex-1 rounded-xl border border-hair px-3 py-2.5 text-[12.5px] font-medium whitespace-nowrap text-ink2 disabled:opacity-60"
         >
@@ -58,7 +68,8 @@ export function DecisionButtons({
         </button>
         <button
           type="button"
-          disabled={decide.isPending}
+          disabled={decide.isPending || !!blocked}
+          aria-describedby={blocked ? blockedId : undefined}
           onClick={() => setConfirming(approval)}
           className="flex-1 rounded-xl bg-amber px-3 py-2.5 text-[12.5px] font-medium whitespace-nowrap text-onacc disabled:opacity-60"
         >
@@ -66,6 +77,11 @@ export function DecisionButtons({
           {sr}
         </button>
       </div>
+      {blocked && (
+        <p id={blockedId} className="m-0 text-[12.5px] leading-snug text-ink2">
+          {blocked}
+        </p>
+      )}
       {error && (
         <p role="alert" className="m-0 text-[12.5px] leading-snug text-coral">
           {error}
@@ -87,8 +103,8 @@ export function DecisionButtons({
                 <code className="font-mono text-ink">{confirming.action.headBranch}</code> on{" "}
                 <strong className="font-medium text-ink">{confirming.action.repositoryFullName}</strong> and
                 open a draft PR against{" "}
-                <code className="font-mono text-ink">{confirming.action.baseBranch}</code>. It never merges.
-                Action hash {shortHash(confirming.actionHash)}.
+                <code className="font-mono text-ink">{confirming.action.baseBranch}</code>. It never merges.{" "}
+                {testsSentence(confirming)} Action hash {shortHash(confirming.actionHash)}.
               </Dialog.Description>
               {decide.isPending && (
                 <p role="status" className="m-0 text-[12.5px] leading-snug text-ink2">
@@ -118,6 +134,21 @@ export function DecisionButtons({
     </div>
   );
 }
+
+// FR-DEV-05: NEXUS's own test result, in the words the owner decides on.
+const testsSentence = (a: Approval) =>
+  ({
+    passed: "NEXUS ran the tests in the sandbox: they passed.",
+    failed: `NEXUS ran the tests in the sandbox: they FAILED (exit code ${a.action.verification.exitCode ?? "?"}).`,
+    error: `NEXUS couldn't run the tests${a.action.verification.reason ? `: ${a.action.verification.reason}` : ""}.`,
+    not_configured: "The tests were not verified by NEXUS.",
+  })[a.action.verification.status];
+
+const testsFact = (a: Approval) => {
+  const v = a.action.verification;
+  if (v.status === "not_configured") return "not verified by NEXUS";
+  return `${TEST_WORD[v.status]}${v.exitCode === null ? "" : ` (exit ${v.exitCode})`} · run by NEXUS in the sandbox`;
+};
 
 const fileCount = (a: Approval) =>
   `${a.action.files.length} ${a.action.files.length === 1 ? "file" : "files"}`;
@@ -152,8 +183,15 @@ export function ApprovalGate({ approval: a, jobCancelled }: { approval: Approval
         <span className="text-coral">−{action.stats.removed}</span>
       </>,
     ],
+    [
+      "tests",
+      <span className={action.verification.status === "passed" ? "text-green" : "text-ink"}>
+        {testsFact(a)}
+      </span>,
+    ],
     ["action hash", <span title={a.actionHash}>{shortHash(a.actionHash)}</span>],
   ];
+  const testsBad = action.verification.status === "failed" || action.verification.status === "error";
   if (a.status === "PENDING") facts.push(["expires", until(a.expiresAt, now)]);
 
   return (
@@ -185,6 +223,19 @@ export function ApprovalGate({ approval: a, jobCancelled }: { approval: Approval
           }[a.status]
         )}
       </h3>
+      {a.status === "PENDING" && testsBad && (
+        <p
+          role="note"
+          className="m-0 rounded-xl px-3 py-2.5 text-[12.5px] leading-[1.45] text-ink"
+          style={{ background: "oklch(0.70 0.13 65 / .22)" }}
+        >
+          <strong className="font-medium">
+            {action.verification.status === "failed" ? "Tests failed." : "Tests couldn't run."}
+          </strong>{" "}
+          {testsSentence(a)} You can still approve: the draft PR says so too. Check the test output in this
+          run first.
+        </p>
+      )}
       {a.status === "EXPIRED" && (
         <p className="m-0 text-[12.5px] leading-[1.45] text-ink2">
           Approvals lapse after 24 hours so a stale change is never pushed. Start a new run to try again.

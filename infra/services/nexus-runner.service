@@ -1,0 +1,16 @@
+# NEXUS runner, systemd user unit. Rendered and installed by scripts/runner-service.mjs (fills the placeholders).
+# Starts with the user manager (at boot once `loginctl enable-linger $USER` is set), restarts after a crash.
+[Unit]
+Description=NEXUS runner (home job executor)
+
+[Service]
+WorkingDirectory={{REPO}}/apps/runner
+Environment="PATH={{PATH}}"
+ExecStart="{{NODE}}" "--env-file-if-exists={{REPO}}/.env.runner" "{{REPO}}/apps/runner/src/main.ts" start
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:{{LOGS}}/runner.log
+StandardError=append:{{LOGS}}/runner.log
+
+[Install]
+WantedBy=default.target

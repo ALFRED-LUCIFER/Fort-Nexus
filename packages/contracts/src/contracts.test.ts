@@ -15,6 +15,8 @@ import {
   runnerStatus,
 } from "./index.ts";
 
+const PID = "0190f0a0-0000-7000-8000-000000000001";
+
 describe("job state machine", () => {
   it("terminal states have no exits", () => {
     for (const s of TERMINAL_JOB_STATUSES) expect(JOB_TRANSITIONS[s]).toEqual([]);
@@ -41,9 +43,10 @@ describe("CreateJobRequest", () => {
     expect(
       CreateJobRequest.safeParse({ jobType: "RUNNER_DIAGNOSTIC", preset: "node-version", cmd: "ls" }).success,
     ).toBe(false);
-    expect(CreateJobRequest.safeParse({ jobType: "RUNNER_DIAGNOSTIC", preset: "node-version" }).success).toBe(
-      true,
-    );
+    expect(
+      CreateJobRequest.safeParse({ jobType: "RUNNER_DIAGNOSTIC", preset: "node-version", projectId: PID })
+        .success,
+    ).toBe(true);
   });
 });
 
@@ -61,7 +64,12 @@ describe("runnerStatus", () => {
 
 describe("DEV_ISSUE_TO_PR", () => {
   it("applies budget defaults and caps", () => {
-    const r = CreateJobRequest.parse({ jobType: "DEV_ISSUE_TO_PR", repositoryId: "123", issueNumber: 42 });
+    const r = CreateJobRequest.parse({
+      jobType: "DEV_ISSUE_TO_PR",
+      repositoryId: "123",
+      issueNumber: 42,
+      projectId: PID,
+    });
     expect(r).toMatchObject({ budget: { maxWallClockMinutes: 45, maxTurns: 60, maxCostUsd: 5 } });
     expect(
       CreateJobRequest.safeParse({
@@ -123,5 +131,16 @@ describe("P1 wave 1 contracts", () => {
   it("intents are a closed set: no shell or free-form action", () => {
     expect(Intent.safeParse({ kind: "RUN_SHELL", command: "rm -rf /" }).success).toBe(false);
     expect(Intent.safeParse({ kind: "LIST_RUNS", command: "x" }).success).toBe(false);
+  });
+});
+
+describe("project scoping", () => {
+  it("requires a project on every job", () => {
+    expect(CreateJobRequest.safeParse({ jobType: "RUNNER_DIAGNOSTIC", preset: "host-info" }).success).toBe(
+      false,
+    );
+    expect(
+      CreateJobRequest.safeParse({ jobType: "DEV_ISSUE_TO_PR", repositoryId: "1", issueNumber: 1 }).success,
+    ).toBe(false);
   });
 });

@@ -4,7 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { IDEMPOTENCY_HEADER, IdempotencyKey, type Job, type Runner } from "@nexus/contracts";
 import {
   FakeEventSource,
+  IN_PROJECT,
   JOB_ID,
+  PROJECT_ID,
   ME,
   apiError,
   job,
@@ -43,7 +45,7 @@ describe("board", () => {
           : json({ jobId: JOB_ID, status: "QUEUED", streamUrl: `/v1/jobs/${JOB_ID}/events` }, 202),
     });
     const user = userEvent.setup();
-    renderApp("/");
+    renderApp(IN_PROJECT);
     await screen.findByText("Home host · ONLINE");
 
     await user.click(screen.getByRole("button", { name: "Preview" }));
@@ -59,7 +61,11 @@ describe("board", () => {
     const key = posts[0]!.headers.get(IDEMPOTENCY_HEADER);
     expect(IdempotencyKey.safeParse(key).success).toBe(true);
     expect(posts[1]!.headers.get(IDEMPOTENCY_HEADER)).toBe(key);
-    expect(posts[0]!.body).toEqual({ jobType: "RUNNER_DIAGNOSTIC", preset: "git-version" });
+    expect(posts[0]!.body).toEqual({
+      jobType: "RUNNER_DIAGNOSTIC",
+      preset: "git-version",
+      projectId: PROJECT_ID,
+    });
     // The run drawer opens on the new job.
     expect(await screen.findByRole("dialog")).toBeTruthy();
   });
@@ -110,14 +116,14 @@ describe("board", () => {
     const user = userEvent.setup();
     renderApp("/");
     await screen.findByText("Home host · ONLINE");
-    for (const name of ["Settings", "STOP ALL", "Voice command"]) {
+    for (const name of ["Voice command"]) {
       const btn = screen.getByRole("button", { name });
       expect(btn.getAttribute("aria-disabled")).toBe("true");
       const why = document.getElementById(btn.getAttribute("aria-describedby")!);
       expect(why?.textContent).toMatch(/arrive(s)? in P1/);
     }
-    await user.click(screen.getByRole("button", { name: "STOP ALL" }));
-    expect(calls.filter((c) => c.method === "POST")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "Talk" }));
+    expect(calls.filter((c) => c.method !== "GET")).toHaveLength(0);
   });
 
   it("explains that Ask needs the P1 conversation service", async () => {

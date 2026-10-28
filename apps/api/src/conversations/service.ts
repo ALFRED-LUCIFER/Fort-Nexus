@@ -440,6 +440,7 @@ export async function decideProposal(
       idempotencyKey: `proposal:${decided.id}`,
       body: decided.action.request,
       correlationId: input.correlationId,
+      timezone: deps.config.ownerTimezone,
       pinIssue: (b) => requireGithub(deps.github).issueSnapshot(b.repositoryId, b.issueNumber, b.baseBranch),
     });
     finished = await db.transaction(async (tx) => {

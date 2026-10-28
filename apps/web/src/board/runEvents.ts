@@ -4,6 +4,7 @@ import {
   RunEvent,
   SSE_RUN_EVENT,
   SandboxInfo,
+  Verification,
   isTerminal,
   type Approval,
   type Job,
@@ -194,6 +195,26 @@ export function agentFacts(events: readonly RunEvent[]): AgentFacts {
   };
 }
 
+/** Plain words for NEXUS's own test result (FR-DEV-05). */
+export const TEST_WORD: Record<Verification["status"], string> = {
+  passed: "passed",
+  failed: "failed",
+  error: "couldn't run",
+  not_configured: "not configured",
+};
+
+/**
+ * What NEXUS itself ran after the agent: the approved action's copy once there is an approval (it is part of the
+ * hash the owner decides on), else the runner's test.completed event. Never the agent's own claim.
+ */
+export function verificationOf(
+  events: readonly RunEvent[],
+  approval: Approval | null | undefined,
+): Verification | undefined {
+  if (approval) return approval.action.verification;
+  return Verification.safeParse(find(events, "test.completed")?.payload).data;
+}
+
 export type StageState = "pending" | "active" | "waiting" | "done" | "failed" | "skipped";
 export interface Stage {
   label: string;
@@ -212,7 +233,7 @@ const ENDED_BADLY: Partial<Record<JobStatus, string>> = {
 
 /**
  * The design's six stages for an issue → draft PR run. A stage is done only when the event that proves it
- * exists; NEXUS has no plan step yet and doesn't verify tests itself, so those never turn green on their own.
+ * exists; NEXUS has no plan step yet, and Test is green only when NEXUS's own test run passed.
  */
 export function issueStages(
   status: JobStatus,
@@ -237,7 +258,8 @@ export function issueStages(
   const created = at((e) => e.type === "job.created");
   const implStart = at((e) => e.type === "agent.started") ?? state("RUNNING");
   const implDone = state("VERIFYING") ?? at((e) => e.type === "artifact.created");
-  const tested = at((e) => e.type === "test.completed");
+  const testEvent = find(events, "test.completed");
+  const tested = Verification.safeParse(testEvent?.payload).data;
   const gate = at((e) => e.type === "approval.requested");
   const published = at((e) => e.type === "external_action.completed");
 
@@ -259,11 +281,21 @@ export function issueStages(
       : stage("Qualify", true, created),
     implStart ? { label: "Plan", state: "skipped", note: "no plan step" } : stage("Plan", false, undefined),
     stage("Implement", implStart, implDone),
-    tested
-      ? stage("Test", true, tested)
-      : implDone
-        ? { label: "Test", state: "skipped", note: "not verified" }
-        : stage("Test", false, undefined),
+    noChanges
+      ? { label: "Test", state: "skipped", note: "no changes" }
+      : tested
+        ? tested.status === "passed"
+          ? stage("Test", true, testEvent?.occurredAt)
+          : tested.status === "not_configured"
+            ? { label: "Test", state: "skipped", note: "not configured" }
+            : {
+                label: "Test",
+                state: "failed",
+                note: tested.status === "failed" ? "tests failed" : "couldn't run",
+              }
+        : gate
+          ? { label: "Test", state: "skipped", note: "not verified" } // runs from before FR-DEV-05
+          : stage("Test", implDone, undefined),
     noChanges
       ? { label: "Review", state: "skipped", note: "no changes" }
       : denied
@@ -308,9 +340,16 @@ export function explainIssue(
     case "RUNNING":
       return "The agent is working on the issue in a sandbox at home. It can't reach GitHub; whatever it changes waits for your approval.";
     case "VERIFYING":
-      return "The agent finished. The runner is collecting the changed files.";
-    case "AWAITING_APPROVAL":
-      return `${n(files)} ${files === 1 ? "file" : "files"} changed. Nothing has been pushed. Check the exact action below, then approve or deny the push.`;
+      return "The agent finished. The runner is collecting the changed files and running the repo's tests in a fresh sandbox.";
+    case "AWAITING_APPROVAL": {
+      const tests = {
+        passed: " NEXUS ran the tests in the sandbox and they passed.",
+        failed: " NEXUS ran the tests in the sandbox and they FAILED: check them before you approve.",
+        error: " NEXUS couldn't run the tests: check why before you approve.",
+        not_configured: " The tests were not verified by NEXUS.",
+      }[approval?.action.verification.status ?? "not_configured"];
+      return `${n(files)} ${files === 1 ? "file" : "files"} changed. Nothing has been pushed.${approval ? tests : ""} Check the exact action below, then approve or deny the push.`;
+    }
     case "COMPLETED":
       if (outcome === "COMPLETED_NO_CHANGES")
         return "The agent made no changes, so there is nothing to push.";
@@ -387,7 +426,7 @@ export function toLine(e: RunEvent): TermLine {
       return {
         ...line(
           "denied",
-          `${p.kind === "egress" ? "network blocked → " : ""}${str(p.target) ?? str(p.tool) ?? "?"}`,
+          `${p.phase === "verify" ? "tests · " : ""}${p.kind === "egress" ? "network blocked → " : ""}${str(p.target) ?? str(p.tool) ?? "?"}`,
           CORAL,
         ),
         alert: "Blocked: ",
@@ -398,6 +437,14 @@ export function toLine(e: RunEvent): TermLine {
         `${num(p.fileCount) ?? "?"} files changed${p.secretLeak === true ? " · SECRET FOUND — will not be pushed" : ""}`,
         p.secretLeak === true ? CORAL : GREEN,
       );
+    case "test.completed": {
+      const v = Verification.safeParse(p).data;
+      if (!v) return line("tests", "result unreadable", CORAL);
+      const cmd = v.test ? ` · ${v.test.join(" ")}` : "";
+      const exit = v.exitCode === null ? "" : ` · exit ${v.exitCode}`;
+      const tone = v.status === "passed" ? GREEN : v.status === "not_configured" ? MUTED : CORAL;
+      return line("tests", `${TEST_WORD[v.status]}${cmd}${exit} · ${duration(v.durationMs)}`, tone);
+    }
     case "approval.requested":
       return line("gate", "waiting for you: push branch + open draft PR", AMBER);
     case "approval.decided":

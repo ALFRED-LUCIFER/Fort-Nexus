@@ -33,6 +33,7 @@ const proposal = (over: Partial<ActionProposal> = {}): ActionProposal => ({
     type: "jobs.create",
     request: {
       jobType: "DEV_ISSUE_TO_PR",
+      projectId: "0190f0a0-0000-7000-8000-000000000001",
       repositoryId: "101",
       issueNumber: 42,
       budget: { maxWallClockMinutes: 45, maxTurns: 60, maxCostUsd: 5 },

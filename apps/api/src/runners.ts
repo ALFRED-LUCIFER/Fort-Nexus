@@ -12,6 +12,7 @@ import type { Db } from "./db/index.ts";
 import { runnerPairingCodes, runners } from "./db/schema.ts";
 import { HttpError, notFound } from "./errors.ts";
 import { ownerActor, runnerActor, sha256 } from "./jobs.ts";
+import { notifySecurity } from "./notifications.ts";
 
 export type RunnerRow = typeof runners.$inferSelect;
 
@@ -129,6 +130,12 @@ export async function revokeRunner(
       resourceType: "runner",
       resourceId: runner.id,
       correlationId: input.correlationId,
+    });
+    await notifySecurity(tx, {
+      ownerId: input.ownerId,
+      dedupKey: `runner:${runner.id}:REVOKED`,
+      title: `Runner "${runner.name}" revoked`,
+      body: "Its token no longer works: it can't take new runs or report on old ones. Pair it again to use it.",
     });
     return toRunnerDto(revoked!);
   });
