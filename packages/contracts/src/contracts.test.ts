@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  BriefSchedule,
   ChangesetFile,
+  Intent,
+  QualifiedTable,
+  ResearchSource,
+  ScoringWeights,
+  SqlIdentifier,
   CreateJobRequest,
   JOB_TRANSITIONS,
   JobStatus,
@@ -82,5 +88,40 @@ describe("DEV_ISSUE_TO_PR", () => {
   it("lets the server finish an approved action", () => {
     expect(canTransition("VERIFYING", "AWAITING_APPROVAL")).toBe(true);
     expect(canTransition("AWAITING_APPROVAL", "COMPLETED")).toBe(true);
+  });
+});
+
+describe("P1 wave 1 contracts", () => {
+  it("BriefSchedule needs a real IANA zone and a 24h time", () => {
+    expect(BriefSchedule.safeParse({ localTime: "08:00", timezone: "Asia/Dubai" }).success).toBe(true);
+    expect(BriefSchedule.safeParse({ localTime: "08:00", timezone: "Mars/Olympus" }).success).toBe(false);
+    expect(BriefSchedule.safeParse({ localTime: "24:00", timezone: "UTC" }).success).toBe(false);
+  });
+
+  it("ScoringWeights rejects all-zero weights", () => {
+    const zero = { credibility: 0, relevance: 0, novelty: 0, impact: 0, opportunity: 0 };
+    expect(ScoringWeights.safeParse(zero).success).toBe(false);
+    expect(ScoringWeights.safeParse({ ...zero, novelty: 1 }).success).toBe(true);
+  });
+
+  it("feeds are https only and carry no extra fields", () => {
+    expect(
+      ResearchSource.safeParse({ kind: "FEED", url: "http://x.dev/feed", tier: "PRIMARY" }).success,
+    ).toBe(false);
+    expect(
+      ResearchSource.safeParse({ kind: "FEED", url: "https://x.dev/feed", tier: "PRIMARY", cookie: "a" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("metric dictionary identifiers can't smuggle SQL", () => {
+    expect(QualifiedTable.safeParse("public.orders").success).toBe(true);
+    expect(QualifiedTable.safeParse('public.orders; drop table "x"').success).toBe(false);
+    expect(SqlIdentifier.safeParse("Amount").success).toBe(false);
+  });
+
+  it("intents are a closed set: no shell or free-form action", () => {
+    expect(Intent.safeParse({ kind: "RUN_SHELL", command: "rm -rf /" }).success).toBe(false);
+    expect(Intent.safeParse({ kind: "LIST_RUNS", command: "x" }).success).toBe(false);
   });
 });
