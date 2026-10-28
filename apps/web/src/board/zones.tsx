@@ -29,7 +29,7 @@ function QueryState({ query, empty }: { query: UseQueryResult<unknown>; empty?: 
 }
 
 /** A board node: always a real button so the board is fully keyboard-operable. */
-function Node(props: {
+export function Node(props: {
   dot: string;
   live?: boolean;
   kicker: string;
@@ -214,14 +214,22 @@ function RunNodes({
   );
 }
 
-export function SystemsZone({ query }: { query: UseQueryResult<Runner[]> }) {
+/** The home host's runners; `children` (monitored apps) render above them. */
+export function SystemsZone({ query, children }: { query: UseQueryResult<Runner[]>; children?: ReactNode }) {
   const now = useNow();
   const [open, setOpen] = useState<string | null>(null);
   const runners = query.data;
-  if (!runners) return <QueryState query={query} />;
+  if (!runners)
+    return (
+      <div className="flex flex-col gap-[30px]">
+        {children}
+        <QueryState query={query} />
+      </div>
+    );
   const needsPairing = runners.every((r) => r.status === "REVOKED");
   return (
     <div className="flex flex-col gap-[30px]">
+      {children}
       {runners.length > 0 && (
         <ul className={nodeGrid}>
           {runners.map((r) => (

@@ -49,7 +49,12 @@ export function useOpenNotification() {
     const keep: Scope["keep"] = ws
       ? { ws: ws.mode === "DEV" ? "dev" : "business", project: n.projectId ?? undefined }
       : scope.keep;
-    void navigate({ search: { ...keep, drawer: n.subject.jobId ? `run:${n.subject.jobId}` : "settings" } });
+    const drawer = n.subject.jobId
+      ? `run:${n.subject.jobId}`
+      : n.subject.incidentId
+        ? `incident:${n.subject.incidentId}`
+        : "settings";
+    void navigate({ search: { ...keep, drawer } });
   };
 }
 

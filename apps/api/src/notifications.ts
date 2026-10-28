@@ -45,7 +45,12 @@ export const toNotificationDto = (n: Row): Notification => ({
   category: n.category,
   title: n.title,
   body: n.body,
-  subject: { jobId: n.jobId, approvalId: n.approvalId },
+  // incidentId is optional in the contract: present only for incident notifications.
+  subject: {
+    jobId: n.jobId,
+    approvalId: n.approvalId,
+    ...(n.incidentId ? { incidentId: n.incidentId } : {}),
+  },
   status: n.status,
   createdAt: n.createdAt.toISOString(),
 });

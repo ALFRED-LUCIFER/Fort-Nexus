@@ -11,13 +11,17 @@ import {
   Finding,
   FindingList,
   GithubStatus,
+  HealthCheck,
   IDEMPOTENCY_HEADER,
+  Incident,
   IssueDetail,
   IssueList,
   Job,
   JobList,
   Me,
   MetricDictionary,
+  MonitoredApp,
+  MonitoredAppList,
   Notification,
   NotificationList,
   OwnerSessionList,
@@ -43,12 +47,14 @@ import {
   type ApprovalStatus,
   type CreateConnectorRequest,
   type CreateJobRequest,
+  type CreateMonitoredAppRequest,
   type CreateProjectRequest,
   type CreateWatchlistRequest,
   type FindingSearchQuery,
   type JobStatus,
   type ProposalDecisionRequest,
   type UpdateConnectorRequest,
+  type UpdateMonitoredAppRequest,
   type UpdateProjectRequest,
   type UpdateWatchlistRequest,
 } from "@nexus/contracts";
@@ -239,6 +245,21 @@ export const api = {
   },
   readFinding: (id: string) =>
     request(`/v1/research/findings/${encodeURIComponent(id)}/read`, Finding, post()),
+  // With a project: its apps. Without: every project's apps (the read-only "All" view).
+  monitoredApps: (projectId?: string) =>
+    request(
+      `/v1/monitoring/apps${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`,
+      MonitoredAppList,
+    ).then((l) => l.items),
+  createMonitoredApp: (body: z.input<typeof CreateMonitoredAppRequest>) =>
+    request("/v1/monitoring/apps", MonitoredApp, post({}, body)),
+  updateMonitoredApp: (id: string, body: UpdateMonitoredAppRequest) =>
+    request(`/v1/monitoring/apps/${encodeURIComponent(id)}`, MonitoredApp, post({}, body, "PATCH")),
+  checkApp: (id: string) =>
+    request(`/v1/monitoring/apps/${encodeURIComponent(id)}/check`, HealthCheck, post()),
+  incident: (id: string) => request(`/v1/incidents/${encodeURIComponent(id)}`, Incident),
+  setIncidentStatus: (id: string, status: "ACKNOWLEDGED" | "RESOLVED") =>
+    request(`/v1/incidents/${encodeURIComponent(id)}/status`, Incident, post({}, { status })),
 };
 
 export type FindingFilters = Partial<Omit<FindingSearchQuery, "cursor">>;
@@ -273,4 +294,7 @@ export const keys = {
   researchRuns: (watchlistId: string) => ["research", "runs", watchlistId] as const,
   brief: (runId: string) => ["research", "brief", runId] as const,
   findings: (f: FindingFilters) => ["research", "findings", f] as const,
+  monitoring: ["monitoring"] as const,
+  monitoredApps: (projectId: string | undefined) => ["monitoring", "apps", projectId ?? "all"] as const,
+  incident: (id: string) => ["monitoring", "incident", id] as const,
 };
