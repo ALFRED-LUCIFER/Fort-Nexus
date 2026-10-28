@@ -174,7 +174,21 @@ export async function getDictionary(s: OwnerScope, id: string): Promise<MetricDi
   return row.dictionary;
 }
 
-const dictionaryTables = (d: MetricDictionary) => [d.orders.table, ...(d.payments ? [d.payments.table] : [])];
+const dictionaryTables = (d: MetricDictionary) =>
+  [d.orders, d.payments, d.refunds, d.orderItems].flatMap((x) => (x ? [x.table] : []));
+
+/** Every [table, column] the dictionary names, for the connection test's readability check. */
+const dictionaryColumns = (d: MetricDictionary): [string, string][] => {
+  const cols = (table: string, ...names: (string | undefined)[]) =>
+    names.flatMap((c): [string, string][] => (c ? [[table, c]] : []));
+  const { orders: o, payments: p, refunds: r, orderItems: i } = d;
+  return [
+    ...cols(o.table, o.createdAtColumn, o.statusColumn, o.amountColumn, o.idColumn),
+    ...(p ? cols(p.table, p.createdAtColumn, p.statusColumn, p.reasonColumn) : []),
+    ...(r ? cols(r.table, r.createdAtColumn, r.amountColumn) : []),
+    ...(i ? cols(i.table, i.orderIdColumn, i.productColumn, i.quantityColumn, i.amountColumn) : []),
+  ];
+};
 
 export async function putDictionary(
   s: OwnerScope,
@@ -200,7 +214,12 @@ export async function putDictionary(
       resourceType: "connector",
       resourceId: id,
       correlationId: s.correlationId,
-      metadata: auditMeta(row, { tables: dictionaryTables(dictionary), payments: !!dictionary.payments }),
+      metadata: auditMeta(row, {
+        tables: dictionaryTables(dictionary),
+        payments: !!dictionary.payments,
+        refunds: !!dictionary.refunds,
+        orderItems: !!dictionary.orderItems,
+      }),
     });
     return dictionary;
   });
@@ -285,18 +304,7 @@ export async function testConnector(s: OwnerScope, id: string): Promise<Connecti
               "dictionary",
               "No metric dictionary yet: metrics stay unavailable until you define one",
             );
-          const cols: [string, string][] = [
-            [d.orders.table, d.orders.createdAtColumn],
-            [d.orders.table, d.orders.statusColumn],
-            [d.orders.table, d.orders.amountColumn],
-            ...(d.payments
-              ? ([
-                  [d.payments.table, d.payments.createdAtColumn],
-                  [d.payments.table, d.payments.statusColumn],
-                  [d.payments.table, d.payments.reasonColumn],
-                ] as [string, string][])
-              : []),
-          ];
+          const cols = dictionaryColumns(d);
           const notReadable = await c.query<{ col: string }>(
             `select u.t || '.' || u.c as col from unnest($1::text[], $2::text[]) as u(t, c)
              left join pg_namespace n on n.nspname = split_part(u.t, '.', 1)

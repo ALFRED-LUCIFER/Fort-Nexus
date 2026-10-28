@@ -6,11 +6,17 @@ import {
   isTerminal,
   type Basis,
   type Intent,
+  type MetricProvenance,
   type ProposedAction,
   type SourceRef,
 } from "@nexus/contracts";
 import { listConnectors } from "../business/connectors.ts";
-import { getPaymentFailures, getSalesSummary } from "../business/metrics.ts";
+import {
+  getPaymentFailures,
+  getRevenueSummary,
+  getSalesSummary,
+  getTopProducts,
+} from "../business/metrics.ts";
 import type { Db } from "../db/index.ts";
 import { approvals, jobs, runEvents } from "../db/schema.ts";
 import { HttpError } from "../errors.ts";
@@ -45,7 +51,7 @@ export type ToolContext = {
 };
 
 const CAPABILITIES =
-  "From Talk I can tell you how a run is going, list your recent runs, propose starting a run for a GitHub issue, and report today's sales or failed payments, and search research findings.";
+  "From Talk I can tell you how a run is going, list your recent runs, propose starting a run for a GitHub issue, and report sales, failed payments, revenue (gross, refunds, net) or top products, and search research findings.";
 const RECENT_RUNS = 5;
 const FOLLOW_UP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -307,34 +313,50 @@ async function proposeIssueRun(
   }
 }
 
-type MetricResult =
-  | Awaited<ReturnType<typeof getSalesSummary>>["current"]
-  | Awaited<ReturnType<typeof getPaymentFailures>>["current"];
+// One typed gateway tool per metric (FR-BIZ-02..05); the label names it in the reply.
+const METRIC_TOOLS = {
+  SALES_SUMMARY: { label: "Sales", run: getSalesSummary },
+  PAYMENT_FAILURES: { label: "Failed payments", run: getPaymentFailures },
+  REVENUE: { label: "Revenue", run: getRevenueSummary },
+  TOP_PRODUCTS: { label: "Top products", run: getTopProducts },
+} as const;
+
+type MetricResult = Awaited<ReturnType<(typeof METRIC_TOOLS)[keyof typeof METRIC_TOOLS]["run"]>>["current"];
+
+const metricSource = (p: MetricProvenance): SourceRef => ({
+  kind: "METRIC",
+  id: `${p.connectorId}:${p.dataset}:${p.from}`,
+  label: `${p.connectorName} · ${p.dataset} · ${words(p.environment)}`,
+  asOf: p.queriedAt,
+});
 
 // DATA-G02: an unavailable metric is said to be unavailable; only the gateway's own numbers are ever quoted.
-function metricLine(label: string, r: MetricResult): { text: string; source?: SourceRef } {
-  if (r.status === "UNAVAILABLE") return { text: `${label}: unavailable (${r.message}).` };
+function metricLine(label: string, r: MetricResult): { text: string; sources: SourceRef[] } {
+  if (r.status === "UNAVAILABLE") return { text: `${label}: unavailable (${r.message}).`, sources: [] };
   const p = r.provenance;
   const window = `${p.from} to ${p.to} (${p.timezone}${p.partial ? ", partial: the day isn't over" : ""})`;
-  const figures =
-    "paidOrders" in r
-      ? `${r.paidOrders} paid orders, gross sales ${r.grossSales} ${r.currency}`
-      : `${r.failed} failed of ${r.attempts} payment attempts` +
-        (r.failureRate === null ? "" : ` (${(r.failureRate * 100).toFixed(1)}%)`) +
-        (r.byReason.length > 0
-          ? `; top reasons: ${r.byReason
-              .slice(0, 3)
-              .map((g) => `${g.reason} ${g.count}`)
-              .join(", ")}`
-          : "");
+  let figures: string;
+  if ("paidOrders" in r) figures = `${r.paidOrders} paid orders, gross sales ${r.grossSales} ${r.currency}`;
+  else if ("netSales" in r)
+    figures = `gross sales ${r.grossSales} ${r.currency}, refunds ${r.refunds} ${r.currency}, net sales ${r.netSales} ${r.currency}. Formula: ${r.formula}`;
+  else if ("items" in r)
+    figures =
+      (r.items.length > 0
+        ? r.items.map((i) => `${i.product} ${i.revenue} ${r.currency} (${i.quantity} sold)`).join(", ")
+        : "no products sold in paid orders") + `. Formula: ${p.formula}`;
+  else
+    figures =
+      `${r.failed} failed of ${r.attempts} payment attempts` +
+      (r.failureRate === null ? "" : ` (${(r.failureRate * 100).toFixed(1)}%)`) +
+      (r.byReason.length > 0
+        ? `; top reasons: ${r.byReason
+            .slice(0, 3)
+            .map((g) => `${g.reason} ${g.count}`)
+            .join(", ")}`
+        : "");
   return {
     text: `${label}, ${window}: ${figures}.`,
-    source: {
-      kind: "METRIC",
-      id: `${p.connectorId}:${p.dataset}:${p.from}`,
-      label: `${p.connectorName} · ${p.dataset} · ${words(p.environment)}`,
-      asOf: p.queriedAt,
-    },
+    sources: [metricSource(p), ...("refundsProvenance" in r ? [metricSource(r.refundsProvenance)] : [])],
   };
 }
 
@@ -363,21 +385,18 @@ async function businessMetric(
       `Several business sources are connected (${usable.map((c) => c.name).join(", ")}). Open the Business drawer to pick one.`,
     );
   const query = { connectorId: usable[0]!.id, day: intent.day, compare: intent.compare };
-  let res: Awaited<ReturnType<typeof getSalesSummary>> | Awaited<ReturnType<typeof getPaymentFailures>>;
+  const tool = METRIC_TOOLS[intent.metric];
+  let res: { current: MetricResult; previous: MetricResult | null };
   try {
-    res =
-      intent.metric === "SALES_SUMMARY"
-        ? await getSalesSummary(scope, query)
-        : await getPaymentFailures(scope, query);
+    res = await tool.run(scope, query);
   } catch (err) {
     if (err instanceof HttpError && err.statusCode === 400)
       return none(`I can't report that day: ${err.message}`);
     throw err;
   }
-  const name = intent.metric === "SALES_SUMMARY" ? "Sales" : "Failed payments";
-  const lines = [metricLine(`${name} ${intent.day}`, res.current)];
+  const lines = [metricLine(`${tool.label} ${intent.day}`, res.current)];
   if (res.previous) lines.push(metricLine("Previous day, same window", res.previous));
-  const sources = lines.flatMap((l) => (l.source ? [l.source] : []));
+  const sources = lines.flatMap((l) => l.sources);
   return {
     intent,
     text: lines.map((l) => l.text).join(" "),

@@ -1,6 +1,6 @@
 # Runbook: connect a business database (read-only)
 
-NEXUS reads business numbers (paid orders, gross sales, failed payments) from your own Postgres or Supabase database through **typed metric tools only**: fixed aggregate queries, no generic SQL, no raw rows. Every call runs in a `READ ONLY` transaction with the connector's statement timeout. The credential stays in a file on the home machine; it never enters the NEXUS database, the browser, a prompt or a log (FR-CON-03, FR-DATA-01).
+NEXUS reads business numbers (paid orders, gross sales, failed payments, refunds and net sales, top products) from your own Postgres or Supabase database through **typed metric tools only**: fixed aggregate queries, no generic SQL, no raw rows. Every call runs in a `READ ONLY` transaction with the connector's statement timeout. The credential stays in a file on the home machine; it never enters the NEXUS database, the browser, a prompt or a log (FR-CON-03, FR-DATA-01).
 
 ## 1. Create a read-only role in the source database
 
@@ -43,7 +43,12 @@ The API refuses the file unless it is a regular file, mode `0600` and owned by t
 In the board: **Business** zone → open the drawer → **Connectors**.
 
 1. **Register**: name, provider (Postgres or Supabase), environment (DEV, STAGING or PROD), credential reference (`shop-prod`), allowlisted schemas (`shop`), statement timeout (default 5000 ms).
-2. **Metric dictionary**: the reporting time zone (e.g. `Asia/Dubai`) and currency, which table holds orders (`shop.orders`) and its created-at, status and amount columns, whether amounts are minor units (cents) or major units, and which statuses count as paid. Optionally the payments table, its status and failure-reason columns, and which statuses count as failed. Tables must be in an allowlisted schema.
+2. **Metric dictionary**: the reporting time zone (e.g. `Asia/Dubai`) and currency, which table holds orders (`shop.orders`) and its created-at, status and amount columns, whether amounts are minor units (cents) or major units, and which statuses count as paid. The optional sections:
+   - **Payments**: the payments table, its created-at, status and failure-reason columns, and which statuses count as failed.
+   - **Refunds** (revenue): the refunds table, its created-at column (when the refund was issued) and amount column with its unit. Amounts are positive.
+   - **Order items** (top products): the items table, its order-id, product, quantity and amount columns with the amount unit. This also needs the orders table's **order id column**, which the items' order-id column joins to.
+
+   Tables must be in an allowlisted schema. A tool whose section is missing says **no data** (`NOT_DEFINED`); revenue without a refunds section is never shown as "0 refunds".
 3. **Test**: checks the credential file, network, sign-in, read-only privileges, schema access and that every dictionary column exists and is readable. The result lists each check with a key-free message.
 
 A **PROD** connector serves no numbers until a test passes, and goes back to UNTESTED when its credential, schemas or dictionary change. DEV and STAGING connectors serve numbers before a test, but a failed test blocks them too.
@@ -54,8 +59,10 @@ Use `timestamptz` for created-at columns. A plain `timestamp` column is read as 
 
 - A day is `[00:00, next 00:00)` in the reporting time zone. **Today** ends at the current time and is labelled **partial**. Compare uses the same local clock window on the previous day.
 - **Gross sales** is the sum of paid orders' amounts, exact decimal. It isn't net revenue or profit: refunds, chargebacks and fees aren't subtracted.
+- **Revenue** is `net sales = gross sales − refunds`, computed exactly in the database. Gross counts paid orders by **order time**; refunds count by **refund time**, on the day the refund was issued, whatever day the order was placed. All refund rows count, whatever the order's status. Chargebacks, fees and currency conversion aren't included. Gross and refunds each carry their own source and window.
+- **Top products** are the 10 products with the most revenue from paid orders placed in the window: `sum(item amount)` and `sum(quantity)` per product, items joined to orders on the order id. Product names are masked like failure reasons and capped at 120 characters.
 - Every value comes with its source, dataset, window, status filter, formula and the newest record's timestamp.
-- Failure reasons are masked in the database before they reach NEXUS (emails → `[email]`, runs of 6+ digits → `[number]`) and grouped into at most 20 rows.
+- Failure reasons and product names are masked in the database before they reach NEXUS (emails → `[email]`, runs of 6+ digits → `[number]`) and grouped into at most 20 rows.
 - When a source is missing, disabled, failing, too slow or not defined, the board says **no data** with the reason. It never shows a zero it didn't read.
 
 ## 5. Troubleshooting

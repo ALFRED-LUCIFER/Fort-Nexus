@@ -9,7 +9,9 @@ import {
   type Connector,
   type MetricProvenance,
   type PaymentFailuresResponse,
+  type RevenueSummaryResponse,
   type SalesSummaryResponse,
+  type TopProductsResponse,
   type Unavailable,
 } from "@nexus/contracts";
 import type { z } from "zod";
@@ -81,6 +83,24 @@ function useMetrics(connectorId: string | undefined) {
   return { sales, payments };
 }
 
+/** Revenue and top products: drawer only, so the board's polling stays at two queries. */
+function useInsights(connectorId: string | undefined) {
+  const id = connectorId ?? "";
+  const revenue = useQuery({
+    queryKey: keys.metric("revenue", id),
+    queryFn: () => api.revenue(id),
+    enabled: !!connectorId,
+    refetchInterval: METRIC_POLL_MS,
+  });
+  const top = useQuery({
+    queryKey: keys.metric("topProducts", id),
+    queryFn: () => api.topProducts(id),
+    enabled: !!connectorId,
+    refetchInterval: METRIC_POLL_MS,
+  });
+  return { revenue, top };
+}
+
 // ---------------------------------------------------------------- tiles
 
 type TileState =
@@ -89,7 +109,7 @@ type TileState =
   | { kind: "unavailable"; message: string }
   | { kind: "value"; value: string; detail: string; partial: boolean; stale: boolean };
 
-type MetricResponse = SalesSummaryResponse | PaymentFailuresResponse;
+type MetricResponse = SalesSummaryResponse | PaymentFailuresResponse | RevenueSummaryResponse;
 type Available<R extends MetricResponse> = Exclude<R["current"], Unavailable>;
 
 /** One KPI from a metric query: the value, or why there is none. Stale = the last refresh failed, the value is older. */
@@ -140,6 +160,37 @@ function paymentTile(q: UseQueryResult<PaymentFailuresResponse>) {
       detail: `${percent(c.failureRate)} fail rate · yesterday same time: ${prevOf(p, (x) => String(x.failed))}`,
     })),
   };
+}
+
+function revenueTiles(q: UseQueryResult<RevenueSummaryResponse>) {
+  const money = (cur: string, v: string) => `${cur} ${v}`;
+  const yesterday = (
+    p: RevenueSummaryResponse["previous"],
+    f: (x: Available<RevenueSummaryResponse>) => string,
+  ) => `yesterday same time: ${prevOf(p, f)}`;
+  return [
+    {
+      label: "Gross sales",
+      state: tileState(q, (c, p) => ({
+        value: money(c.currency, c.grossSales),
+        detail: `paid orders by order time · ${yesterday(p, (x) => money(x.currency, x.grossSales))}`,
+      })),
+    },
+    {
+      label: "Refunds",
+      state: tileState(q, (c, p) => ({
+        value: money(c.currency, c.refunds),
+        detail: `by refund time · ${yesterday(p, (x) => money(x.currency, x.refunds))}`,
+      })),
+    },
+    {
+      label: "Net sales",
+      state: tileState(q, (c, p) => ({
+        value: money(c.currency, c.netSales),
+        detail: `gross − refunds · ${yesterday(p, (x) => money(x.currency, x.netSales))}`,
+      })),
+    },
+  ];
 }
 
 function Badge({ tone, children }: { tone: string; children: ReactNode }) {
@@ -274,6 +325,7 @@ function BusinessBody() {
     connectors.data?.find((c) => c.id === selectedId && c.status !== "DISABLED") ??
     primaryConnector(connectors.data);
   const { sales, payments } = useMetrics(selected?.hasDictionary ? selected.id : undefined);
+  const { revenue, top } = useInsights(selected?.hasDictionary ? selected.id : undefined);
   const now = useNow(30_000);
 
   if (scope.ws === "dev")
@@ -320,6 +372,8 @@ function BusinessBody() {
                 </p>
               </div>
             )}
+            <Revenue q={revenue} now={now} />
+            <TopProductsTable q={top} />
           </>
         )}
         <Connectors items={connectors.data} selectedId={selected?.id} onSelect={(id) => setSelectedId(id)} />
@@ -392,6 +446,93 @@ function Comparison({
           ))}
         </tbody>
       </table>
+    </section>
+  );
+}
+
+function Revenue({ q, now }: { q: UseQueryResult<RevenueSummaryResponse>; now: number }) {
+  const r = q.data?.current;
+  return (
+    <section aria-labelledby="biz-revenue" className="flex flex-none flex-col gap-2.5">
+      <h3 id="biz-revenue" className="kicker m-0">
+        Revenue today · gross, refunds, net
+      </h3>
+      <ul className="m-0 grid list-none grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-2.5 p-0">
+        {revenueTiles(q).map((t) => (
+          <li key={t.label}>
+            <Tile label={t.label} state={t.state} />
+          </li>
+        ))}
+      </ul>
+      {r?.status === "AVAILABLE" && (
+        <div className="flex flex-col gap-1">
+          <p className="m-0 font-mono text-[11px] leading-[1.5] text-ink3">{r.formula}</p>
+          <SourceLine p={r.refundsProvenance} now={now} />
+        </div>
+      )}
+    </section>
+  );
+}
+
+function TopProductsTable({ q }: { q: UseQueryResult<TopProductsResponse> }) {
+  const r = q.data?.current;
+  return (
+    <section
+      aria-labelledby="biz-top"
+      className="flex flex-none flex-col gap-2 rounded-[18px] border border-hair p-4"
+    >
+      <h3 id="biz-top" className="kicker m-0">
+        Top products today · by revenue · masked
+        {r?.status === "AVAILABLE" && r.provenance.partial ? " · partial" : ""}
+      </h3>
+      {!r ? (
+        <p role={q.error ? "alert" : "status"} className="m-0 text-[13px] text-ink2">
+          {q.error ? q.error.message : "Loading…"}
+        </p>
+      ) : r.status === "UNAVAILABLE" ? (
+        <p className="m-0 text-[13px] text-ink2">No data: {r.message}</p>
+      ) : r.items.length === 0 ? (
+        <p className="m-0 text-[13px] text-ink2">No products sold in paid orders in this window.</p>
+      ) : (
+        <table className="w-full border-collapse text-left text-[13px]">
+          <thead>
+            <tr>
+              <th scope="col" className="py-1.5 pr-2 font-medium text-ink">
+                Product
+              </th>
+              <th scope="col" className="py-1.5 pr-2 text-right font-medium text-ink">
+                Qty
+              </th>
+              <th scope="col" className="py-1.5 text-right font-medium text-ink">
+                Revenue
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {r.items.map((i) => (
+              <tr key={i.product} className="border-t border-hair">
+                <th
+                  scope="row"
+                  className="max-w-0 truncate py-2 pr-2 font-normal text-ink2"
+                  title={i.product}
+                >
+                  {i.product}
+                </th>
+                <td className="py-2 pr-2 text-right font-mono text-ink">{i.quantity}</td>
+                <td className="py-2 text-right font-mono text-ink">
+                  {r.currency} {i.revenue}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {r?.status === "AVAILABLE" && (
+        <p className="m-0 font-mono text-[11px] leading-[1.5] text-ink3">
+          {r.provenance.formula}
+          {q.isRefetchError ? " · stale: the last refresh failed" : ""}
+        </p>
+      )}
     </section>
   );
 }
@@ -724,6 +865,7 @@ function RegisterForm() {
   );
 }
 
+type Unit = "MINOR" | "MAJOR";
 type DictForm = {
   reportingTimezone: string;
   currency: string;
@@ -731,15 +873,30 @@ type DictForm = {
   ordersCreatedAt: string;
   ordersStatus: string;
   ordersAmount: string;
-  amountUnit: "MINOR" | "MAJOR";
+  amountUnit: Unit;
   paidStatuses: string;
+  ordersId: string;
   withPayments: boolean;
   paymentsTable: string;
   paymentsCreatedAt: string;
   paymentsStatus: string;
   paymentsReason: string;
   failedStatuses: string;
+  withRefunds: boolean;
+  refundsTable: string;
+  refundsCreatedAt: string;
+  refundsAmount: string;
+  refundsUnit: Unit;
+  withItems: boolean;
+  itemsTable: string;
+  itemsOrderId: string;
+  itemsProduct: string;
+  itemsQuantity: string;
+  itemsAmount: string;
+  itemsUnit: Unit;
 };
+type UnitKey = "amountUnit" | "refundsUnit" | "itemsUnit";
+type CheckKey = "withPayments" | "withRefunds" | "withItems";
 
 const toForm = (d: MetricDictionary | undefined): DictForm => ({
   reportingTimezone: d?.reportingTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -756,6 +913,19 @@ const toForm = (d: MetricDictionary | undefined): DictForm => ({
   paymentsStatus: d?.payments?.statusColumn ?? "status",
   paymentsReason: d?.payments?.reasonColumn ?? "",
   failedStatuses: d?.payments?.failedStatuses.join(", ") ?? "failed",
+  ordersId: d?.orders.idColumn ?? "",
+  withRefunds: !!d?.refunds,
+  refundsTable: d?.refunds?.table ?? "",
+  refundsCreatedAt: d?.refunds?.createdAtColumn ?? "created_at",
+  refundsAmount: d?.refunds?.amountColumn ?? "",
+  refundsUnit: d?.refunds?.amountUnit ?? "MINOR",
+  withItems: !!d?.orderItems,
+  itemsTable: d?.orderItems?.table ?? "",
+  itemsOrderId: d?.orderItems?.orderIdColumn ?? "order_id",
+  itemsProduct: d?.orderItems?.productColumn ?? "",
+  itemsQuantity: d?.orderItems?.quantityColumn ?? "quantity",
+  itemsAmount: d?.orderItems?.amountColumn ?? "",
+  itemsUnit: d?.orderItems?.amountUnit ?? "MINOR",
 });
 
 function DictionaryForm({ connectorId }: { connectorId: string }) {
@@ -793,6 +963,7 @@ function DictionaryFields({ connectorId, initial }: { connectorId: string; initi
         amountColumn: form.ordersAmount.trim(),
         amountUnit: form.amountUnit,
         paidStatuses: list(form.paidStatuses),
+        idColumn: form.ordersId.trim() || undefined,
       },
       payments: form.withPayments
         ? {
@@ -803,15 +974,29 @@ function DictionaryFields({ connectorId, initial }: { connectorId: string; initi
             failedStatuses: list(form.failedStatuses),
           }
         : undefined,
+      refunds: form.withRefunds
+        ? {
+            table: form.refundsTable.trim(),
+            createdAtColumn: form.refundsCreatedAt.trim(),
+            amountColumn: form.refundsAmount.trim(),
+            amountUnit: form.refundsUnit,
+          }
+        : undefined,
+      orderItems: form.withItems
+        ? {
+            table: form.itemsTable.trim(),
+            orderIdColumn: form.itemsOrderId.trim(),
+            productColumn: form.itemsProduct.trim(),
+            quantityColumn: form.itemsQuantity.trim(),
+            amountColumn: form.itemsAmount.trim(),
+            amountUnit: form.itemsUnit,
+          }
+        : undefined,
     });
     setInvalid(parsed.success ? undefined : firstIssue(parsed.error));
     if (parsed.success) save.mutate(parsed.data);
   };
-  const text = (
-    k: Exclude<keyof DictForm, "withPayments" | "amountUnit">,
-    label: string,
-    placeholder?: string,
-  ) => (
+  const text = (k: Exclude<keyof DictForm, UnitKey | CheckKey>, label: string, placeholder?: string) => (
     <label className={labelCls}>
       {label}
       <input
@@ -820,6 +1005,29 @@ function DictionaryFields({ connectorId, initial }: { connectorId: string; initi
         onChange={(e) => setForm({ ...form, [k]: e.target.value })}
         className={field}
       />
+    </label>
+  );
+  const unit = (k: UnitKey) => (
+    <label className={labelCls}>
+      Amount unit
+      <select
+        value={form[k]}
+        onChange={(e) => setForm({ ...form, [k]: e.target.value as Unit })}
+        className={field}
+      >
+        <option value="MINOR">Minor units (cents)</option>
+        <option value="MAJOR">Major units</option>
+      </select>
+    </label>
+  );
+  const check = (k: CheckKey, label: string) => (
+    <label className="flex items-center gap-2 text-[12.5px] text-ink">
+      <input
+        type="checkbox"
+        checked={form[k]}
+        onChange={(e) => setForm({ ...form, [k]: e.target.checked })}
+      />
+      {label}
     </label>
   );
   return (
@@ -839,28 +1047,12 @@ function DictionaryFields({ connectorId, initial }: { connectorId: string; initi
           {text("ordersCreatedAt", "Created-at column")}
           {text("ordersStatus", "Status column")}
           {text("ordersAmount", "Amount column", "amount_cents")}
-          <label className={labelCls}>
-            Amount unit
-            <select
-              value={form.amountUnit}
-              onChange={(e) => setForm({ ...form, amountUnit: e.target.value as DictForm["amountUnit"] })}
-              className={field}
-            >
-              <option value="MINOR">Minor units (cents)</option>
-              <option value="MAJOR">Major units</option>
-            </select>
-          </label>
+          {unit("amountUnit")}
           {text("paidStatuses", "Paid statuses (comma-separated)")}
+          {text("ordersId", "Order id column (for order items)", "id")}
         </div>
       </fieldset>
-      <label className="flex items-center gap-2 text-[12.5px] text-ink">
-        <input
-          type="checkbox"
-          checked={form.withPayments}
-          onChange={(e) => setForm({ ...form, withPayments: e.target.checked })}
-        />
-        Payments table
-      </label>
+      {check("withPayments", "Payments table")}
       {form.withPayments && (
         <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
           <legend className="kicker mb-1.5">Payments</legend>
@@ -870,6 +1062,32 @@ function DictionaryFields({ connectorId, initial }: { connectorId: string; initi
             {text("paymentsStatus", "Status column")}
             {text("paymentsReason", "Failure reason column", "failure_reason")}
             {text("failedStatuses", "Failed statuses (comma-separated)")}
+          </div>
+        </fieldset>
+      )}
+      {check("withRefunds", "Refunds table (counted on the refund day)")}
+      {form.withRefunds && (
+        <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
+          <legend className="kicker mb-1.5">Refunds</legend>
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2">
+            {text("refundsTable", "Table (schema.table)", "shop.refunds")}
+            {text("refundsCreatedAt", "Created-at column")}
+            {text("refundsAmount", "Amount column", "amount_cents")}
+            {unit("refundsUnit")}
+          </div>
+        </fieldset>
+      )}
+      {check("withItems", "Order items table (top products)")}
+      {form.withItems && (
+        <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
+          <legend className="kicker mb-1.5">Order items</legend>
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2">
+            {text("itemsTable", "Table (schema.table)", "shop.order_items")}
+            {text("itemsOrderId", "Order id column")}
+            {text("itemsProduct", "Product column", "product_name")}
+            {text("itemsQuantity", "Quantity column")}
+            {text("itemsAmount", "Amount column", "amount_cents")}
+            {unit("itemsUnit")}
           </div>
         </fieldset>
       )}

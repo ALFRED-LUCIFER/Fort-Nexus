@@ -37,6 +37,7 @@ import {
   ResearchBrief,
   ResearchRun,
   ResearchRunList,
+  RevenueSummaryResponse,
   Runner,
   RunnerList,
   SalesSummaryResponse,
@@ -44,6 +45,7 @@ import {
   Thread,
   ThreadDetail,
   ThreadList,
+  TopProductsResponse,
   Watchlist,
   WatchlistList,
   WorkspaceList,
@@ -222,6 +224,10 @@ export const api = {
     request(`/v1/business/metrics/sales-summary?${metricQuery(connectorId)}`, SalesSummaryResponse),
   paymentFailures: (connectorId: string) =>
     request(`/v1/business/metrics/payment-failures?${metricQuery(connectorId)}`, PaymentFailuresResponse),
+  revenue: (connectorId: string) =>
+    request(`/v1/business/metrics/revenue?${metricQuery(connectorId)}`, RevenueSummaryResponse),
+  topProducts: (connectorId: string) =>
+    request(`/v1/business/metrics/top-products?${metricQuery(connectorId)}`, TopProductsResponse),
   // projectId omitted = the read-only "All" view across the owner's projects.
   threads: (projectId?: string) =>
     request(
@@ -323,7 +329,7 @@ export const keys = {
   connectors: ["business", "connectors"] as const,
   connectorsOf: (projectId: string | undefined) => ["business", "connectors", projectId ?? "all"] as const,
   dictionary: (id: string) => ["business", "dictionary", id] as const,
-  metric: (name: "sales" | "payments", connectorId: string) =>
+  metric: (name: "sales" | "payments" | "revenue" | "topProducts", connectorId: string) =>
     ["business", "metric", name, connectorId] as const,
   threads: ["conversations"] as const,
   threadsOf: (projectId: string | undefined) => ["conversations", "list", projectId ?? "all"] as const,

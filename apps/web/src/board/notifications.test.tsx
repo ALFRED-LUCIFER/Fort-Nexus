@@ -159,6 +159,7 @@ describe("toasts", () => {
       projectId: OTHER_PROJECT_ID,
       title: "New conversation",
       subjectJobId: JOB_ID,
+      profileVersionId: null,
       createdAt: T0,
       updatedAt: T0,
     };
