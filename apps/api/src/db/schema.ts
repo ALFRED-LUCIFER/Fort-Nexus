@@ -376,6 +376,10 @@ export const notifications = pgTable(
     body: text("body").notNull(),
     jobId: uuid("job_id").references(() => jobs.id),
     approvalId: uuid("approval_id").references(() => approvals.id),
+    // EPIC MON incident (monitoring/schema.ts); no FK so this file needn't import the monitoring schema.
+    incidentId: uuid("incident_id"),
+    // EPIC AGT plan (plans/schema.ts); no FK for the same reason.
+    planId: uuid("plan_id"),
     dedupKey: text("dedup_key").notNull().unique(),
     status: text("status").$type<NotificationStatus>().notNull().default("UNREAD"),
     statusChangedAt: ts("status_changed_at"),

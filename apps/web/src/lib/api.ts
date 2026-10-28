@@ -1,32 +1,82 @@
 import { z } from "zod";
 import {
+  ActionProposal,
+  AgentList,
+  AgentProfileVersion,
+  AgentProfileVersionList,
   ApiError,
   Approval,
   ApprovalList,
+  AutomationClient,
+  AutomationClientList,
+  AutomationClientSecret,
+  AutomationRunList,
+  ConnectionTestResult,
+  Connector,
+  ConnectorList,
   CreateJobResponse,
+  Finding,
+  FindingExplanation,
+  FindingList,
   GithubStatus,
+  HealthCheck,
   IDEMPOTENCY_HEADER,
+  Incident,
+  IncidentTriage,
   IssueDetail,
   IssueList,
   Job,
   JobList,
   Me,
+  MetricDictionary,
+  MonitoredApp,
+  MonitoredAppList,
   Notification,
   NotificationList,
   OwnerSessionList,
   PairingCodeResponse,
+  PaymentFailuresResponse,
+  Plan,
+  PlanList,
+  PostTurnResponse,
   Project,
   RepositoryList,
+  ResearchBrief,
+  ResearchRun,
+  ResearchRunList,
+  RevenueSummaryResponse,
   Runner,
   RunnerList,
+  SalesSummaryResponse,
   SystemControls,
+  Thread,
+  ThreadDetail,
+  ThreadList,
+  TopProductsResponse,
+  Watchlist,
+  WatchlistList,
   WorkspaceList,
+  type AgentKey,
   type ApprovalDecisionRequest,
   type ApprovalStatus,
+  type CreateAutomationClientRequest,
+  type CreateConnectorRequest,
   type CreateJobRequest,
+  type CreateMonitoredAppRequest,
+  type CreatePlanRequest,
   type CreateProjectRequest,
+  type CreateThreadRequest,
+  type CreateWatchlistRequest,
+  type FindingSearchQuery,
   type JobStatus,
+  type PlanDecisionRequest,
+  type ProposalDecisionRequest,
+  type SetAgentProfileRequest,
+  type UpdateAutomationClientRequest,
+  type UpdateConnectorRequest,
+  type UpdateMonitoredAppRequest,
   type UpdateProjectRequest,
+  type UpdateWatchlistRequest,
 } from "@nexus/contracts";
 
 export type { Me } from "@nexus/contracts";
@@ -35,10 +85,12 @@ export type { Me } from "@nexus/contracts";
 export class ApiRequestError extends Error {
   readonly status: number;
   readonly code: string;
-  constructor(message: string, status: number, code: string) {
+  readonly details: unknown;
+  constructor(message: string, status: number, code: string, details?: unknown) {
     super(message);
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -63,7 +115,13 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
   const body: unknown = await res.json().catch(() => null);
   if (!res.ok) {
     const err = ApiError.safeParse(body);
-    if (err.success) throw new ApiRequestError(err.data.error.message, res.status, err.data.error.code);
+    if (err.success)
+      throw new ApiRequestError(
+        err.data.error.message,
+        res.status,
+        err.data.error.code,
+        err.data.error.details,
+      );
     // The dev proxy answers 5xx without an ApiError body when the API is down.
     throw new ApiRequestError(
       res.status >= 500 ? UNREACHABLE : `Request failed (HTTP ${res.status}).`,
@@ -86,6 +144,10 @@ const post = (headers: Record<string, string> = {}, body?: unknown, method = "PO
   headers: body === undefined ? headers : { "content-type": "application/json", ...headers },
   body: body === undefined ? undefined : JSON.stringify(body),
 });
+
+// The board always shows today against the same clock window yesterday (BIZ-G01).
+const metricQuery = (connectorId: string) =>
+  new URLSearchParams({ connectorId, day: "today", compare: "true" });
 
 export const api = {
   me: () => request("/v1/me", Me),
@@ -150,7 +212,138 @@ export const api = {
       Project,
       post({}, undefined, bound ? "PUT" : "DELETE"),
     ),
+  connectors: (projectId?: string) =>
+    request(
+      `/v1/business/connectors${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`,
+      ConnectorList,
+    ).then((l) => l.items),
+  createConnector: (body: CreateConnectorRequest) =>
+    request("/v1/business/connectors", Connector, post({}, body)),
+  updateConnector: (id: string, body: UpdateConnectorRequest) =>
+    request(`/v1/business/connectors/${encodeURIComponent(id)}`, Connector, post({}, body, "PATCH")),
+  testConnector: (id: string) =>
+    request(`/v1/business/connectors/${encodeURIComponent(id)}/test`, ConnectionTestResult, post()),
+  dictionary: (id: string) =>
+    request(`/v1/business/connectors/${encodeURIComponent(id)}/dictionary`, MetricDictionary),
+  putDictionary: (id: string, body: MetricDictionary) =>
+    request(
+      `/v1/business/connectors/${encodeURIComponent(id)}/dictionary`,
+      MetricDictionary,
+      post({}, body, "PUT"),
+    ),
+  salesSummary: (connectorId: string) =>
+    request(`/v1/business/metrics/sales-summary?${metricQuery(connectorId)}`, SalesSummaryResponse),
+  paymentFailures: (connectorId: string) =>
+    request(`/v1/business/metrics/payment-failures?${metricQuery(connectorId)}`, PaymentFailuresResponse),
+  revenue: (connectorId: string) =>
+    request(`/v1/business/metrics/revenue?${metricQuery(connectorId)}`, RevenueSummaryResponse),
+  topProducts: (connectorId: string) =>
+    request(`/v1/business/metrics/top-products?${metricQuery(connectorId)}`, TopProductsResponse),
+  // projectId omitted = the read-only "All" view across the owner's projects.
+  threads: (projectId?: string) =>
+    request(
+      `/v1/conversations?${new URLSearchParams({ limit: "50", ...(projectId && { projectId }) })}`,
+      ThreadList,
+    ),
+  thread: (id: string) => request(`/v1/conversations/${encodeURIComponent(id)}`, ThreadDetail),
+  createThread: (body: CreateThreadRequest) => request("/v1/conversations", Thread, post({}, body)),
+  postTurn: (threadId: string, text: string, idempotencyKey: string) =>
+    request(
+      `/v1/conversations/${encodeURIComponent(threadId)}/turns`,
+      PostTurnResponse,
+      post({ [IDEMPOTENCY_HEADER]: idempotencyKey }, { text }),
+    ),
+  decideProposal: (id: string, body: ProposalDecisionRequest) =>
+    request(`/v1/conversations/proposals/${encodeURIComponent(id)}/decision`, ActionProposal, post({}, body)),
+  watchlists: (projectId: string | undefined) =>
+    request(
+      `/v1/research/watchlists${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`,
+      WatchlistList,
+    ).then((l) => l.items),
+  createWatchlist: (body: z.input<typeof CreateWatchlistRequest>) =>
+    request("/v1/research/watchlists", Watchlist, post({}, body)),
+  updateWatchlist: (id: string, body: UpdateWatchlistRequest) =>
+    request(`/v1/research/watchlists/${encodeURIComponent(id)}`, Watchlist, post({}, body, "PATCH")),
+  runWatchlist: (id: string, idempotencyKey: string) =>
+    request(
+      `/v1/research/watchlists/${encodeURIComponent(id)}/run`,
+      ResearchRun,
+      post({ [IDEMPOTENCY_HEADER]: idempotencyKey }),
+    ),
+  researchRuns: (watchlistId: string) =>
+    request(`/v1/research/runs?${new URLSearchParams({ watchlistId })}`, ResearchRunList).then(
+      (l) => l.items,
+    ),
+  brief: (runId: string) => request(`/v1/research/runs/${encodeURIComponent(runId)}`, ResearchBrief),
+  findings: (q: FindingFilters & { cursor?: string }) => {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== "") params.set(k, String(v));
+    return request(`/v1/research/findings?${params}`, FindingList);
+  },
+  readFinding: (id: string) =>
+    request(`/v1/research/findings/${encodeURIComponent(id)}/read`, Finding, post()),
+  // Cache-once on the server: a repeat returns the stored explanation without calling the model.
+  explainFinding: (id: string) =>
+    request(`/v1/research/findings/${encodeURIComponent(id)}/explain`, FindingExplanation, post()),
+  // projectId omitted = the read-only "All" view.
+  automationClients: (projectId?: string) =>
+    request(
+      `/v1/automations/clients${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`,
+      AutomationClientList,
+    ).then((l) => l.items),
+  createAutomationClient: (body: z.input<typeof CreateAutomationClientRequest>) =>
+    request("/v1/automations/clients", AutomationClientSecret, post({}, body)),
+  updateAutomationClient: (id: string, body: UpdateAutomationClientRequest) =>
+    request(`/v1/automations/clients/${encodeURIComponent(id)}`, AutomationClient, post({}, body, "PATCH")),
+  rotateAutomationClient: (id: string) =>
+    request(`/v1/automations/clients/${encodeURIComponent(id)}/rotate`, AutomationClientSecret, post()),
+  automationRuns: (projectId?: string) =>
+    request(
+      `/v1/automations/runs${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`,
+      AutomationRunList,
+    ).then((l) => l.items),
+  // With a project: its apps. Without: every project's apps (the read-only "All" view).
+  monitoredApps: (projectId?: string) =>
+    request(
+      `/v1/monitoring/apps${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`,
+      MonitoredAppList,
+    ).then((l) => l.items),
+  createMonitoredApp: (body: z.input<typeof CreateMonitoredAppRequest>) =>
+    request("/v1/monitoring/apps", MonitoredApp, post({}, body)),
+  updateMonitoredApp: (id: string, body: UpdateMonitoredAppRequest) =>
+    request(`/v1/monitoring/apps/${encodeURIComponent(id)}`, MonitoredApp, post({}, body, "PATCH")),
+  checkApp: (id: string) =>
+    request(`/v1/monitoring/apps/${encodeURIComponent(id)}/check`, HealthCheck, post()),
+  incident: (id: string) => request(`/v1/incidents/${encodeURIComponent(id)}`, Incident),
+  setIncidentStatus: (id: string, status: "ACKNOWLEDGED" | "RESOLVED") =>
+    request(`/v1/incidents/${encodeURIComponent(id)}/status`, Incident, post({}, { status })),
+  triageIncident: (id: string) =>
+    request(`/v1/incidents/${encodeURIComponent(id)}/triage`, IncidentTriage, post()),
+  // Profiles resolve per project, so these need one.
+  agents: (projectId: string) =>
+    request(`/v1/agents?${new URLSearchParams({ projectId })}`, AgentList).then((l) => l.items),
+  agentVersions: (agent: AgentKey, projectId: string) =>
+    request(
+      `/v1/agents/${agent}/versions?${new URLSearchParams({ projectId })}`,
+      AgentProfileVersionList,
+    ).then((l) => l.items),
+  setAgentProfile: (agent: AgentKey, body: SetAgentProfileRequest) =>
+    request(`/v1/agents/${agent}/profile`, AgentProfileVersion, post({}, body, "PUT")),
+  // projectId omitted = the read-only "All" view.
+  plans: (projectId?: string) =>
+    request(`/v1/plans${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`, PlanList).then(
+      (l) => l.items,
+    ),
+  plan: (id: string) => request(`/v1/plans/${encodeURIComponent(id)}`, Plan),
+  // Drafting calls the model: a retry with the same key returns the same plan.
+  createPlan: (body: CreatePlanRequest, idempotencyKey: string) =>
+    request("/v1/plans", Plan, post({ [IDEMPOTENCY_HEADER]: idempotencyKey }, body)),
+  decidePlan: (id: string, body: PlanDecisionRequest) =>
+    request(`/v1/plans/${encodeURIComponent(id)}/decision`, Plan, post({}, body)),
+  cancelPlan: (id: string) => request(`/v1/plans/${encodeURIComponent(id)}/cancel`, Plan, post()),
 };
+
+export type FindingFilters = Partial<Omit<FindingSearchQuery, "cursor">>;
 
 export type ApprovalQuery = { status: ApprovalStatus; projectId?: string } | { jobId: string };
 
@@ -171,4 +364,32 @@ export const keys = {
   workspaces: ["workspaces"] as const,
   notifications: ["notifications"] as const,
   notificationsOf: (projectId: string | undefined) => ["notifications", projectId ?? "all"] as const,
+  connectors: ["business", "connectors"] as const,
+  connectorsOf: (projectId: string | undefined) => ["business", "connectors", projectId ?? "all"] as const,
+  dictionary: (id: string) => ["business", "dictionary", id] as const,
+  metric: (name: "sales" | "payments" | "revenue" | "topProducts", connectorId: string) =>
+    ["business", "metric", name, connectorId] as const,
+  threads: ["conversations"] as const,
+  threadsOf: (projectId: string | undefined) => ["conversations", "list", projectId ?? "all"] as const,
+  thread: (id: string) => ["conversations", id] as const,
+  research: ["research"] as const,
+  watchlists: ["research", "watchlists"] as const,
+  watchlistsOf: (projectId: string | undefined) => ["research", "watchlists", projectId ?? "all"] as const,
+  researchRuns: (watchlistId: string) => ["research", "runs", watchlistId] as const,
+  brief: (runId: string) => ["research", "brief", runId] as const,
+  findings: (f: FindingFilters) => ["research", "findings", f] as const,
+  automations: ["automations"] as const,
+  automationClients: (projectId: string | undefined) =>
+    ["automations", "clients", projectId ?? "all"] as const,
+  automationRuns: (projectId: string | undefined) => ["automations", "runs", projectId ?? "all"] as const,
+  monitoring: ["monitoring"] as const,
+  monitoredApps: (projectId: string | undefined) => ["monitoring", "apps", projectId ?? "all"] as const,
+  incident: (id: string) => ["monitoring", "incident", id] as const,
+  agents: ["agents"] as const,
+  agentsOf: (projectId: string | undefined) => ["agents", "list", projectId ?? "none"] as const,
+  agentVersions: (agent: AgentKey, projectId: string | undefined) =>
+    ["agents", "versions", agent, projectId ?? "none"] as const,
+  plans: ["plans"] as const,
+  plansOf: (projectId: string | undefined) => ["plans", "list", projectId ?? "all"] as const,
+  plan: (id: string) => ["plans", id] as const,
 };

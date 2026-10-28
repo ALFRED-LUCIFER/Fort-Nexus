@@ -28,6 +28,7 @@ type Draft = {
   body: string;
   jobId?: string | null;
   approvalId?: string | null;
+  planId?: string | null;
   /** Unique per logical event: a retried or replayed write of the same event inserts nothing. */
   dedupKey: string;
 };
@@ -45,7 +46,13 @@ export const toNotificationDto = (n: Row): Notification => ({
   category: n.category,
   title: n.title,
   body: n.body,
-  subject: { jobId: n.jobId, approvalId: n.approvalId },
+  // incidentId / planId are optional in the contract: present only for incident / plan notifications.
+  subject: {
+    jobId: n.jobId,
+    approvalId: n.approvalId,
+    ...(n.incidentId ? { incidentId: n.incidentId } : {}),
+    ...(n.planId ? { planId: n.planId } : {}),
+  },
   status: n.status,
   createdAt: n.createdAt.toISOString(),
 });
@@ -63,6 +70,23 @@ export const notifySecurity = (
   tx: Tx,
   d: { ownerId: string; dedupKey: string; title: string; body: string },
 ) => insert(tx, [{ ...d, projectId: null, category: "SECURITY_CRITICAL" }]);
+
+/** A Chief of Staff plan finished (FR-AGT-01): one notice per plan and final status. */
+export const notifyPlan = (
+  tx: Tx,
+  d: { ownerId: string; projectId: string; planId: string; done: boolean; title: string; body: string },
+) =>
+  insert(tx, [
+    {
+      ownerId: d.ownerId,
+      projectId: d.projectId,
+      planId: d.planId,
+      category: d.done ? "TASK_DONE" : "TASK_FAILED",
+      dedupKey: `plan:${d.planId}:${d.done ? "COMPLETED" : "FAILED"}`,
+      title: d.title,
+      body: d.body,
+    },
+  ]);
 
 // ── Job and approval events ──
 

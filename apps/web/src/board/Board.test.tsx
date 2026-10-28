@@ -116,7 +116,7 @@ describe("board", () => {
     const user = userEvent.setup();
     renderApp("/");
     await screen.findByText("Home host · ONLINE");
-    for (const name of ["Talk", "Voice command"]) {
+    for (const name of ["Voice command"]) {
       const btn = screen.getByRole("button", { name });
       expect(btn.getAttribute("aria-disabled")).toBe("true");
       const why = document.getElementById(btn.getAttribute("aria-describedby")!);
@@ -126,13 +126,15 @@ describe("board", () => {
     expect(calls.filter((c) => c.method !== "GET")).toHaveLength(0);
   });
 
-  it("explains that Ask needs the P1 conversation service", async () => {
-    board([runner()]);
+  it("Plan in the All view asks for a project and sends nothing (Plan is covered in plans.test.tsx)", async () => {
+    const calls = board([runner()]);
     const user = userEvent.setup();
     renderApp("/");
-    await user.click(await screen.findByRole("button", { name: "Ask", pressed: false }));
-    await user.type(screen.getByRole("textbox", { name: "Command" }), "what is running?{Enter}");
-    expect(await screen.findByText("Ask needs the conversation service, which arrives in P1.")).toBeTruthy();
+    await user.click(await screen.findByRole("button", { name: "Plan", pressed: false }));
+    await user.type(screen.getByRole("textbox", { name: "Command" }), "check the runner{Enter}");
+    const panel = await screen.findByRole("region", { name: "Plan" });
+    expect(within(panel).getByRole("status").textContent).toMatch(/^Pick a project first/);
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(0);
   });
 
   it("pairs a runner when none is paired", async () => {
@@ -143,6 +145,30 @@ describe("board", () => {
     renderApp("/");
     await user.click(await screen.findByRole("button", { name: "Pair a runner" }));
     expect(await screen.findByText("node apps/runner/src/main.ts pair --code ABC123")).toBeTruthy();
+  });
+
+  it("slides a drawer in, keeps focus inside it and closes it on Esc after the exit animation", async () => {
+    board([runner()], [], { "GET /v1/approvals": () => json({ items: [] }) });
+    const user = userEvent.setup();
+    const { router } = renderApp("/");
+    const inbox = await screen.findByRole("button", { name: /^Inbox/ });
+    await user.click(inbox);
+
+    const drawer = await screen.findByRole("dialog", { name: "What needs you" });
+    expect(drawer.style.transform).toMatch(/translateX/);
+    await waitFor(() => expect(drawer.contains(document.activeElement)).toBe(true));
+    for (const shift of [true, true, false, false, false]) {
+      await user.tab({ shift });
+      expect(drawer.contains(document.activeElement)).toBe(true);
+    }
+
+    await user.keyboard("{Escape}");
+    // The URL (and the drawer) clear only once the exit animation has played.
+    expect(router.state.location.search).toEqual({ drawer: "inbox" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(router.state.location.search).toEqual({});
+    expect(document.body.style.pointerEvents).not.toBe("none");
+    expect(document.activeElement).toBe(inbox);
   });
 
   it("keeps workspace scope in the URL", async () => {

@@ -93,7 +93,8 @@ const approval = (over: Partial<Approval> = {}): Approval => ({
   },
   actionHash: HASH,
   createdAt: T0,
-  expiresAt: new Date(Date.now() + 3 * 3600_000).toISOString(),
+  // 3h30m: until() floors hours, so the "expires in 3h" text holds however slowly the suite runs.
+  expiresAt: new Date(Date.now() + 3.5 * 3600_000).toISOString(),
   decidedAt: null,
   result: null,
   error: null,

@@ -31,8 +31,9 @@ const note = (over: Partial<Notification> = {}): Notification => ({
   ...over,
 });
 
-function board(notifications: () => Notification[]) {
+function board(notifications: () => Notification[], extra: Parameters<typeof mockFetch>[0] = {}) {
   return mockFetch({
+    ...extra,
     "GET /v1/me": () => json(ME),
     "GET /v1/runners": () => json({ items: [runner()] }),
     "GET /v1/jobs": () => json({ items: [], nextCursor: null }),
@@ -130,7 +131,6 @@ describe("toasts", () => {
     const toast = within(stack).getByRole("article", { name: done.title });
     expect(toast.textContent).toMatch(/^TASK_DONE/);
     expect(screen.getByText(`New notification: ${done.title}`).getAttribute("aria-live")).toBe("polite");
-    expect(within(toast).getByRole("button", { name: "Talk" }).getAttribute("aria-disabled")).toBe("true");
 
     await act(() => vi.advanceTimersByTimeAsync(5_000)); // polled again: still one toast
     expect(within(stack).getAllByRole("article")).toHaveLength(1);
@@ -148,6 +148,57 @@ describe("toasts", () => {
     await waitFor(() => expect(marks(calls)).toHaveLength(1));
     expect(marks(calls)[0]!.path).toBe(`/v1/notifications/${failed.id}/status`);
     expect(router.state.location.search).toMatchObject({ project: PROJECT_ID, drawer: `run:${JOB_ID}` });
+    expect(screen.queryByRole("article", { name: failed.title })).toBeNull();
+  });
+
+  it("Talk opens a new thread about the toast's run, in the run's project; a notice without a run can't", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const THREAD = "55555555-5555-4555-8555-555555555555";
+    const thread = {
+      id: THREAD,
+      projectId: OTHER_PROJECT_ID,
+      title: "New conversation",
+      subjectJobId: JOB_ID,
+      profileVersionId: null,
+      createdAt: T0,
+      updatedAt: T0,
+    };
+    let items: Notification[] = [];
+    const calls = board(() => items, {
+      "POST /v1/conversations": () => json(thread, 201),
+      [`GET /v1/conversations/${THREAD}`]: () => json({ thread, turns: [], proposals: [] }),
+    });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const { router } = renderApp(IN_PROJECT);
+    await screen.findByRole("button", { name: /^Inbox, 0 pending approvals, 0 unread/ });
+
+    const failed = note({ category: "TASK_FAILED", projectId: OTHER_PROJECT_ID, title: "Run failed" });
+    const stop = note({
+      category: "SECURITY_CRITICAL",
+      projectId: null,
+      subject: { jobId: null, approvalId: null },
+      title: "Emergency stop engaged",
+    });
+    items = [failed, stop];
+    await act(() => vi.advanceTimersByTimeAsync(5_000));
+    const notice = await screen.findByRole("article", { name: stop.title });
+    const disabled = within(notice).getByRole("button", { name: "Talk" }) as HTMLButtonElement;
+    expect(disabled.disabled).toBe(true);
+    expect(document.getElementById(disabled.getAttribute("aria-describedby")!)?.textContent).toMatch(
+      /isn't about a run/,
+    );
+
+    const toast = screen.getByRole("article", { name: failed.title });
+    await user.click(within(toast).getByRole("button", { name: "Talk" }));
+    await waitFor(() =>
+      expect(router.state.location.search).toEqual({
+        ws: "dev",
+        project: OTHER_PROJECT_ID,
+        drawer: `talk:${THREAD}`,
+      }),
+    );
+    const creates = calls.filter((c) => c.method === "POST" && c.path === "/v1/conversations");
+    expect(creates.map((c) => c.body)).toEqual([{ projectId: OTHER_PROJECT_ID, subjectJobId: JOB_ID }]);
     expect(screen.queryByRole("article", { name: failed.title })).toBeNull();
   });
 });

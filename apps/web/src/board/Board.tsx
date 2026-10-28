@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { getRouteApi } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import type { Runner } from "@nexus/contracts";
+import { AnimatePresence, m } from "motion/react";
+import { AgentKey, type Runner } from "@nexus/contracts";
 import { authClient } from "../lib/auth.ts";
 import { currentTheme, toggleTheme } from "../lib/theme.ts";
 import {
@@ -15,15 +16,21 @@ import {
   useRepositories,
   useRunners,
 } from "../lib/queries.ts";
+import { AgentDrawer, AgentsZone, agentLanes, useAgents } from "./agents.tsx";
 import { CommandBar } from "./CommandBar.tsx";
 import { StopButton, useStopBanner } from "./EmergencyStop.tsx";
 import { P1Button } from "./P1Button.tsx";
+import { BusinessDrawer, BusinessZone, bizSub, useConnectors } from "./business.tsx";
 import { IssueDrawer, RepoDrawer } from "./github.tsx";
 import { InboxDrawer } from "./Inbox.tsx";
+import { AppNodes, IncidentDrawer, SystemsDrawer, appsSub, useMonitoredApps } from "./monitoring.tsx";
 import { NotificationToasts, useScopeNotifications } from "./notifications.tsx";
+import { PlanDrawer, PlansZone, plansSub, usePlans } from "./plans.tsx";
+import { ResearchDrawer, ResearchZone, researchSub, useWatchlists } from "./research.tsx";
 import { RunDrawer } from "./RunDrawer.tsx";
 import { ScopeNav, useScope } from "./scope.tsx";
 import { SettingsDrawer } from "./Settings.tsx";
+import { TalkDrawer } from "./Talk.tsx";
 import { CodeZone, EmptyZone, SystemsZone, type ZoneProps } from "./zones.tsx";
 
 const route = getRouteApi("/");
@@ -59,10 +66,22 @@ export function Board() {
   );
   const approvals = usePendingApprovals(projectId, scope.ready);
   const pending = approvals.data?.length;
+  const connectors = useConnectors();
+  const watchlists = useWatchlists();
   const unread = useScopeNotifications().unread ?? 0;
+  const apps = useMonitoredApps(projectId, scope.ready);
+  const agents = useAgents(projectId);
+  const [group, setGroup] = useState<"domains" | "agents">("domains");
+  const agentKey = AgentKey.safeParse(drawerId);
+  const plans = usePlans();
 
   const openRun = (id: string) => void navigate({ search: { ...scope.keep, drawer: `run:${id}` } });
   const openRepo = (id: string) => void navigate({ search: { ...scope.keep, drawer: `repo:${id}` } });
+  const openResearch = () => void navigate({ search: { ...scope.keep, drawer: "research" } });
+  const openIncident = (id: string) => void navigate({ search: { ...scope.keep, drawer: `incident:${id}` } });
+  const openSystems = () => void navigate({ search: { ...scope.keep, drawer: "systems" } });
+  const openAgent = (k: AgentKey) => void navigate({ search: { ...scope.keep, drawer: `agent:${k}` } });
+  const openPlan = (id: string) => void navigate({ search: { ...scope.keep, drawer: `plan:${id}` } });
   const closeDrawer = () => void navigate({ search: scope.keep });
 
   // Pan / zoom. Positions are in screen px; the board is scaled around its top-left corner.
@@ -188,53 +207,51 @@ export function Board() {
       id: "biz",
       ws: "business",
       label: "Business",
-      sub: "not connected",
+      sub: bizSub(connectors.data),
       x: 880,
       y: 480,
       w: 540,
       h: 640,
       tint: "oklch(0.85 0.07 70 / .18)",
-      body: (
-        <EmptyZone>
-          {scope.project?.mode === "BUSINESS"
-            ? `No sources connected to ${scope.project.name}. Read-only business connectors arrive in P1.`
-            : "No business sources connected. Read-only connectors arrive in P1."}
-        </EmptyZone>
-      ),
+      body: <BusinessZone onOpen={() => void navigate({ search: { ...scope.keep, drawer: "business" } })} />,
     },
     {
       id: "sys",
       ws: "dev",
       label: "Systems",
-      sub: sysSub(runners.data),
+      sub: [appsSub(apps.data), sysSub(runners.data)].filter(Boolean).join(" · "),
       x: 1460,
       y: 480,
       w: 580,
       h: 640,
       tint: "oklch(0.80 0.07 32 / .14)",
-      body: <SystemsZone query={runners} />,
+      body: (
+        <SystemsZone query={runners}>
+          <AppNodes onOpenIncident={openIncident} onOpenSystems={openSystems} />
+        </SystemsZone>
+      ),
     },
     {
       id: "res",
       label: "Research",
-      sub: "not connected",
+      sub: researchSub(watchlists.data),
       x: 40,
       y: 1160,
       w: 800,
       h: 580,
       tint: "oklch(0.80 0.05 290 / .14)",
-      body: <EmptyZone>No watchlists yet. The research agent arrives in P1.</EmptyZone>,
+      body: <ResearchZone watchlists={watchlists} onOpen={openResearch} />,
     },
     {
       id: "agt",
       label: "Agents",
-      sub: "none configured",
+      sub: agents.data ? `${agents.data.length} agents · scoped tools` : "",
       x: 880,
       y: 1160,
       w: 1160,
       h: 580,
       tint: "oklch(0.80 0.06 155 / .14)",
-      body: <EmptyZone>No agents configured. Scoped agents arrive in P1.</EmptyZone>,
+      body: <AgentsZone query={agents} projectId={projectId} onOpen={openAgent} />,
     },
     {
       id: "auto",
@@ -250,13 +267,15 @@ export function Board() {
     {
       id: "plan",
       label: "Plans & queue",
-      sub: queued.data ? `${queued.data} queued` : "",
+      sub: [plansSub(plans.data), queued.data ? `${queued.data} queued runs` : ""]
+        .filter(Boolean)
+        .join(" · "),
       x: 880,
       y: 1780,
       w: 1160,
       h: 520,
       tint: "oklch(0.85 0.06 95 / .18)",
-      body: <EmptyZone>No plans yet. Plans arrive in P1; queued runs show in Code.</EmptyZone>,
+      body: <PlansZone onOpen={openPlan} />,
     },
   ];
 
@@ -286,11 +305,18 @@ export function Board() {
             transform: `translate(${view.x}px,${view.y}px) scale(${view.z})`,
           }}
         >
-          {zones.map(({ ws: zws, body, ...z }) => (
-            <Zone key={z.id} {...z} dim={ws !== "all" && !!zws && zws !== ws}>
-              {body}
-            </Zone>
-          ))}
+          {/* Regrouping cross-fades the zone sets (opacity only, so it also suits reduced motion). */}
+          <AnimatePresence initial={false} mode="wait">
+            <m.div key={group} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+              {(group === "agents" ? agentLanes(agents, projectId, openAgent) : zones).map(
+                ({ ws: zws, body, ...z }: ZoneDef) => (
+                  <Zone key={z.id} {...z} dim={ws !== "all" && !!zws && zws !== ws}>
+                    {body}
+                  </Zone>
+                ),
+              )}
+            </m.div>
+          </AnimatePresence>
         </main>
       </div>
 
@@ -343,19 +369,25 @@ export function Board() {
 
         <div className={`${glass} h-[52px] gap-0.5 px-1.5`}>
           <div role="group" aria-label="Board grouping" className="hidden rounded-xl bg-hair p-[3px] lg:flex">
-            <button type="button" aria-pressed="true" className={seg(true)}>
-              Domains
-            </button>
-            <P1Button why="The Agents view arrives in P1 with agents." className={seg(false)}>
-              Agents
-            </P1Button>
+            {(["domains", "agents"] as const).map((g) => (
+              <button
+                key={g}
+                type="button"
+                aria-pressed={group === g}
+                onClick={() => setGroup(g)}
+                className={seg(group === g)}
+              >
+                {g === "domains" ? "Domains" : "Agents"}
+              </button>
+            ))}
           </div>
-          <P1Button
-            why="The daily brief arrives in P1."
+          <button
+            type="button"
+            onClick={openResearch}
             className="rounded-xl px-2.5 py-2 font-serif text-[17px] leading-none italic"
           >
             Brief
-          </P1Button>
+          </button>
           <button
             type="button"
             aria-label={
@@ -427,12 +459,13 @@ export function Board() {
       </div>
 
       <div className="glass absolute right-4 bottom-4 flex items-center gap-0.5 rounded-[14px] p-1">
-        <P1Button
-          why="Talk (voice conversation) arrives in P1."
+        <button
+          type="button"
+          onClick={() => void navigate({ search: { ...scope.keep, drawer: "talk" } })}
           className="h-8 rounded-[10px] px-2.5 text-[12px] font-medium text-teal"
         >
           Talk
-        </P1Button>
+        </button>
         <P1Button
           why="Knowledge search arrives in P1."
           className="hidden h-8 rounded-[10px] px-2.5 text-[12px] font-medium text-ink2 sm:block"
@@ -464,6 +497,21 @@ export function Board() {
       )}
       {drawerKind === "inbox" && <InboxDrawer banner={banner} onClose={closeDrawer} />}
       {drawerKind === "settings" && <SettingsDrawer banner={banner} onClose={closeDrawer} />}
+      {drawerKind === "business" && <BusinessDrawer banner={banner} onClose={closeDrawer} />}
+      {drawerKind === "talk" && <TalkDrawer threadId={drawerId} banner={banner} onClose={closeDrawer} />}
+      {drawerKind === "research" && <ResearchDrawer banner={banner} onClose={closeDrawer} />}
+      {drawerKind === "systems" && (
+        <SystemsDrawer banner={banner} onClose={closeDrawer} onOpenIncident={openIncident} />
+      )}
+      {drawerKind === "incident" && drawerId && (
+        <IncidentDrawer id={drawerId} banner={banner} onClose={closeDrawer} />
+      )}
+      {drawerKind === "agent" && agentKey.success && (
+        <AgentDrawer agent={agentKey.data} banner={banner} onClose={closeDrawer} />
+      )}
+      {drawerKind === "plan" && drawerId && (
+        <PlanDrawer id={drawerId} banner={banner} onClose={closeDrawer} />
+      )}
       {drawerKind === "issue" && drawerId && drawerNumber && (
         <IssueDrawer repoId={drawerId} number={Number(drawerNumber)} banner={banner} onClose={closeDrawer} />
       )}
@@ -490,20 +538,29 @@ function sysSub(runners: readonly Runner[] | undefined) {
   return `${active.length} ${active.length === 1 ? "runner" : "runners"} · ${on} online`;
 }
 
+// Zones move by transform, not `layout`: layout measures screen px, which the zoomed board scale would skew.
+const ZONE_MOVE = { duration: 0.7, ease: [0.2, 0.8, 0.2, 1] } as const;
+
 function Zone({ id, label, sub, x, y, w, h, tint, dim, children }: ZoneProps) {
   return (
-    <section
+    <m.section
       aria-labelledby={`zone-${id}`}
-      className="absolute rounded-[32px] border border-hair transition-opacity duration-700"
-      style={{ left: x, top: y, width: w, height: h, background: tint, opacity: dim ? 0.35 : 1 }}
+      className="absolute top-0 left-0 rounded-[32px] border border-hair"
+      style={{ width: w, height: h, background: tint }}
+      initial={false}
+      animate={{ x, y, opacity: dim ? 0.35 : 1 }}
+      transition={ZONE_MOVE}
     >
       <div className="absolute top-[22px] left-7 flex items-baseline gap-3 whitespace-nowrap">
-        <h2 id={`zone-${id}`} className="m-0 font-serif text-[48px] leading-none font-normal">
+        <h2
+          id={`zone-${id}`}
+          className={`m-0 font-serif leading-none font-normal ${w < 400 ? "text-[24px]" : "text-[48px]"}`}
+        >
           {label}
         </h2>
         <span className="font-mono text-[12px] text-ink3">{sub}</span>
       </div>
       <div className="absolute inset-x-10 top-[90px] bottom-8 overflow-hidden">{children}</div>
-    </section>
+    </m.section>
   );
 }

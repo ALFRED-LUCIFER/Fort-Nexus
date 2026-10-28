@@ -5,7 +5,25 @@ export type AuditEntry = {
   actor: string;
   action: string;
   resourceType:
-    "job" | "runner" | "github_account" | "approval" | "session" | "system" | "project" | "notification";
+    | "job"
+    | "runner"
+    | "github_account"
+    | "approval"
+    | "session"
+    | "system"
+    | "project"
+    | "notification"
+    | "research_watchlist"
+    | "research_run"
+    | "connector"
+    | "conversation"
+    | "action_proposal"
+    | "monitored_app"
+    | "incident"
+    | "automation_client"
+    | "automation_run"
+    | "agent_profile"
+    | "plan";
   resourceId: string;
   correlationId: string;
   outcome?: "SUCCEEDED" | "DENIED" | "FAILED";

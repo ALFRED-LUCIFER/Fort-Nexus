@@ -53,6 +53,18 @@ const Env = z.object({
     .min(1)
     .transform((p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p))
     .optional(),
+  // Business connector credentials: <dir>/<credentialRef>.json, mode 0600 (docs/runbooks/business-connector.md).
+  NEXUS_CONNECTORS_DIR: z
+    .string()
+    .min(1)
+    .transform((p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p))
+    .default(join(homedir(), ".nexus", "connectors")),
+  // Talk's model provider (ADR-0003); same file format as the runner's ~/.nexus/ai.json.
+  NEXUS_AI_FILE: z
+    .string()
+    .min(1)
+    .transform((p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p))
+    .default(join(homedir(), ".nexus", "ai.json")),
 });
 
 export type Config = {
@@ -67,6 +79,8 @@ export type Config = {
   leasePollMs: number;
   trustProxyHops: number;
   githubAppFile: string;
+  connectorsDir: string;
+  aiFile: string;
   ownerTimezone: string;
 };
 
@@ -105,6 +119,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, inContainer = r
     leasePollMs: e.RUNNER_LEASE_POLL_MS,
     trustProxyHops: e.TRUST_PROXY_HOPS,
     githubAppFile: e.GITHUB_APP_FILE ?? defaultGithubAppFile(),
+    connectorsDir: e.NEXUS_CONNECTORS_DIR,
+    aiFile: e.NEXUS_AI_FILE,
     ownerTimezone: e.OWNER_TIMEZONE,
   };
 }

@@ -153,6 +153,38 @@ export async function assertProjectActive(tx: Tx, projectId: string) {
   if (p.archivedAt) throw archived();
 }
 
+export type ProjectScope = { workspaceId: string; projectId: string; mode: WorkspaceMode };
+
+/**
+ * P1 modules (research, business, talk, monitoring, automations): the owner's project, or 404. `write` refuses an
+ * archived project (409); `mode` refuses the other workspace (403). Never falls back to another project.
+ */
+export async function resolveProject(
+  tx: Db | Tx,
+  ownerId: string,
+  projectId: string,
+  need: { write?: boolean; mode?: WorkspaceMode } = {},
+): Promise<ProjectScope> {
+  const { p, mode } = await ownedProject(tx, ownerId, projectId, need.write ? "share" : undefined);
+  if (need.write && p.archivedAt) throw archived();
+  if (need.mode && mode !== need.mode)
+    throw new HttpError(
+      403,
+      "FORBIDDEN",
+      `This needs a ${need.mode === "DEV" ? "Dev" : "Business"} project`,
+      {
+        field: "projectId",
+      },
+    );
+  return { workspaceId: p.workspaceId, projectId: p.id, mode };
+}
+
+/** The owner's workspace ids: the read-only "All" view filters P1 lists by these when no project is given. */
+export async function ownerWorkspaceIds(db: Db | Tx, ownerId: string): Promise<string[]> {
+  const rows = await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.ownerId, ownerId));
+  return rows.map((r) => r.id);
+}
+
 /** Repository ids bound to the owner's project (404 for an unknown project). */
 export async function boundRepositoryIds(db: Db, ownerId: string, projectId: string) {
   const { p } = await ownedProject(db, ownerId, projectId);

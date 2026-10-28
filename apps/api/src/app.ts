@@ -21,15 +21,25 @@ import {
   type ZodTypeProvider,
 } from "fastify-type-provider-zod";
 import { AuthStatus, GITHUB_SETUP_COMMAND, type ApiError, type ErrorCode } from "@nexus/contracts";
+import { agentRoutes } from "./agents/routes.ts";
 import { createAuth, type Auth } from "./auth.ts";
+import { automationRoutes, automationTriggerRoute } from "./automations/routes.ts";
+import { businessRoutes } from "./business/routes.ts";
 import type { Config } from "./config.ts";
+import { conversationRoutes } from "./conversations/routes.ts";
 import { createDb, runMigrations, type Db } from "./db/index.ts";
 import { HttpError } from "./errors.ts";
 import { loadGithubAppConfig } from "./github/app-config.ts";
 import { createGithubCatalog, type GithubCatalog } from "./github/catalog.ts";
 import { createExecutor, expireApprovals, type Executor } from "./issue-to-pr.ts";
 import { reapExpiredLeases } from "./jobs.ts";
+import { monitoringRoutes } from "./monitoring/routes.ts";
+import { createMonitoring, type Monitoring } from "./monitoring/service.ts";
 import { createHub, type Hub } from "./notify.ts";
+import { createPlanExecutor } from "./plans/executor.ts";
+import { planRoutes } from "./plans/routes.ts";
+import { researchRoutes } from "./research/routes.ts";
+import { createResearch, type Research } from "./research/service.ts";
 import { githubRoutes } from "./routes/github.ts";
 import { notificationRoutes } from "./routes/notifications.ts";
 import { ownerRoutes } from "./routes/owner.ts";
@@ -47,6 +57,8 @@ export type Deps = {
   /** null until the GitHub App is set up. */
   github: GithubCatalog | null;
   executor: Executor;
+  research: Research;
+  monitoring: Monitoring;
 };
 
 const REAPER_INTERVAL_MS = 5_000;
@@ -137,7 +149,21 @@ export async function buildApp(config: Config) {
   const auth = createAuth(config, db, github);
   const catalog = github ? createGithubCatalog(github, app.log) : null;
   const executor = createExecutor(db, catalog, app.log);
-  const deps: Deps = { config, db, auth, hub, shutdown: shutdown.signal, github: catalog, executor };
+  const research = createResearch(db, app.log, shutdown.signal);
+  const monitoring = createMonitoring(db, app.log, shutdown.signal);
+  const deps: Deps = {
+    config,
+    db,
+    auth,
+    hub,
+    shutdown: shutdown.signal,
+    github: catalog,
+    executor,
+    research,
+    monitoring,
+  };
+
+  const planExecutor = createPlanExecutor(deps, app.log);
 
   app.addHook("onRequest", async (request, reply) => {
     reply.header("x-request-id", request.id);
@@ -252,8 +278,17 @@ export async function buildApp(config: Config) {
       .then(() => githubRoutes(scope, deps))
       .then(() => systemRoutes(scope, deps))
       .then(() => workspaceRoutes(scope, deps))
-      .then(() => notificationRoutes(scope, deps)),
+      .then(() => notificationRoutes(scope, deps))
+      .then(() => businessRoutes(scope, deps))
+      .then(() => conversationRoutes(scope, deps))
+      .then(() => researchRoutes(scope, deps))
+      .then(() => automationRoutes(scope, deps))
+      .then(() => monitoringRoutes(scope, deps))
+      .then(() => agentRoutes(scope, deps))
+      .then(() => planRoutes(scope, deps)),
   );
+  // n8n's signed trigger: its own scope, outside the owner session (like the runner routes).
+  await app.register(async (scope) => automationTriggerRoute(scope, deps));
   await app.register(async (scope) => runnerRegisterRoute(scope, deps));
   await app.register(async (scope) => runnerRoutes(scope, deps));
 
@@ -276,6 +311,9 @@ export async function buildApp(config: Config) {
       expireApprovals(db).then((n) => {
         if (n > 0) app.log.info({ count: n }, "pending approvals expired");
       }),
+      research.tick(),
+      monitoring.tick(),
+      planExecutor.tick(),
     ]).catch((err: unknown) => app.log.error({ err }, "reaper failed"));
   app.addHook("onReady", async () => {
     await reap();
@@ -295,6 +333,8 @@ export async function buildApp(config: Config) {
     shutdown.abort(); // ends SSE streams and lease long-polls so close() doesn't wait on them
   });
   app.addHook("onClose", async () => {
+    await research.close(); // in-flight runs record their outcome before the pool closes
+    await monitoring.drain();
     await hub.close();
     await pool.end();
   });

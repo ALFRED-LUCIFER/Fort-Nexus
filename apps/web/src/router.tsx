@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { QueryCache, QueryClient } from "@tanstack/react-query";
+import { LazyMotion, MotionConfig } from "motion/react";
 import {
   Outlet,
   createRootRouteWithContext,
@@ -24,7 +25,7 @@ const text = (max: number) =>
     .catch(undefined);
 
 // Deep-linkable board state: `/?ws=dev&project=<uuid>&drawer=run:<uuid>`, `drawer=repo:<repoId>` (with issue filters),
-// `drawer=issue:<repoId>:<number>`, `drawer=inbox`, `drawer=settings`. Bad values fall back instead of erroring.
+// `drawer=issue:<repoId>:<number>`, `drawer=inbox`, `drawer=settings`, `drawer=business`, `drawer=research`, `drawer=talk` (threads) / `drawer=talk:<uuid>` (one thread), `drawer=systems`, `drawer=incident:<uuid>`, `drawer=agent:<AgentKey>`, `drawer=plan:<uuid>`. Bad values fall back instead of erroring.
 export const BoardSearch = z.object({
   ws: Workspace.optional().catch(undefined),
   // The selected project of `ws` (FR-WKS-02); without one the board is a read-only aggregate.
@@ -32,7 +33,7 @@ export const BoardSearch = z.object({
   drawer: z
     .string()
     .regex(
-      /^(run:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|repo:[1-9]\d{0,19}|issue:[1-9]\d{0,19}:[1-9]\d{0,9}|inbox|settings)$/i,
+      /^(run:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|repo:[1-9]\d{0,19}|issue:[1-9]\d{0,19}:[1-9]\d{0,9}|(?:incident|plan):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|agent:[a-z_]{1,32}|inbox|settings|business|research|systems|talk(?::[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?)$/i,
     )
     .optional()
     .catch(undefined),
@@ -44,7 +45,20 @@ export const BoardSearch = z.object({
 });
 export type BoardSearch = z.infer<typeof BoardSearch>;
 
-const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({ component: Outlet });
+const motionFeatures = () => import("./lib/motionFeatures.ts").then((mod) => mod.default);
+
+// Every page animates through `m` (strict); transforms are skipped for prefers-reduced-motion.
+function Root() {
+  return (
+    <MotionConfig reducedMotion="user">
+      <LazyMotion features={motionFeatures} strict>
+        <Outlet />
+      </LazyMotion>
+    </MotionConfig>
+  );
+}
+
+const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({ component: Root });
 
 // Better Auth sends failed GitHub sign-ins back as `/login?error=<code>`; anything else is dropped.
 export const LoginSearch = z.object({

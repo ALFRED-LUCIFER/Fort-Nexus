@@ -34,6 +34,10 @@ chmod 600 ~/.nexus/ai.json
 
 The runner fails a coding job with `ai_provider_not_configured` (file missing, with the path to create) or `ai_provider_config_invalid` (bad JSON, unknown fields, wrong mode or owner). Error messages never contain the file's content.
 
+### Talk (the API) uses the same file
+
+Talk's intent router (`apps/api/src/ai.ts`) reads the same `~/.nexus/ai.json` with the same checks, so the file must also be owned by the user the API runs as. `NEXUS_AI_FILE` points the API at another path. The file is read on every message: no restart after creating or rotating it. Until it exists, sending a message answers 409 and the Talk drawer explains what to create. Each message makes one Messages API call with the configured `model`.
+
 ## 2. What the job container gets
 
 - Only what the Agent SDK needs: `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_USE_FOUNDRY=1` + `ANTHROPIC_FOUNDRY_RESOURCE`/`ANTHROPIC_FOUNDRY_BASE_URL` + `ANTHROPIC_FOUNDRY_API_KEY`. The key is passed to `docker run` by name, so it never shows up in a process list. It is masked in every run event and log line.
