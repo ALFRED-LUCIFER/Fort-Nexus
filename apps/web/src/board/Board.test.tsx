@@ -126,13 +126,13 @@ describe("board", () => {
     expect(calls.filter((c) => c.method !== "GET")).toHaveLength(0);
   });
 
-  it("explains that Ask needs the P1 conversation service", async () => {
+  it("explains that Plan isn't available yet (Ask is covered in Talk.test.tsx)", async () => {
     board([runner()]);
     const user = userEvent.setup();
     renderApp("/");
-    await user.click(await screen.findByRole("button", { name: "Ask", pressed: false }));
+    await user.click(await screen.findByRole("button", { name: "Plan", pressed: false }));
     await user.type(screen.getByRole("textbox", { name: "Command" }), "what is running?{Enter}");
-    expect(await screen.findByText("Ask needs the conversation service, which arrives in P1.")).toBeTruthy();
+    expect(await screen.findByText("Plan isn’t available yet.")).toBeTruthy();
   });
 
   it("pairs a runner when none is paired", async () => {

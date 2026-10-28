@@ -1,10 +1,11 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useId, useState, type FormEvent, type ReactNode } from "react";
 import { getRouteApi } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ActionProposal, Basis, SourceRef, Turn } from "@nexus/contracts";
 import { ApiRequestError, api, keys } from "../lib/api.ts";
 import { ago, clock, shortHash, until, useNow } from "../lib/queries.ts";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
+import { PICK_PROJECT, useScope, type Scope } from "./scope.tsx";
 
 // Talk, text only (EPIC CWV/CXR). Replies come from the API, built from NEXUS's own records; the owner's click on
 // a proposal is the only approval.
@@ -27,17 +28,36 @@ export function TalkDrawer({
   );
 }
 
+/** Why no conversation can be started here: a thread belongs to one active project (FR-CXR-01). */
+export const talkBlocked = (scope: Scope): string | null =>
+  !scope.project
+    ? PICK_PROJECT
+    : scope.project.archivedAt
+      ? `${scope.project.name} is archived: its conversations are read-only. Unarchive it in Settings → Workspaces.`
+      : null;
+
 function useOpen() {
   const navigate = route.useNavigate();
-  const { ws } = route.useSearch();
-  return (drawer: string) => void navigate({ search: { ws, drawer } });
+  const { keep } = useScope();
+  return (drawer: string) => void navigate({ search: { ...keep, drawer } });
 }
 
 function ThreadList() {
   const open = useOpen();
+  const scope = useScope();
+  const blocked = talkBlocked(scope);
+  const blockedId = useId();
+  const projectId = scope.project?.id;
   const now = useNow(30_000);
-  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads });
-  const create = useMutation({ mutationFn: api.createThread, onSuccess: (t) => open(`talk:${t.id}`) });
+  const threads = useQuery({
+    queryKey: keys.threadsOf(projectId),
+    queryFn: () => api.threads(projectId),
+    enabled: scope.ready,
+  });
+  const create = useMutation({
+    mutationFn: (id: string) => api.createThread({ projectId: id }),
+    onSuccess: (t) => open(`talk:${t.id}`),
+  });
   const items = threads.data?.items ?? [];
 
   return (
@@ -50,12 +70,18 @@ function ThreadList() {
         </p>
         <button
           type="button"
-          disabled={create.isPending}
-          onClick={() => create.mutate()}
+          disabled={create.isPending || !!blocked}
+          aria-describedby={blocked ? blockedId : undefined}
+          onClick={() => projectId && create.mutate(projectId)}
           className="self-start rounded-xl bg-teal px-4 py-2.5 text-[12.5px] font-medium text-onacc disabled:opacity-60"
         >
           {create.isPending ? "Starting…" : "New conversation"}
         </button>
+        {blocked && (
+          <p id={blockedId} className="m-0 text-[12.5px] leading-snug text-ink2">
+            {blocked}
+          </p>
+        )}
         {create.error && (
           <p role="alert" className="m-0 text-[12.5px] text-coral">
             {create.error.message}

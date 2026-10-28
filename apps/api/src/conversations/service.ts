@@ -1,5 +1,4 @@
-import { and, asc, desc, eq, lt, sql } from "drizzle-orm";
-import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import { and, asc, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import {
   PROPOSAL_TTL_MS,
   type ActionProposal,
@@ -20,7 +19,7 @@ import { jobs } from "../db/schema.ts";
 import { HttpError, notFound } from "../errors.ts";
 import { canonical, createJob, ownerActor, sha256 } from "../jobs.ts";
 import { requireGithub } from "../routes/github.ts";
-import { projectScope } from "../scope.ts";
+import { ownerWorkspaceIds, resolveProject } from "../workspaces.ts";
 import { routeIntent } from "./router.ts";
 import { actionProposals, conversationThreads, conversationTurns } from "./schema.ts";
 import { answer, type Reply } from "./tools.ts";
@@ -72,12 +71,8 @@ export const toProposalDto = (p: ProposalRow, now = new Date()): ActionProposal 
   createdAt: p.createdAt.toISOString(),
 });
 
-const scoped = (t: { workspaceId: AnyPgColumn; projectId: AnyPgColumn }) => {
-  const s = projectScope();
-  return and(eq(t.workspaceId, s.workspaceId), eq(t.projectId, s.projectId));
-};
-
-async function getThread(db: Db | Tx, ownerId: string, threadId: string): Promise<ThreadRow> {
+/** A read by id: the owner's thread in one of the owner's workspaces, else 404 (NFR-CNV-05). */
+async function getThread(db: Db, ownerId: string, threadId: string): Promise<ThreadRow> {
   const [t] = await db
     .select()
     .from(conversationThreads)
@@ -85,19 +80,24 @@ async function getThread(db: Db | Tx, ownerId: string, threadId: string): Promis
       and(
         eq(conversationThreads.id, threadId),
         eq(conversationThreads.ownerId, ownerId),
-        scoped(conversationThreads),
+        inArray(conversationThreads.workspaceId, await ownerWorkspaceIds(db, ownerId)),
       ),
     );
   if (!t) throw notFound("Conversation");
   return t;
 }
 
-const auditMeta = (extra: Record<string, unknown>) => ({ ...projectScope(), ...extra });
+const auditMeta = (row: { workspaceId: string; projectId: string }, extra: Record<string, unknown>) => ({
+  workspaceId: row.workspaceId,
+  projectId: row.projectId,
+  ...extra,
+});
 
+/** One project's threads, or the read-only "All" view across the owner's workspaces when projectId is omitted. */
 export async function listThreads(
   db: Db,
   ownerId: string,
-  q: { cursor?: string; limit: number },
+  q: { projectId?: string; cursor?: string; limit: number },
 ): Promise<ThreadList> {
   const rows = await db
     .select()
@@ -105,7 +105,9 @@ export async function listThreads(
     .where(
       and(
         eq(conversationThreads.ownerId, ownerId),
-        scoped(conversationThreads),
+        q.projectId
+          ? eq(conversationThreads.projectId, (await resolveProject(db, ownerId, q.projectId)).projectId)
+          : inArray(conversationThreads.workspaceId, await ownerWorkspaceIds(db, ownerId)),
         q.cursor ? lt(conversationThreads.id, q.cursor) : undefined,
       ),
     )
@@ -121,17 +123,29 @@ export async function createThread(
 ): Promise<Thread> {
   const { subjectJobId } = input.body;
   return db.transaction(async (tx) => {
+    const scope = await resolveProject(tx, input.ownerId, input.body.projectId, { write: true });
     if (subjectJobId) {
+      // The subject must be a run of this project: a thread never reaches into another one.
       const [job] = await tx
         .select({ id: jobs.id })
         .from(jobs)
-        .where(and(eq(jobs.id, subjectJobId), eq(jobs.initiatorId, input.ownerId)));
-      if (!job) throw new HttpError(400, "VALIDATION_FAILED", "Unknown run", { field: "subjectJobId" });
+        .where(
+          and(
+            eq(jobs.id, subjectJobId),
+            eq(jobs.initiatorId, input.ownerId),
+            eq(jobs.projectId, scope.projectId),
+          ),
+        );
+      if (!job)
+        throw new HttpError(400, "VALIDATION_FAILED", "Unknown run in this project", {
+          field: "subjectJobId",
+        });
     }
     const [thread] = await tx
       .insert(conversationThreads)
       .values({
-        ...projectScope(),
+        workspaceId: scope.workspaceId,
+        projectId: scope.projectId,
         ownerId: input.ownerId,
         title: input.body.title ?? DEFAULT_TITLE,
         subjectJobId: subjectJobId ?? null,
@@ -143,7 +157,7 @@ export async function createThread(
       resourceType: "conversation",
       resourceId: thread!.id,
       correlationId: input.correlationId,
-      metadata: auditMeta({ subjectJobId: subjectJobId ?? null }),
+      metadata: auditMeta(scope, { subjectJobId: subjectJobId ?? null }),
     });
     return toThreadDto(thread!);
   });
@@ -189,6 +203,9 @@ export async function postTurn(
 ): Promise<PostTurnResponse> {
   const { db } = deps;
   const thread = await getThread(db, input.ownerId, input.threadId);
+  // An archived project's threads are read-only (409), checked before anything is stored or the model is called.
+  await resolveProject(db, input.ownerId, thread.projectId, { write: true });
+  const scope = { workspaceId: thread.workspaceId, projectId: thread.projectId };
   const requestHash = sha256(canonical(input.body));
   const byKey = and(
     eq(conversationTurns.threadId, thread.id),
@@ -240,7 +257,7 @@ export async function postTurn(
     const [row] = await tx
       .insert(conversationTurns)
       .values({
-        ...projectScope(),
+        ...scope,
         threadId: thread.id,
         role: "USER",
         text: input.body.text,
@@ -278,6 +295,7 @@ export async function postTurn(
           db,
           github: deps.github,
           ownerId: input.ownerId,
+          projectId: thread.projectId,
           subjectJobId: thread.subjectJobId,
           connectorsDir: deps.config.connectorsDir,
           correlationId: input.correlationId,
@@ -290,7 +308,7 @@ export async function postTurn(
     const [assistant] = await tx
       .insert(conversationTurns)
       .values({
-        ...projectScope(),
+        ...scope,
         threadId: thread.id,
         role: "ASSISTANT",
         text: reply.text,
@@ -309,7 +327,7 @@ export async function postTurn(
         .insert(actionProposals)
         .values({
           id: proposalId,
-          ...projectScope(),
+          ...scope,
           threadId: thread.id,
           turnId: assistant!.id,
           riskTier: "R1", // a sandboxed job; its push is a separate R2 approval
@@ -326,7 +344,7 @@ export async function postTurn(
         resourceType: "action_proposal",
         resourceId: proposalId,
         correlationId: input.correlationId,
-        metadata: auditMeta({
+        metadata: auditMeta(scope, {
           threadId: thread.id,
           actionHash: proposal!.actionHash,
           actionType: reply.proposal.type,
@@ -343,7 +361,7 @@ export async function postTurn(
       resourceType: "conversation",
       resourceId: thread.id,
       correlationId: input.correlationId,
-      metadata: auditMeta({
+      metadata: auditMeta(scope, {
         userTurnId: user.id,
         assistantTurnId: assistant!.id,
         intent: reply.intent?.kind ?? null,
@@ -385,7 +403,7 @@ export async function decideProposal(
       resourceId: p.id,
       correlationId: input.correlationId,
       outcome,
-      metadata: auditMeta({ threadId: p.threadId, actionHash: p.actionHash, decision, ...extra }),
+      metadata: auditMeta(p, { threadId: p.threadId, actionHash: p.actionHash, decision, ...extra }),
     });
 
   const decided = await db.transaction(async (tx) => {
@@ -393,16 +411,12 @@ export async function decideProposal(
       .select({ p: actionProposals })
       .from(actionProposals)
       .innerJoin(conversationThreads, eq(conversationThreads.id, actionProposals.threadId))
-      .where(
-        and(
-          eq(actionProposals.id, input.proposalId),
-          eq(conversationThreads.ownerId, input.ownerId),
-          scoped(actionProposals),
-        ),
-      )
+      .where(and(eq(actionProposals.id, input.proposalId), eq(conversationThreads.ownerId, input.ownerId)))
       .for("update", { of: actionProposals });
     if (!row) throw notFound("Proposal");
     const p = row.p;
+    // 404 outside the owner's projects, 409 once archived; share-locked so an archive waits for this decision.
+    await resolveProject(tx, input.ownerId, p.projectId, { write: true });
     // A retried approve of an approved proposal re-runs the idempotent job creation (crash between the two).
     const retry = decision === "approve" && (p.status === "APPROVED" || p.status === "EXECUTED");
     if (!retry && p.status !== "AWAITING_APPROVAL")

@@ -8,6 +8,7 @@ import {
   IdempotencyKey,
   PostTurnRequest,
   PostTurnResponse,
+  ProjectFilterQuery,
   ProposalDecisionRequest,
   Thread,
   ThreadDetail,
@@ -18,7 +19,7 @@ import { HttpError } from "../errors.ts";
 import { createThread, decideProposal, getThreadDetail, listThreads, postTurn } from "./service.ts";
 
 const IdParams = z.object({ id: z.uuid() });
-const ListQuery = z.object({
+const ListQuery = ProjectFilterQuery.extend({
   cursor: z.uuid().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(25),
 });

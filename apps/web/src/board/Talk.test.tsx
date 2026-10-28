@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ActionProposal, ThreadDetail, Turn } from "@nexus/contracts";
-import { ME, json, mockFetch, renderApp, runner } from "../test/helpers.tsx";
+import { IN_PROJECT, ME, PROJECT_ID, json, mockFetch, renderApp, runner } from "../test/helpers.tsx";
+import { PICK_PROJECT } from "./scope.tsx";
 
 const T0 = "2026-10-28T10:00:00.000Z";
 const THREAD = "55555555-5555-4555-8555-555555555555";
@@ -51,7 +52,14 @@ const proposal = (over: Partial<ActionProposal> = {}): ActionProposal => ({
 });
 
 const detail = (p: ActionProposal | null = null): ThreadDetail => ({
-  thread: { id: THREAD, title: "How is my run?", subjectJobId: JOB, createdAt: T0, updatedAt: T0 },
+  thread: {
+    id: THREAD,
+    projectId: PROJECT_ID,
+    title: "How is my run?",
+    subjectJobId: JOB,
+    createdAt: T0,
+    updatedAt: T0,
+  },
   turns: [
     turn({}),
     turn({
@@ -86,22 +94,46 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(600);
 });
 
+const describedBy = (el: HTMLElement) =>
+  document.getElementById(el.getAttribute("aria-describedby") ?? "")?.textContent;
+
 describe("Talk drawer", () => {
-  it("opens from the Talk button, shows the empty list and starts a conversation", async () => {
+  it("opens from the Talk button, lists the project's threads and starts one in that project", async () => {
     const calls = mockFetch({
       ...base,
       "GET /v1/conversations": () => json({ items: [], nextCursor: null }),
       "POST /v1/conversations": () => json(detail().thread, 201),
       [`GET /v1/conversations/${THREAD}`]: () => json({ ...detail(), turns: [] }),
     });
-    const { router } = renderApp("/");
+    const { router } = renderApp(IN_PROJECT);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Talk" }));
     expect(await screen.findByText("No conversations yet.")).toBeTruthy();
+    expect(calls.find((c) => c.path === "/v1/conversations")!.query.get("projectId")).toBe(PROJECT_ID);
     await user.click(screen.getByRole("button", { name: "New conversation" }));
-    await waitFor(() => expect(router.state.location.search).toMatchObject({ drawer: `talk:${THREAD}` }));
+    await waitFor(() =>
+      expect(router.state.location.search).toEqual({
+        ws: "dev",
+        project: PROJECT_ID,
+        drawer: `talk:${THREAD}`,
+      }),
+    );
     expect(await screen.findByText(/Ask something/)).toBeTruthy();
-    expect(calls.filter((c) => c.method === "POST" && c.path === "/v1/conversations")).toHaveLength(1);
+    const creates = calls.filter((c) => c.method === "POST" && c.path === "/v1/conversations");
+    expect(creates.map((c) => c.body)).toEqual([{ projectId: PROJECT_ID }]);
+  });
+
+  it("in All lists every project's threads read-only: New conversation needs a project", async () => {
+    const calls = mockFetch({
+      ...base,
+      "GET /v1/conversations": () => json({ items: [detail().thread], nextCursor: null }),
+    });
+    renderApp("/?drawer=talk");
+    expect(await screen.findByRole("button", { name: /How is my run\?/ })).toBeTruthy();
+    expect(calls.find((c) => c.path === "/v1/conversations")!.query.has("projectId")).toBe(false);
+    const create = screen.getByRole("button", { name: "New conversation" });
+    expect((create as HTMLButtonElement).disabled).toBe(true);
+    expect(describedBy(create)).toBe(PICK_PROJECT);
   });
 
   it("shows turns with their basis and sources; a run source opens the run drawer", async () => {
@@ -174,5 +206,56 @@ describe("Talk drawer", () => {
     expect(posts.map((p) => p.body)).toEqual(Array(3).fill({ text: "List my runs" }));
     const keys = new Set(posts.map((p) => p.headers.get("idempotency-key")));
     expect(keys.size).toBe(1);
+  });
+});
+
+describe("command bar Ask", () => {
+  it("opens a thread in the current project with the typed text as its first turn; a retry reuses both", async () => {
+    let down = true;
+    const calls = mockFetch({
+      ...base,
+      "POST /v1/conversations": () => json(detail().thread, 201),
+      [`POST /v1/conversations/${THREAD}/turns`]: () => {
+        if (down) throw new TypeError("Failed to fetch");
+        return json({ userTurn: turn({}), assistantTurn: detail().turns[1], proposal: null });
+      },
+      [`GET /v1/conversations/${THREAD}`]: () => json(detail()),
+    });
+    const { router } = renderApp(IN_PROJECT);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Ask", pressed: false }));
+    await user.type(screen.getByRole("textbox", { name: "Command" }), "How is my run?{Enter}");
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /Can't reach the NEXUS API.*answered once/,
+    );
+
+    down = false;
+    await user.type(screen.getByRole("textbox", { name: "Command" }), "{Enter}");
+    await waitFor(() =>
+      expect(router.state.location.search).toEqual({
+        ws: "dev",
+        project: PROJECT_ID,
+        drawer: `talk:${THREAD}`,
+      }),
+    );
+    expect(await screen.findByRole("log", { name: "Conversation" })).toBeTruthy();
+    // The drawer is modal, so the board behind it is hidden from the accessibility tree.
+    const command = screen.getByRole("textbox", { name: "Command", hidden: true }) as HTMLInputElement;
+    expect(command.value).toBe("");
+    const creates = calls.filter((c) => c.method === "POST" && c.path === "/v1/conversations");
+    expect(creates.map((c) => c.body)).toEqual([{ projectId: PROJECT_ID }]);
+    const posts = calls.filter((c) => c.method === "POST" && c.path.endsWith("/turns"));
+    expect(posts.map((c) => c.body)).toEqual([{ text: "How is my run?" }, { text: "How is my run?" }]);
+    expect(new Set(posts.map((c) => c.headers.get("idempotency-key"))).size).toBe(1);
+  });
+
+  it("says to pick a project first in All and sends nothing", async () => {
+    const calls = mockFetch(base);
+    renderApp("/");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Ask", pressed: false }));
+    await user.type(screen.getByRole("textbox", { name: "Command" }), "what is running?{Enter}");
+    expect(await screen.findByText(PICK_PROJECT)).toBeTruthy();
+    expect(calls.filter((c) => c.method !== "GET")).toHaveLength(0);
   });
 });

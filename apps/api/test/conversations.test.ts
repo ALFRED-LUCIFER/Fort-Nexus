@@ -5,10 +5,18 @@ import { join } from "node:path";
 import type pg from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
-import type { ActionProposal, Intent, PostTurnResponse, Thread, ThreadDetail } from "@nexus/contracts";
+import type {
+  ActionProposal,
+  Intent,
+  PostTurnResponse,
+  Project,
+  Thread,
+  ThreadDetail,
+  ThreadList,
+  WorkspaceList,
+} from "@nexus/contracts";
 import { createDb } from "../src/db/index.ts";
 import { canonical, sha256 } from "../src/jobs.ts";
-import { P1_SCOPE } from "../src/scope.ts";
 import { createTestApp, ownerSession, type TestApp } from "./helpers/owner-session.ts";
 
 // The model provider and GitHub are stubbed at fetch level; the Anthropic SDK, Octokit and the API are real.
@@ -110,19 +118,37 @@ let cookie: string;
 let dir: string;
 let aiFile: string;
 let fake: ReturnType<typeof fakeProviders>;
+let ws: WorkspaceList;
+/** The Dev project "home" with acme/web (101) bound: project A of the decoy tests. */
+let home: Project;
+let tests = 0;
+let ip = "127.0.0.1";
 
-const call = (method: "GET" | "POST", url: string, body?: unknown, headers: Record<string, string> = {}) =>
+type Method = "GET" | "POST" | "PATCH" | "PUT";
+const call = (method: Method, url: string, body?: unknown, headers: Record<string, string> = {}) =>
   app.inject({
     method,
     url,
+    remoteAddress: ip, // one rate-limit bucket per test: the suite posts more turns than one minute allows
     headers: { cookie, origin: t.config.publicOrigin, ...headers },
     ...(body === undefined ? {} : { payload: body as object }),
   });
+async function newProject(mode: "DEV" | "BUSINESS", bindRepo = false) {
+  const slug = `p-${randomBytes(3).toString("hex")}`;
+  const wsId = ws.items.find((w) => w.mode === mode)!.id;
+  const res = await call("POST", `/v1/workspaces/${wsId}/projects`, { name: `Project ${slug}`, slug });
+  expect(res.statusCode, res.body).toBe(201);
+  const p = res.json() as Project;
+  if (bindRepo) expect((await call("PUT", `/v1/projects/${p.id}/repositories/101`)).statusCode).toBe(200);
+  return p;
+}
 const newThread = async (body: Record<string, unknown> = {}) => {
-  const res = await call("POST", "/v1/conversations", body);
+  const res = await call("POST", "/v1/conversations", { projectId: home.id, ...body });
   expect(res.statusCode, res.body).toBe(201);
   return res.json() as Thread;
 };
+const threadIds = async (query = "") =>
+  ((await call("GET", `/v1/conversations?limit=100${query}`)).json() as ThreadList).items.map((x) => x.id);
 const say = (threadId: string, text: string, key = randomUUID()) =>
   call("POST", `/v1/conversations/${threadId}/turns`, { text }, { "idempotency-key": key });
 /** Queues the model's answer, posts the owner's message and returns the stored turns. */
@@ -132,11 +158,11 @@ async function turn(threadId: string, text: string, reply: ModelReply) {
   expect(res.statusCode, res.body).toBe(200);
   return res.json() as PostTurnResponse;
 }
-const diagnosticJob = async () => {
+const diagnosticJob = async (projectId = home.id) => {
   const res = await call(
     "POST",
     "/v1/jobs",
-    { jobType: "RUNNER_DIAGNOSTIC", preset: "node-version" },
+    { jobType: "RUNNER_DIAGNOSTIC", preset: "node-version", projectId },
     { "idempotency-key": randomUUID() },
   );
   expect(res.statusCode, res.body).toBe(202);
@@ -145,6 +171,32 @@ const diagnosticJob = async () => {
 const decide = (p: ActionProposal, decision: "approve" | "deny", actionHash = p.actionHash) =>
   call("POST", `/v1/conversations/proposals/${p.id}/decision`, { decision, actionHash });
 const OUTCOME = /\b(done|sent|merged|opened|deployed)\b/i;
+
+/** One UNVERIFIED finding from a single secondary publisher in the project, seeded as the research run stores it. */
+async function unverifiedFinding(p: Project, title: string) {
+  const unit = JSON.stringify({ credibility: 0.4, relevance: 1, novelty: 1, impact: 0.5, opportunity: 0.5 });
+  const res = await sql.query<{ id: string }>(
+    `with w as (
+       insert into research_watchlists (workspace_id, project_id, name, keywords, sources, weights, schedule, created_by)
+       values ($1, $2, 'Carts', '["cart"]', '[]',
+         '{"credibility":25,"relevance":25,"novelty":20,"impact":15,"opportunity":15}', '{}', 'owner:test')
+       returning id),
+     r as (
+       insert into research_runs (workspace_id, project_id, watchlist_id, trigger, status)
+       select $1, $2, w.id, 'MANUAL', 'SUCCEEDED' from w returning id, watchlist_id),
+     f as (
+       insert into research_findings (workspace_id, project_id, watchlist_id, first_run_id, title, excerpt,
+         canonical_url, label, score_breakdown)
+       select $1, $2, r.watchlist_id, r.id, $3, '', 'https://blog.example/carts', 'UNVERIFIED', $4::jsonb from r
+       returning id, watchlist_id)
+     insert into research_finding_sources (workspace_id, project_id, finding_id, watchlist_id, url, publisher, tier,
+       title, fetched_at)
+     select $1, $2, f.id, f.watchlist_id, 'https://blog.example/carts', 'blog.example', 'SECONDARY', $3, now() from f
+     returning finding_id as id`,
+    [p.workspaceId, p.id, title, unit],
+  );
+  return res.rows[0]!.id;
+}
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "nexus-ai-"));
@@ -164,6 +216,11 @@ beforeAll(async () => {
   app = t.app;
   ({ pool: sql } = createDb(t.databaseUrl));
   cookie = await ownerSession(t);
+  ws = (await call("GET", "/v1/workspaces")).json() as WorkspaceList;
+  home = ws.items.find((w) => w.mode === "DEV")!.projects.find((p) => p.slug === "home")!;
+  fakeProviders(); // binding checks the repository against the GitHub app
+  expect((await call("PUT", `/v1/projects/${home.id}/repositories/101`)).statusCode).toBe(200);
+  vi.restoreAllMocks();
 });
 afterAll(async () => {
   await app?.close();
@@ -172,6 +229,7 @@ afterAll(async () => {
 });
 beforeEach(() => {
   fake = fakeProviders();
+  ip = `127.0.1.${++tests}`;
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -215,14 +273,16 @@ describe("routing (FR-CXR-03)", () => {
       `select workspace_id, project_id from conversation_turns where thread_id = $1`,
       [thread.id],
     );
+    const scope = { workspaceId: home.workspaceId, projectId: home.id };
+    expect(thread.projectId).toBe(home.id);
     for (const row of rows.rows)
-      expect(row).toEqual({ workspace_id: P1_SCOPE.workspaceId, project_id: P1_SCOPE.projectId });
+      expect(row).toEqual({ workspace_id: scope.workspaceId, project_id: scope.projectId });
     const audit = await sql.query(
       `select correlation_id, metadata from audit_records where action = 'conversation.turn' and metadata->>'assistantTurnId' = $1`,
       [r.assistantTurn.id],
     );
     expect(audit.rows[0].correlation_id).toBe(r.assistantTurn.correlationId);
-    expect(audit.rows[0].metadata).toMatchObject({ ...P1_SCOPE, intent: "LIST_RUNS" });
+    expect(audit.rows[0].metadata).toMatchObject({ ...scope, intent: "LIST_RUNS" });
   });
 
   it("turns invalid or missing tool output into UNSUPPORTED, and a provider failure into a plain notice", async () => {
@@ -299,7 +359,10 @@ describe("turns (FR-CWV-01)", () => {
     expect((await say(randomUUID(), "hi")).statusCode).toBe(404);
     const list = (await call("GET", "/v1/conversations?limit=100")).json() as { items: Thread[] };
     expect(list.items.map((x) => x.id)).toContain(thread.id);
-    expect((await call("POST", "/v1/conversations", { subjectJobId: randomUUID() })).statusCode).toBe(400);
+    expect(
+      (await call("POST", "/v1/conversations", { projectId: home.id, subjectJobId: randomUUID() }))
+        .statusCode,
+    ).toBe(400);
   });
 });
 
@@ -394,7 +457,7 @@ describe("proposals (FR-CWV-05, FR-CXR-05)", () => {
       result: null,
       action: {
         type: "jobs.create",
-        request: { jobType: "DEV_ISSUE_TO_PR", repositoryId: "101", issueNumber: 42 },
+        request: { jobType: "DEV_ISSUE_TO_PR", projectId: home.id, repositoryId: "101", issueNumber: 42 },
       },
     });
     expect(p.actionHash).toBe(sha256(canonical(p.action)));
@@ -414,7 +477,7 @@ describe("proposals (FR-CWV-05, FR-CXR-05)", () => {
       result: { jobId: expect.any(String) },
     });
     const job = (await call("GET", `/v1/jobs/${executed.result!.jobId}`)).json();
-    expect(job).toMatchObject({ jobType: "DEV_ISSUE_TO_PR", status: "QUEUED" });
+    expect(job).toMatchObject({ jobType: "DEV_ISSUE_TO_PR", status: "QUEUED", projectId: home.id });
 
     const twice = await decide(p, "approve");
     expect(twice.statusCode).toBe(200);
@@ -481,5 +544,109 @@ describe("proposals (FR-CWV-05, FR-CXR-05)", () => {
     );
     expect(closed.proposal).toBeNull();
     expect(closed.assistantTurn.text).toMatch(/is closed/);
+  });
+});
+
+// NFR-CNV-05 decoys: project A (home) holds the data; B must never see or touch it through Talk.
+describe("project scope (FR-CXR-01, NFR-CNV-05)", () => {
+  it("B's lists, subjects and tools never contain A's threads or runs", async () => {
+    const b = await newProject("DEV");
+    const jobA = await diagnosticJob();
+    const threadA = await newThread();
+    const threadB = await newThread({ projectId: b.id });
+    expect(threadB.projectId).toBe(b.id);
+
+    expect(await threadIds(`&projectId=${b.id}`)).toEqual([threadB.id]);
+    expect(await threadIds(`&projectId=${home.id}`)).not.toContain(threadB.id);
+    expect(await threadIds()).toEqual(expect.arrayContaining([threadA.id, threadB.id])); // All: read-only view
+    expect((await call("GET", `/v1/conversations?projectId=${randomUUID()}`)).statusCode).toBe(404);
+    expect((await call("POST", "/v1/conversations", { projectId: randomUUID() })).statusCode).toBe(404);
+    // A's run can't become the subject of a thread in B.
+    const subject = await call("POST", "/v1/conversations", { projectId: b.id, subjectJobId: jobA });
+    expect(subject.statusCode).toBe(400);
+
+    const list = await turn(threadB.id, "which runs?", toolCall({ kind: "LIST_RUNS" }));
+    expect(list.assistantTurn).toMatchObject({ text: "This project has no runs yet.", sources: [] });
+    const byId = await turn(threadB.id, "status?", toolCall({ kind: "RUN_STATUS", jobId: jobA }));
+    expect(byId.assistantTurn).toMatchObject({ basis: "NONE", sources: [] });
+    expect(byId.assistantTurn.text).toMatch(/can't find a run .* in this project/);
+    const followUp = await turn(threadB.id, "how is it going?", toolCall({ kind: "RUN_STATUS" }));
+    expect(followUp.assistantTurn).toMatchObject({ intent: { kind: "CLARIFY" }, sources: [] });
+    expect(
+      ((await call("GET", `/v1/conversations/${threadB.id}`)).json() as ThreadDetail).thread.subjectJobId,
+    ).toBeNull();
+  });
+
+  it("RES-G03: relays A's unverified finding as the publisher's claim with its source; B finds nothing", async () => {
+    const claim = "Cart abandonment will triple by 2027";
+    const findingId = await unverifiedFinding(home, claim);
+    const search = toolCall({ kind: "RESEARCH_SEARCH", query: "cart abandonment" });
+
+    const inA = await turn((await newThread()).id, "news on carts?", search);
+    expect(inA.assistantTurn.basis).toBe("OBSERVED");
+    expect(inA.assistantTurn.text).toContain(`blog.example claims: "${claim}" (unverified`);
+    expect(inA.assistantTurn.sources).toEqual([
+      expect.objectContaining({ kind: "FINDING", id: findingId, url: "https://blog.example/carts" }),
+    ]);
+
+    const b = await newProject("DEV");
+    const inB = await turn((await newThread({ projectId: b.id })).id, "news on carts?", search);
+    expect(inB.assistantTurn).toMatchObject({ basis: "NONE", sources: [] });
+    expect(inB.assistantTurn.text).toMatch(/^No research findings match/);
+  });
+
+  it("START_ISSUE_RUN proposes nothing when the repository isn't bound to the thread's project or it's a Business project", async () => {
+    const unbound = await newThread({ projectId: (await newProject("DEV")).id });
+    const r = await turn(
+      unbound.id,
+      "work on acme/web#42",
+      toolCall({ kind: "START_ISSUE_RUN", repositoryFullName: "acme/web", issueNumber: 42 }),
+    );
+    expect(r).toMatchObject({ proposal: null, assistantTurn: { basis: "NONE" } });
+    expect(r.assistantTurn.text).toMatch(/isn't bound to this project/);
+
+    const shop = await newThread({ projectId: (await newProject("BUSINESS")).id });
+    const biz = await turn(
+      shop.id,
+      "work on acme/web#42",
+      toolCall({ kind: "START_ISSUE_RUN", repositoryFullName: "acme/web", issueNumber: 42 }),
+    );
+    expect(biz.proposal).toBeNull();
+    expect(biz.assistantTurn.text).toMatch(/isn't bound to this project/); // Business projects bind no repositories
+    // DATA-G02 at the "no source" level: a Business project without connectors has no figures.
+    const sales = await turn(
+      shop.id,
+      "sales today?",
+      toolCall({ kind: "BUSINESS_METRIC", metric: "SALES_SUMMARY", day: "today", compare: false }),
+    );
+    expect(sales.assistantTurn).toMatchObject({ basis: "NONE", sources: [] });
+    expect(sales.assistantTurn.text).toMatch(/No business source .* connected to this project/);
+  });
+
+  it("an archived project's threads are read-only: no new thread, turn or decision, and nothing starts", async () => {
+    const c = await newProject("DEV", true);
+    const thread = await newThread({ projectId: c.id });
+    const p = (
+      await turn(
+        thread.id,
+        "work on acme/web#42",
+        toolCall({ kind: "START_ISSUE_RUN", repositoryFullName: "acme/web", issueNumber: 42 }),
+      )
+    ).proposal!;
+    expect(p.action.request.projectId).toBe(c.id);
+    expect((await call("PATCH", `/v1/projects/${c.id}`, { archived: true })).statusCode).toBe(200);
+
+    const requests = fake.modelRequests.length;
+    expect((await say(thread.id, "List my runs")).statusCode).toBe(409);
+    expect(fake.modelRequests).toHaveLength(requests);
+    expect((await decide(p, "approve")).statusCode).toBe(409);
+    expect((await call("POST", "/v1/conversations", { projectId: c.id })).statusCode).toBe(409);
+
+    const detail = (await call("GET", `/v1/conversations/${thread.id}`)).json() as ThreadDetail;
+    expect(detail.turns).toHaveLength(2);
+    expect(detail.proposals[0]).toMatchObject({ status: "AWAITING_APPROVAL", result: null });
+    expect(await threadIds(`&projectId=${c.id}`)).toEqual([thread.id]);
+    const started = await sql.query(`select 1 from jobs where idempotency_key = $1`, [`proposal:${p.id}`]);
+    expect(started.rowCount).toBe(0);
   });
 });

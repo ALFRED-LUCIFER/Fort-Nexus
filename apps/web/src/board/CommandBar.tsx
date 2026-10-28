@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { getRouteApi } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   DIAGNOSTIC_TIMEOUT_MS,
@@ -9,6 +10,10 @@ import {
 import { api, keys } from "../lib/api.ts";
 import { preferredRunner } from "../lib/queries.ts";
 import { P1Button } from "./P1Button.tsx";
+import { useScope } from "./scope.tsx";
+import { talkBlocked } from "./Talk.tsx";
+
+const route = getRouteApi("/");
 
 const MODES = ["Ask", "Plan", "Execute"] as const;
 type Mode = (typeof MODES)[number];
@@ -17,9 +22,48 @@ const DIAGNOSTIC_TIMEOUT_S = DIAGNOSTIC_TIMEOUT_MS / 1000;
 const seg = (on: boolean) =>
   `rounded-[9px] px-[11px] py-[9px] text-[12px] font-medium leading-none ${on ? "bg-glass2 text-ink shadow-[0_1px_3px_rgba(0,0,0,.12)]" : "text-ink3"}`;
 
+type Question = { text: string; projectId: string; key: string; threadId?: string };
+
+/**
+ * Ask: a new Talk thread in the current project with the typed text as its first turn, then the thread opens. A retry
+ * of the same question reuses its thread and Idempotency-Key, so it is stored and answered once.
+ */
+function useAsk(onOpened: () => void) {
+  const scope = useScope();
+  const navigate = route.useNavigate();
+  const queryClient = useQueryClient();
+  const [question, setQuestion] = useState<Question | null>(null);
+  const mutation = useMutation({
+    mutationFn: async (q: Question) => {
+      const threadId = q.threadId ?? (await api.createThread({ projectId: q.projectId })).id;
+      setQuestion({ ...q, threadId });
+      await api.postTurn(threadId, q.text, q.key);
+      return threadId;
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: keys.threads }),
+    onSuccess: (threadId) => {
+      setQuestion(null);
+      onOpened();
+      void navigate({ search: { ...scope.keep, drawer: `talk:${threadId}` } });
+    },
+  });
+  const blocked = talkBlocked(scope);
+  const projectId = scope.project?.id;
+  return {
+    blocked,
+    pending: mutation.isPending,
+    error: mutation.error,
+    ask: (text: string) => {
+      if (blocked || !projectId || !text || mutation.isPending) return;
+      const same = question?.text === text && question.projectId === projectId;
+      mutation.mutate(same ? question : { text, projectId, key: crypto.randomUUID() });
+    },
+  };
+}
+
 /**
  * Command bar (top centre). Under it, in one column: `children` (status banners), then the
- * Execute preview or the Ask/Plan "not yet" note.
+ * Execute preview, the Ask status or the Plan "not yet" note.
  */
 export function CommandBar({
   runners,
@@ -37,15 +81,23 @@ export function CommandBar({
 }) {
   const [text, setText] = useState("");
   const [mode, setMode] = useState<Mode>("Execute");
-  const [panel, setPanel] = useState<"preview" | "note" | null>(null);
+  const [panel, setPanel] = useState<"preview" | "note" | "ask" | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const asking = useAsk(() => {
+    setPanel(null);
+    setText("");
+  });
 
   const close = () => {
     setPanel(null);
     inputRef.current?.focus();
   };
+  const submit = () => {
+    setPanel(mode === "Execute" ? "preview" : mode === "Ask" ? "ask" : "note");
+    if (mode === "Ask") asking.ask(text.trim());
+  };
   const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") setPanel(mode === "Execute" ? "preview" : "note");
+    if (e.key === "Enter") submit();
     if (e.key === "Escape") setPanel(null);
   };
 
@@ -94,7 +146,7 @@ export function CommandBar({
         </div>
         <button
           type="button"
-          onClick={() => setPanel(mode === "Execute" ? "preview" : "note")}
+          onClick={submit}
           className="h-10 flex-none rounded-xl bg-teal px-4 text-[13px] font-medium text-onacc"
         >
           {mode === "Execute" ? "Preview" : mode}
@@ -102,13 +154,41 @@ export function CommandBar({
       </div>
       <div className="absolute top-[62px] right-0 left-0 z-[12] flex flex-col gap-2.5">
         {children}
+        {panel === "ask" && (
+          <Panel label="Ask">
+            {asking.blocked || !text.trim() ? (
+              <p role="status" className="m-0 text-[13.5px] leading-snug text-ink2">
+                {asking.blocked ?? "Type a question first, then press Enter."}
+              </p>
+            ) : asking.pending ? (
+              <p role="status" className="m-0 font-serif text-[22px] leading-tight italic">
+                Asking NEXUS…
+              </p>
+            ) : (
+              asking.error && (
+                <p role="alert" className="m-0 text-[13px] leading-snug text-coral">
+                  {asking.error.message} Press Enter to try again; the same question is answered once.
+                </p>
+              )
+            )}
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={close}
+                className="rounded-xl border border-hair px-3.5 py-2.5 text-[12.5px] font-medium text-ink2"
+              >
+                Close
+              </button>
+            </div>
+          </Panel>
+        )}
         {panel === "note" && (
           <Panel>
             <p role="status" className="m-0 font-serif text-[22px] leading-tight italic">
-              {mode} needs the conversation service, which arrives in P1.
+              {mode} isn’t available yet.
             </p>
             <p className="m-0 text-[13px] text-ink2">
-              Execute works today: it runs a typed diagnostic on your home runner.
+              Ask answers from NEXUS’s own records. Execute runs a typed diagnostic on your home runner.
             </p>
             <div className="flex justify-end gap-2">
               <button
@@ -235,7 +315,7 @@ function ExecutePreview({
       </dl>
       {freeText && (
         <p className="m-0 font-mono text-[11px] leading-snug text-ink3">
-          Free-text commands need the conversation service (P1). Pick a preset; “{freeText}” is not sent.
+          Execute runs a preset only; switch to Ask to send free text. “{freeText}” is not sent.
         </p>
       )}
       {blocked && (

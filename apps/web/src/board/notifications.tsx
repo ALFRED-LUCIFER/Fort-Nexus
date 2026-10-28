@@ -4,7 +4,6 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Notification, NotificationCategory } from "@nexus/contracts";
 import { api, keys } from "../lib/api.ts";
 import { clock, useNotifications, useWorkspaces } from "../lib/queries.ts";
-import { P1Button } from "./P1Button.tsx";
 import { useScope, type Scope } from "./scope.tsx";
 
 const route = getRouteApi("/");
@@ -31,11 +30,22 @@ export function useScopeNotifications() {
   return { ...q, unread };
 }
 
+/** The scope a notification belongs to: its run's project (owner-wide notices keep the current scope). */
+function useKeepOf() {
+  const scope = useScope();
+  const workspaces = useWorkspaces();
+  return (n: Notification): Scope["keep"] => {
+    const ws = workspaces.data?.items.find((w) => w.projects.some((p) => p.id === n.projectId));
+    return ws
+      ? { ws: ws.mode === "DEV" ? "dev" : "business", project: n.projectId ?? undefined }
+      : scope.keep;
+  };
+}
+
 /** Opening a notification marks it READ and deep-links to the exact run (its approval is in that drawer). */
 export function useOpenNotification() {
   const navigate = route.useNavigate();
-  const scope = useScope();
-  const workspaces = useWorkspaces();
+  const keepOf = useKeepOf();
   const queryClient = useQueryClient();
   const read = useMutation({
     mutationFn: (id: string) => api.setNotificationStatus(id, "READ"),
@@ -44,13 +54,29 @@ export function useOpenNotification() {
   });
   return (n: Notification) => {
     if (n.status === "UNREAD") read.mutate(n.id);
-    // The run lives in its own project: open it there so its approval can be decided (owner-wide notices keep scope).
-    const ws = workspaces.data?.items.find((w) => w.projects.some((p) => p.id === n.projectId));
-    const keep: Scope["keep"] = ws
-      ? { ws: ws.mode === "DEV" ? "dev" : "business", project: n.projectId ?? undefined }
-      : scope.keep;
-    void navigate({ search: { ...keep, drawer: n.subject.jobId ? `run:${n.subject.jobId}` : "settings" } });
+    // The run lives in its own project: open it there so its approval can be decided.
+    void navigate({
+      search: { ...keepOf(n), drawer: n.subject.jobId ? `run:${n.subject.jobId}` : "settings" },
+    });
   };
+}
+
+const NOTHING_TO_TALK_ABOUT = "This notice isn't about a run, so there's nothing to talk about.";
+
+/** Talk about a notification's run: a new thread in the run's project, with the run as its subject (FR-CWV-04). */
+function useTalkAbout(onOpened: (n: Notification) => void) {
+  const navigate = route.useNavigate();
+  const keepOf = useKeepOf();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { n: Notification; projectId: string; jobId: string }) =>
+      api.createThread({ projectId: a.projectId, subjectJobId: a.jobId }),
+    onSuccess: (thread, { n }) => {
+      void queryClient.invalidateQueries({ queryKey: keys.threads });
+      onOpened(n);
+      void navigate({ search: { ...keepOf(n), drawer: `talk:${thread.id}` } });
+    },
+  });
 }
 
 type ToastState = { key: string; at: number; seen: Map<string, Set<string>>; toasts: Notification[] };
@@ -83,6 +109,7 @@ export function NotificationToasts({ hidden }: { hidden: boolean }) {
     });
   }
   const dismiss = (id: string) => setS((x) => ({ ...x, toasts: x.toasts.filter((t) => t.id !== id) }));
+  const talk = useTalkAbout((n) => dismiss(n.id));
   const latest = s.toasts[0];
 
   return (
@@ -98,6 +125,9 @@ export function NotificationToasts({ hidden }: { hidden: boolean }) {
         >
           {s.toasts.map((n) => {
             const tone = CATEGORY[n.category].tone;
+            const { projectId } = n;
+            const { jobId } = n.subject;
+            const talkError = talk.variables?.n.id === n.id ? talk.error : null;
             return (
               <article
                 key={n.id}
@@ -134,13 +164,26 @@ export function NotificationToasts({ hidden }: { hidden: boolean }) {
                   >
                     Open
                   </button>
-                  <P1Button
-                    why="Talk (voice conversation about this event) arrives in P1."
-                    className="flex-1 rounded-[11px] bg-teal px-[11px] py-[9px] text-[12px] font-medium text-onacc"
+                  <button
+                    type="button"
+                    disabled={talk.isPending || !projectId || !jobId}
+                    aria-describedby={projectId && jobId ? undefined : `toast-talk-${n.id}`}
+                    onClick={() => projectId && jobId && talk.mutate({ n, projectId, jobId })}
+                    className="flex-1 rounded-[11px] bg-teal px-[11px] py-[9px] text-[12px] font-medium text-onacc disabled:opacity-60"
                   >
                     Talk
-                  </P1Button>
+                  </button>
                 </div>
+                {!(projectId && jobId) && (
+                  <span id={`toast-talk-${n.id}`} hidden>
+                    {NOTHING_TO_TALK_ABOUT}
+                  </span>
+                )}
+                {talkError && (
+                  <p role="alert" className="m-0 text-[12px] leading-snug text-coral">
+                    {talkError.message}
+                  </p>
+                )}
               </article>
             );
           })}
