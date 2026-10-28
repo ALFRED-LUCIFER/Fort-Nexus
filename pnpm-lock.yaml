@@ -44,6 +44,12 @@ importers:
 
   apps/api:
     dependencies:
+      '@anthropic-ai/foundry-sdk':
+        specifier: 1.1.0
+        version: 1.1.0(zod@4.6.7)
+      '@anthropic-ai/sdk':
+        specifier: 1.3.0
+        version: 1.3.0(zod@4.6.7)
       '@fastify/cookie':
         specifier: 11.1.5
         version: 11.1.5
@@ -244,6 +250,9 @@ packages:
       '@anthropic-ai/sdk': '>=0.93.0'
       '@modelcontextprotocol/sdk': ^1.29.0
       zod: ^4.0.0
+
+  '@anthropic-ai/foundry-sdk@1.1.0':
+    resolution: {integrity: sha512-wle+8L/JvPNF3MBinSbgglV1Vt5fkPaOZJm0XS2SmFKKHkErZf1DXAWHjXKRKgf+ml8VM60Bp1sTrZ5sl3GK0Q==}
 
   '@anthropic-ai/sdk@1.3.0':
     resolution: {integrity: sha512-k7z9BlLLPxfZH+ov7dS6EnaN/wiZeV8YNT1LZfrpAHIy7oY7pHr4UzirF9f2OlHtFEnRBOX+AZQ91Y5fK+TPTw==}
@@ -4399,6 +4408,13 @@ snapshots:
       '@anthropic-ai/claude-agent-sdk-linux-x64-musl': 0.3.310
       '@anthropic-ai/claude-agent-sdk-win32-arm64': 0.3.310
       '@anthropic-ai/claude-agent-sdk-win32-x64': 0.3.310
+
+  '@anthropic-ai/foundry-sdk@1.1.0(zod@4.6.7)':
+    dependencies:
+      '@anthropic-ai/sdk': 1.3.0(zod@4.6.7)
+      '@opentelemetry/api': 1.10.0
+    transitivePeerDependencies:
+      - zod
 
   '@anthropic-ai/sdk@1.3.0(zod@4.6.7)':
     dependencies:

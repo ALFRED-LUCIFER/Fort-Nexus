@@ -20,6 +20,7 @@ import { P1Button } from "./P1Button.tsx";
 import { IssueDrawer, RepoDrawer } from "./github.tsx";
 import { InboxDrawer } from "./Inbox.tsx";
 import { RunDrawer } from "./RunDrawer.tsx";
+import { TalkDrawer } from "./Talk.tsx";
 import { CodeZone, EmptyZone, SystemsZone, type ZoneProps } from "./zones.tsx";
 
 const route = getRouteApi("/");
@@ -423,12 +424,13 @@ export function Board() {
       </div>
 
       <div className="glass absolute right-4 bottom-4 flex items-center gap-0.5 rounded-[14px] p-1">
-        <P1Button
-          why="Talk (voice conversation) arrives in P1."
+        <button
+          type="button"
+          onClick={() => void navigate({ search: { ws: search.ws, drawer: "talk" } })}
           className="h-8 rounded-[10px] px-2.5 text-[12px] font-medium text-teal"
         >
           Talk
-        </P1Button>
+        </button>
         <P1Button
           why="Knowledge search arrives in P1."
           className="hidden h-8 rounded-[10px] px-2.5 text-[12px] font-medium text-ink2 sm:block"
@@ -462,6 +464,9 @@ export function Board() {
         <RepoDrawer repoId={drawerId} banner={offlineBanner} onClose={closeDrawer} />
       )}
       {drawerKind === "inbox" && <InboxDrawer banner={offlineBanner} onClose={closeDrawer} />}
+      {drawerKind === "talk" && (
+        <TalkDrawer threadId={drawerId} banner={offlineBanner} onClose={closeDrawer} />
+      )}
       {drawerKind === "issue" && drawerId && drawerNumber && (
         <IssueDrawer
           repoId={drawerId}

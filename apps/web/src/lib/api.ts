@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  ActionProposal,
   ApiError,
   Approval,
   ApprovalList,
@@ -12,12 +13,17 @@ import {
   JobList,
   Me,
   PairingCodeResponse,
+  PostTurnResponse,
   RepositoryList,
   RunnerList,
+  Thread,
+  ThreadDetail,
+  ThreadList,
   type ApprovalDecisionRequest,
   type ApprovalStatus,
   type CreateJobRequest,
   type JobStatus,
+  type ProposalDecisionRequest,
 } from "@nexus/contracts";
 
 export type { Me } from "@nexus/contracts";
@@ -26,10 +32,12 @@ export type { Me } from "@nexus/contracts";
 export class ApiRequestError extends Error {
   readonly status: number;
   readonly code: string;
-  constructor(message: string, status: number, code: string) {
+  readonly details: unknown;
+  constructor(message: string, status: number, code: string, details?: unknown) {
     super(message);
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -54,7 +62,13 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
   const body: unknown = await res.json().catch(() => null);
   if (!res.ok) {
     const err = ApiError.safeParse(body);
-    if (err.success) throw new ApiRequestError(err.data.error.message, res.status, err.data.error.code);
+    if (err.success)
+      throw new ApiRequestError(
+        err.data.error.message,
+        res.status,
+        err.data.error.code,
+        err.data.error.details,
+      );
     // The dev proxy answers 5xx without an ApiError body when the API is down.
     throw new ApiRequestError(
       res.status >= 500 ? UNREACHABLE : `Request failed (HTTP ${res.status}).`,
@@ -105,6 +119,17 @@ export const api = {
   // Answers only after the push finished: EXECUTED with result, or FAILED with error.
   decide: (id: string, body: ApprovalDecisionRequest) =>
     request(`/v1/approvals/${encodeURIComponent(id)}/decision`, Approval, post({}, body)),
+  threads: () => request("/v1/conversations?limit=50", ThreadList),
+  thread: (id: string) => request(`/v1/conversations/${encodeURIComponent(id)}`, ThreadDetail),
+  createThread: () => request("/v1/conversations", Thread, post({}, {})),
+  postTurn: (threadId: string, text: string, idempotencyKey: string) =>
+    request(
+      `/v1/conversations/${encodeURIComponent(threadId)}/turns`,
+      PostTurnResponse,
+      post({ [IDEMPOTENCY_HEADER]: idempotencyKey }, { text }),
+    ),
+  decideProposal: (id: string, body: ProposalDecisionRequest) =>
+    request(`/v1/conversations/proposals/${encodeURIComponent(id)}/decision`, ActionProposal, post({}, body)),
 };
 
 export type ApprovalQuery = { status: ApprovalStatus } | { jobId: string };
@@ -120,4 +145,6 @@ export const keys = {
   issue: (repoId: string, number: number) => ["github", "issue", repoId, number] as const,
   approvals: ["approvals"] as const,
   approvalsBy: (q: ApprovalQuery) => ["approvals", q] as const,
+  threads: ["conversations"] as const,
+  thread: (id: string) => ["conversations", id] as const,
 };

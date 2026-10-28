@@ -37,6 +37,12 @@ const Env = z.object({
     .min(1)
     .transform((p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p))
     .optional(),
+  // Talk's model provider (ADR-0003); same file format as the runner's ~/.nexus/ai.json.
+  NEXUS_AI_FILE: z
+    .string()
+    .min(1)
+    .transform((p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p))
+    .default(join(homedir(), ".nexus", "ai.json")),
 });
 
 export type Config = {
@@ -50,6 +56,7 @@ export type Config = {
   authSecret: string;
   leasePollMs: number;
   githubAppFile: string;
+  aiFile: string;
 };
 
 /** Parses env once at startup; throws with every problem listed so the process fails fast. */
@@ -69,5 +76,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     authSecret: e.BETTER_AUTH_SECRET,
     leasePollMs: e.RUNNER_LEASE_POLL_MS,
     githubAppFile: e.GITHUB_APP_FILE ?? defaultGithubAppFile(),
+    aiFile: e.NEXUS_AI_FILE,
   };
 }

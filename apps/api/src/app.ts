@@ -22,6 +22,7 @@ import {
 import { AuthStatus, GITHUB_SETUP_COMMAND, type ApiError, type ErrorCode } from "@nexus/contracts";
 import { createAuth, type Auth } from "./auth.ts";
 import type { Config } from "./config.ts";
+import { conversationRoutes } from "./conversations/routes.ts";
 import { createDb, runMigrations, type Db } from "./db/index.ts";
 import { HttpError } from "./errors.ts";
 import { loadGithubAppConfig } from "./github/app-config.ts";
@@ -224,7 +225,11 @@ export async function buildApp(config: Config) {
   });
 
   // GitHub routes share the owner scope, so its session hook guards them too.
-  await app.register(async (scope) => ownerRoutes(scope, deps).then(() => githubRoutes(scope, deps)));
+  await app.register(async (scope) =>
+    ownerRoutes(scope, deps)
+      .then(() => githubRoutes(scope, deps))
+      .then(() => conversationRoutes(scope, deps)),
+  );
   await app.register(async (scope) => runnerRegisterRoute(scope, deps));
   await app.register(async (scope) => runnerRoutes(scope, deps));
 
