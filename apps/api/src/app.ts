@@ -23,6 +23,7 @@ import { AuthStatus, GITHUB_SETUP_COMMAND, type ApiError, type ErrorCode } from 
 import { createAuth, type Auth } from "./auth.ts";
 import { businessRoutes } from "./business/routes.ts";
 import type { Config } from "./config.ts";
+import { conversationRoutes } from "./conversations/routes.ts";
 import { createDb, runMigrations, type Db } from "./db/index.ts";
 import { HttpError } from "./errors.ts";
 import { loadGithubAppConfig } from "./github/app-config.ts";
@@ -228,7 +229,8 @@ export async function buildApp(config: Config) {
   await app.register(async (scope) =>
     ownerRoutes(scope, deps)
       .then(() => githubRoutes(scope, deps))
-      .then(() => businessRoutes(scope, deps)),
+      .then(() => businessRoutes(scope, deps))
+      .then(() => conversationRoutes(scope, deps)),
   );
   await app.register(async (scope) => runnerRegisterRoute(scope, deps));
   await app.register(async (scope) => runnerRoutes(scope, deps));

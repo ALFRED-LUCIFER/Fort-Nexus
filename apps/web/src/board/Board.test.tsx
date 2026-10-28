@@ -110,7 +110,7 @@ describe("board", () => {
     const user = userEvent.setup();
     renderApp("/");
     await screen.findByText("Home host · ONLINE");
-    for (const name of ["Talk", "Settings", "STOP ALL", "Voice command"]) {
+    for (const name of ["Settings", "STOP ALL", "Voice command"]) {
       const btn = screen.getByRole("button", { name });
       expect(btn.getAttribute("aria-disabled")).toBe("true");
       const why = document.getElementById(btn.getAttribute("aria-describedby")!);
