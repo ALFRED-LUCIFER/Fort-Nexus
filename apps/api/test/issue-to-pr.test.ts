@@ -11,10 +11,11 @@ import {
   type Job,
   type LeaseResponse,
   type PushDraftPrAction,
+  type Verification,
 } from "@nexus/contracts";
 import { buildApp } from "../src/app.ts";
 import { createDb, type Db } from "../src/db/index.ts";
-import { expireApprovals } from "../src/issue-to-pr.ts";
+import { buildAction, expireApprovals } from "../src/issue-to-pr.ts";
 import { canonical, reapExpiredLeases, sha256 } from "../src/jobs.ts";
 import { createTestApp, ownerSession, type TestApp } from "./helpers/owner-session.ts";
 
@@ -225,12 +226,23 @@ const FILES = [
   { change: "added", path: "link", mode: "120000", contentBase64: b64("src/cart.ts") },
   { change: "deleted", path: "old.txt" },
 ];
+// Test output is repo-controlled: it carries @mentions, closing keywords and backtick runs like agent text does.
+const FAILED: Verification = {
+  status: "failed",
+  source: "package.json",
+  install: ["npm", "ci"],
+  test: ["npm", "test"],
+  exitCode: 1,
+  durationMs: 65_400,
+  outputTail: "FAIL src/cart.test.ts\n  ✕ rounds totals @octo closes #9 ````\n1 failed",
+};
 const changeset = (l: LeaseResponse, over: Record<string, unknown> = {}) => ({
   fencingToken: l.fencingToken,
   baseSha: BASE_SHA,
   files: FILES,
   stats: { added: 3, removed: 1 },
   agentSummary: "Rounded totals. @octo fixes #9 ```",
+  verification: FAILED,
   ...over,
 });
 
@@ -321,7 +333,23 @@ describe("create DEV_ISSUE_TO_PR", () => {
     const res = await createIssueJob({ issueNumber: 43 }, key);
     expect(res.statusCode, res.body).toBe(202);
     const jobId = res.json().jobId as string;
-    expect(await job(jobId)).toMatchObject({ jobType: "DEV_ISSUE_TO_PR", status: "QUEUED", riskTier: "R1" });
+    expect(await job(jobId)).toMatchObject({
+      jobType: "DEV_ISSUE_TO_PR",
+      status: "QUEUED",
+      riskTier: "R1",
+      issue: {
+        fullName: "acme/web",
+        issueNumber: 43,
+        title: "Fix cart totals 43",
+        workBranch: `nexus/issue-43-${jobId.replaceAll("-", "").slice(-8)}`,
+      },
+    });
+    const diag = await owner("POST", "/v1/jobs", {
+      headers: { "idempotency-key": randomUUID() },
+      body: { jobType: "RUNNER_DIAGNOSTIC", preset: "node-version" },
+    });
+    expect((await job(diag.json().jobId)).issue).toBeNull();
+    await owner("POST", `/v1/jobs/${diag.json().jobId}/cancel`);
 
     const snapshot = {
       repositoryId: "101",
@@ -440,7 +468,23 @@ describe("changeset upload", () => {
     expect(a.action.body).toContain(
       "### Agent report (unverified)\n````text\nRounded totals. @octo fixes #9 ```\n````",
     );
-    expect(a.action.body).toContain("Tests: not independently verified by NEXUS.");
+    // FR-DEV-05: NEXUS's own result replaces "not verified", is part of the approved hash, and is fenced.
+    expect(a.action.verification).toEqual(FAILED);
+    expect(a.action.body).toContain(
+      [
+        "### Tests: FAILED with exit code 1 (run by NEXUS in the sandbox)",
+        "Exit code 1 · 1 min 5 s · from package.json (auto-detected)",
+        "`````text",
+        "$ npm ci",
+        "$ npm test",
+        "",
+        "FAIL src/cart.test.ts",
+        "  ✕ rounds totals @octo closes #9 ````",
+        "1 failed",
+        "`````",
+      ].join("\n"),
+    );
+    expect(a.action.body).not.toContain("not independently verified");
     expect(a.action.body).toContain("Opened by NEXUS — human review required, never auto-merged.");
     expect(Date.parse(a.expiresAt) - Date.parse(a.createdAt)).toBe(24 * 60 * 60 * 1000);
   });
@@ -469,6 +513,88 @@ describe("changeset upload", () => {
     expect(big.json().error.code).toBe("VALIDATION_FAILED");
     expect((await job(l.jobId)).status).toBe("RUNNING");
     expect((await sql.query(`select 1 from changesets where job_id = $1`, [l.jobId])).rowCount).toBe(0);
+  });
+});
+
+describe("buildAction verification", () => {
+  const snapshot = {
+    repositoryId: "101",
+    fullName: "acme/web",
+    issueNumber: 42,
+    title: "Fix",
+    body: "",
+    acceptanceCriteria: [],
+    htmlUrl: "https://github.com/acme/web/issues/42",
+    issueUpdatedAt: "2026-10-27T10:00:00.000Z",
+    baseBranch: "main",
+    baseSha: BASE_SHA,
+  };
+  const action = (verification: Verification) =>
+    buildAction(
+      randomUUID(),
+      snapshot,
+      [],
+      { stats: { added: 0, removed: 0 }, agentSummary: "", verification },
+      "c".repeat(64),
+    );
+  const notConfigured: Verification = {
+    status: "not_configured",
+    source: null,
+    install: null,
+    test: null,
+    exitCode: null,
+    durationMs: 3,
+    outputTail: "",
+  };
+
+  it("a different verification result is a different action hash (the owner approves code AND result)", () => {
+    const jobId = randomUUID();
+    const hash = (v: Verification) =>
+      sha256(
+        canonical(
+          buildAction(
+            jobId,
+            snapshot,
+            [],
+            { stats: { added: 0, removed: 0 }, agentSummary: "", verification: v },
+            "c".repeat(64),
+          ),
+        ),
+      );
+    expect(hash(FAILED)).not.toBe(hash({ ...FAILED, status: "passed", exitCode: 0 }));
+    expect(hash(FAILED)).not.toBe(hash({ ...FAILED, outputTail: "edited" }));
+    expect(hash(FAILED)).toBe(hash({ ...FAILED }));
+  });
+
+  it.each([
+    [
+      "passed",
+      {
+        ...FAILED,
+        status: "passed",
+        exitCode: 0,
+        install: null,
+        source: "nexus.json",
+        durationMs: 2_000,
+        outputTail: "ok",
+      },
+      "### Tests: passed (run by NEXUS in the sandbox)\nExit code 0 · 2.0 s · from .nexus.json at the base commit\n```text\n$ npm test\n\nok\n```",
+    ],
+    [
+      "error",
+      {
+        ...FAILED,
+        status: "error",
+        exitCode: null,
+        outputTail: "[nexus] timed out after 15 min during test",
+      },
+      "### Tests: could not run (NEXUS tried in the sandbox)\nExit code none · 1 min 5 s · from package.json (auto-detected)",
+    ],
+    ["not_configured", notConfigured, "### Tests: not verified by NEXUS\nNo test setup at the base commit"],
+  ] as [string, Verification, string][])("PR body says %s plainly", (_, v, text) => {
+    const { body } = action(v);
+    expect(body).toContain(text);
+    expect(body).toMatch(/\n\nOpened by NEXUS — human review required, never auto-merged\.$/);
   });
 });
 

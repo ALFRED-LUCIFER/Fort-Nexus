@@ -11,6 +11,8 @@ export const ErrorCode = z.enum([
   "IDEMPOTENCY_KEY_REUSED",
   "RUNNER_UNAVAILABLE",
   "RATE_LIMITED",
+  "EMERGENCY_STOP",
+  "BUDGET_EXHAUSTED",
   "INTERNAL",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;

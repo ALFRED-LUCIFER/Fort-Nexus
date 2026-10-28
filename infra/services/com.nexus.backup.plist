@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- NEXUS daily encrypted backup, macOS LaunchAgent. Rendered and installed by scripts/runner-service.mjs. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.nexus.backup</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{NODE}}</string>
+    <string>{{REPO}}/scripts/backup.mjs</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{{REPO}}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{{PATH}}</string>
+  </dict>
+  <!-- Daily at 03:30; a run missed while the Mac slept happens on wake. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>{{LOGS}}/backup.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{LOGS}}/backup.log</string>
+</dict>
+</plist>

@@ -35,6 +35,8 @@ export type DockerRunSpec = {
   env?: Readonly<Record<string, string>>;
   /** Names only: docker copies the value from its own environment, so secrets stay out of argv. */
   passEnv?: readonly string[];
+  /** Defaults to /workspace; must be /workspace or below it. */
+  workdir?: string;
 };
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -54,12 +56,15 @@ const bindMount = (source: string, target: string, readOnly = false) => {
 export function dockerRunArgs(spec: DockerRunSpec) {
   const { jobId, runnerLabel, workspace, argv, image = SANDBOX_IMAGE } = spec;
   const { network = "none", user = SANDBOX_USER, env = {}, passEnv = [], mounts = [] } = spec;
+  const { workdir = "/workspace" } = spec;
   if (!JOB_ID.test(jobId)) throw new Error("jobId must be a uuid");
   if (!LABEL_VALUE.test(runnerLabel)) throw new Error("invalid runner label");
   if (!LABEL_VALUE.test(network)) throw new Error("invalid network name");
   if (!/^\d{1,10}:\d{1,10}$/.test(user)) throw new Error("user must be uid:gid");
   const names = [...Object.keys(env), ...passEnv];
   if (!names.every((n) => ENV_NAME.test(n))) throw new Error("invalid env name");
+  if (workdir !== "/workspace" && (!MOUNT_TARGET.test(workdir) || workdir.split("/").includes("..")))
+    throw new Error(`invalid workdir ${workdir}`);
   return [
     "run",
     "--rm",
@@ -98,7 +103,7 @@ export function dockerRunArgs(spec: DockerRunSpec) {
     ...Object.entries(env).flatMap(([k, v]) => ["--env", `${k}=${v}`]),
     ...passEnv.flatMap((k) => ["--env", k]),
     "--workdir",
-    "/workspace",
+    workdir,
     image,
     ...argv,
   ];

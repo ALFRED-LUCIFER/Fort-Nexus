@@ -7,7 +7,8 @@ import { GIT_ENV, git } from "./workspace.ts";
 
 // ENG-07: the agent's work as an UploadChangesetRequest file list, built host-side from the worktree vs baseSha.
 
-export type Changeset = { files: ChangesetFile[]; stats: { added: number; removed: number } };
+/** `tree`: the git tree of base + changes (exactly what would be pushed), for the verification checkout. */
+export type Changeset = { files: ChangesetFile[]; stats: { added: number; removed: number }; tree: string };
 
 export class ChangesetError extends Error {
   readonly reason: "changeset_too_large" | "changeset_invalid";
@@ -99,7 +100,7 @@ export async function buildChangeset(
       added += Number(a) || 0;
       removed += Number(r) || 0;
     }
-    return { files, stats: { added, removed } };
+    return { files, stats: { added, removed }, tree: await g(["write-tree"]) };
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

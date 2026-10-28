@@ -1,0 +1,21 @@
+# Allowlist: only what infra/api/Dockerfile copies. Keeps .env, ~/.nexus-like files and node_modules out of the context.
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.base.json
+!apps/api/package.json
+!apps/api/src
+!apps/api/drizzle
+!apps/web
+!apps/runner/package.json
+!packages/contracts/package.json
+!packages/contracts/src
+**/node_modules
+**/dist
+**/.turbo
+**/.env*
+**/.DS_Store
+**/*.test.ts
+**/*.test.tsx
+apps/web/src/test

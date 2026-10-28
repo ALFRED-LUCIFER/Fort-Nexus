@@ -85,6 +85,7 @@ describe("buildChangeset", () => {
     expect(await buildChangeset(wt.path, wt.gitDir, wt.baseSha)).toEqual({
       files: [],
       stats: { added: 0, removed: 0 },
+      tree: git(["-C", wt.path, "rev-parse", `${wt.baseSha}^{tree}`]),
     });
   });
 

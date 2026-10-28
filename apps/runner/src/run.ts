@@ -33,6 +33,7 @@ import {
   removeContainer,
   type SandboxMode,
 } from "./sandbox.ts";
+import { runVerification } from "./verify.ts";
 import { createWorkspaces, git, withMirrorLock } from "./workspace.ts";
 
 export type JobOptions = {
@@ -351,7 +352,8 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
     }
   };
 
-  // ENG-07 spec step 3: fetch → worktree → Claude → changeset → upload (the API then awaits the owner's approval).
+  // ENG-07 spec step 3: fetch → worktree → Claude → changeset → verify (FR-DEV-05) → upload (the API then awaits
+  // the owner's approval).
   const runIssueToPr = async (request: IssueRequest, task: IssueToPrTask): Promise<void> => {
     const { snapshot, workBranch } = task;
     const { baseBranch, baseSha } = snapshot;
@@ -483,12 +485,45 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
       if (changeset.files.length === 0)
         return finish("job.completed", { changes: 0 }, "COMPLETED", "COMPLETED_NO_CHANGES");
 
+      // FR-DEV-05: the repo's tests on exactly base + changeset, in a fresh sandbox. A failed result doesn't
+      // block the upload (the owner decides), but a stop does.
+      phase = "running";
+      const verified = await runVerification({
+        jobId,
+        gitDir,
+        baseSha,
+        tree: changeset.tree,
+        onEvent: queue,
+        signal: stopAbort.signal,
+        runnerLabel,
+        image,
+        killGraceMs,
+        log,
+      });
+      phase = "finishing";
+      if (lost) return;
+      if (!verified.stopConfirmed)
+        return finish("job.failed", { reason: "stop_failed", container: containerName(jobId) }, "FAILED");
+      if (stop || verified.stopped) return stopped(true);
+      const { verification } = verified;
+      event("test.completed", verification);
+      await flush();
+      if (lost) return;
+
+      const { files, stats } = changeset;
       try {
         await withRetry(
           () =>
             api.uploadChangeset(
               jobId,
-              { fencingToken, baseSha, ...changeset, agentSummary: agentSummary.slice(0, 4_000) },
+              {
+                fencingToken,
+                baseSha,
+                files,
+                stats,
+                agentSummary: agentSummary.slice(0, 4_000),
+                verification,
+              },
               appendAbort.signal,
             ),
           { forMs: retryForMs, signal: appendAbort.signal },
@@ -501,7 +536,11 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
         return finish("job.failed", { reason: "changeset_upload_failed", code }, "FAILED");
       }
       // The API moved the job to AWAITING_APPROVAL and released the lease: nothing more to append.
-      log("info", "changeset uploaded, awaiting approval", { jobId, files: changeset.files.length });
+      log("info", "changeset uploaded, awaiting approval", {
+        jobId,
+        files: files.length,
+        verification: verification.status,
+      });
     } finally {
       clearTimeout(flushTimer);
       await cleanup();

@@ -33,4 +33,19 @@ describe("loadConfig", () => {
     );
     expect(() => loadConfig({ BETTER_AUTH_SECRET: "s".repeat(32) })).toThrow(/DATABASE_URL/);
   });
+
+  it("binds 0.0.0.0 only with API_BIND_ALL_IN_CONTAINER=1 inside a container", () => {
+    const all = { ...base, API_HOST: "0.0.0.0", API_BIND_ALL_IN_CONTAINER: "1" };
+    expect(loadConfig(all, () => true).host).toBe("0.0.0.0");
+    expect(() => loadConfig(all, () => false)).toThrow(/only allowed inside a container/);
+    expect(() => loadConfig({ ...base, API_HOST: "0.0.0.0" }, () => true)).toThrow(/loopback/);
+    expect(() => loadConfig({ ...all, API_HOST: "192.168.1.5" }, () => true)).toThrow(/loopback/);
+  });
+
+  it("defaults OWNER_TIMEZONE to Asia/Dubai and accepts IANA names only", () => {
+    expect(loadConfig(base).ownerTimezone).toBe("Asia/Dubai");
+    expect(loadConfig({ ...base, OWNER_TIMEZONE: "Europe/Vienna" }).ownerTimezone).toBe("Europe/Vienna");
+    for (const tz of ["Mars/Olympus", "+04:00", "", "Asia/Dubai; drop table jobs"])
+      expect(() => loadConfig({ ...base, OWNER_TIMEZONE: tz })).toThrow(/OWNER_TIMEZONE/);
+  });
 });

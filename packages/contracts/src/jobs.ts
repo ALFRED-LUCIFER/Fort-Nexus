@@ -118,6 +118,17 @@ export const Job = z.object({
   outcome: JobOutcome.nullable(),
   stateVersion: z.int().nonnegative(),
   lastEventSequence: z.int().nonnegative(),
+  // DEV_ISSUE_TO_PR only (from the pinned snapshot); null for other job types.
+  issue: z
+    .object({
+      fullName: z.string(),
+      issueNumber: z.int().positive(),
+      title: z.string(),
+      workBranch: z.string(),
+    })
+    .nullable(),
+  // Provider-reported cost summed from the run's summary events; an estimate, not an invoice (FR-OBS-03).
+  estimatedCostUsd: z.number().nonnegative().nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });

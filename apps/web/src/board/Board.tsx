@@ -16,10 +16,12 @@ import {
   useRunners,
 } from "../lib/queries.ts";
 import { CommandBar } from "./CommandBar.tsx";
+import { StopButton, useStopBanner } from "./EmergencyStop.tsx";
 import { P1Button } from "./P1Button.tsx";
 import { IssueDrawer, RepoDrawer } from "./github.tsx";
 import { InboxDrawer } from "./Inbox.tsx";
 import { RunDrawer } from "./RunDrawer.tsx";
+import { SettingsDrawer } from "./Settings.tsx";
 import { CodeZone, EmptyZone, SystemsZone, type ZoneProps } from "./zones.tsx";
 
 const route = getRouteApi("/");
@@ -112,6 +114,8 @@ export function Board() {
       : undefined;
 
   // One banner: inside the open drawer (a modal drawer hides the board), above the board otherwise.
+  // An engaged emergency stop outranks everything else (design: killed before offline).
+  const stopBanner = useStopBanner();
   const offlineBanner = offline && (
     <div
       role="status"
@@ -131,6 +135,8 @@ export function Board() {
       </div>
     </div>
   );
+
+  const banner = stopBanner ?? offlineBanner;
 
   const zones: ZoneDef[] = [
     {
@@ -304,7 +310,7 @@ export function Board() {
         </div>
 
         <CommandBar runners={runners.data} onQueued={openRun}>
-          {!search.drawer && offlineBanner}
+          {!search.drawer && banner}
           {runners.error && (
             <div
               role="alert"
@@ -435,40 +441,32 @@ export function Board() {
         >
           Knowledge
         </P1Button>
-        <P1Button
-          why="Settings arrive in P1. Pair runners from the Systems zone."
+        <button
+          type="button"
+          onClick={() => void navigate({ search: { ws: search.ws, drawer: "settings" } })}
           className="h-8 rounded-[10px] px-2.5 text-[12px] font-medium text-ink2"
         >
           Settings
-        </P1Button>
+        </button>
         <P1Button
           why="The phone approvals preview arrives in P1."
           className="hidden h-8 rounded-[10px] px-2.5 text-[12px] font-medium text-ink2 sm:block"
         >
           Phone
         </P1Button>
-        <P1Button
-          why="Emergency stop arrives in P1. Until then, cancel a run from its drawer."
-          className="h-8 rounded-[10px] bg-[oklch(0.62_0.15_32/.14)] px-3 font-mono text-[11px] font-semibold tracking-[.06em] text-coral"
-        >
-          STOP ALL
-        </P1Button>
+        <StopButton />
       </div>
 
       {drawerKind === "run" && drawerId && (
-        <RunDrawer jobId={drawerId} banner={offlineBanner} onClose={closeDrawer} />
+        <RunDrawer jobId={drawerId} banner={banner} onClose={closeDrawer} />
       )}
       {drawerKind === "repo" && drawerId && (
-        <RepoDrawer repoId={drawerId} banner={offlineBanner} onClose={closeDrawer} />
+        <RepoDrawer repoId={drawerId} banner={banner} onClose={closeDrawer} />
       )}
-      {drawerKind === "inbox" && <InboxDrawer banner={offlineBanner} onClose={closeDrawer} />}
+      {drawerKind === "inbox" && <InboxDrawer banner={banner} onClose={closeDrawer} />}
+      {drawerKind === "settings" && <SettingsDrawer banner={banner} onClose={closeDrawer} />}
       {drawerKind === "issue" && drawerId && drawerNumber && (
-        <IssueDrawer
-          repoId={drawerId}
-          number={Number(drawerNumber)}
-          banner={offlineBanner}
-          onClose={closeDrawer}
-        />
+        <IssueDrawer repoId={drawerId} number={Number(drawerNumber)} banner={banner} onClose={closeDrawer} />
       )}
     </div>
   );

@@ -110,14 +110,14 @@ describe("board", () => {
     const user = userEvent.setup();
     renderApp("/");
     await screen.findByText("Home host · ONLINE");
-    for (const name of ["Talk", "Settings", "STOP ALL", "Voice command"]) {
+    for (const name of ["Talk", "Voice command"]) {
       const btn = screen.getByRole("button", { name });
       expect(btn.getAttribute("aria-disabled")).toBe("true");
       const why = document.getElementById(btn.getAttribute("aria-describedby")!);
       expect(why?.textContent).toMatch(/arrive(s)? in P1/);
     }
-    await user.click(screen.getByRole("button", { name: "STOP ALL" }));
-    expect(calls.filter((c) => c.method === "POST")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "Talk" }));
+    expect(calls.filter((c) => c.method !== "GET")).toHaveLength(0);
   });
 
   it("explains that Ask needs the P1 conversation service", async () => {

@@ -12,6 +12,22 @@ const QUEUED_PAGE = 100;
 export const useRunners = () =>
   useQuery({ queryKey: keys.runners, queryFn: api.runners, refetchInterval: POLL_MS });
 
+/** Emergency stop + today's budget (FR-INB-04, FR-SEC-08). */
+export const useSystem = () =>
+  useQuery({ queryKey: keys.system, queryFn: api.system, refetchInterval: POLL_MS });
+
+/** Runs still holding a lease: an engaged stop isn't "nothing is running" until these are gone. */
+export const useActiveJobs = (enabled: boolean) =>
+  useQuery({
+    queryKey: [...keys.jobs, "active"],
+    queryFn: () =>
+      Promise.all(RUNNING.map((status) => api.jobs({ limit: 100, status }))).then((ls) =>
+        ls.flatMap((l) => l.items),
+      ),
+    enabled,
+    refetchInterval: POLL_MS,
+  });
+
 // The API caches GitHub for 60 s; polling faster would only re-read that cache.
 const GITHUB_POLL_MS = 60_000;
 

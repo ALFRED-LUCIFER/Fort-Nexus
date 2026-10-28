@@ -65,6 +65,37 @@ export const ChangesetFile = z.discriminatedUnion("change", [
 ]);
 export type ChangesetFile = z.infer<typeof ChangesetFile>;
 
+// Optional per-repo `.nexus.json` at the repository root. The runner reads it from the BASE commit, never from the
+// agent's worktree, so the agent can't change what gets verified. argv arrays only, run inside the sandbox.
+export const NexusRepoConfig = z.object({
+  verify: z
+    .strictObject({
+      install: z.array(z.string().min(1)).min(1).max(32).optional(),
+      test: z.array(z.string().min(1)).min(1).max(32),
+      // Extra hosts reachable during install/test only (e.g. registry.npmjs.org); the model host is never added here.
+      egress: z
+        .array(z.string().regex(/^[a-z0-9.-]+$/))
+        .max(10)
+        .default([]),
+      timeoutMinutes: z.int().min(1).max(60).default(15),
+    })
+    .optional(),
+});
+export type NexusRepoConfig = z.infer<typeof NexusRepoConfig>;
+
+// FR-DEV-05: what NEXUS itself ran after the agent finished — never the agent's claim.
+export const Verification = z.object({
+  status: z.enum(["passed", "failed", "not_configured", "error"]),
+  source: z.enum(["nexus.json", "package.json"]).nullable(),
+  install: z.array(z.string()).nullable(),
+  test: z.array(z.string()).nullable(),
+  exitCode: z.int().nullable(),
+  durationMs: z.int().nonnegative(),
+  // Redacted tail of the test output, for the PR body and the approval.
+  outputTail: z.string().max(8000),
+});
+export type Verification = z.infer<typeof Verification>;
+
 // POST /v1/runner/jobs/:id/changeset — job must be RUNNING/VERIFYING under the caller's lease (fencing token).
 export const UploadChangesetRequest = z.strictObject({
   fencingToken: z.int().positive(),
@@ -76,6 +107,7 @@ export const UploadChangesetRequest = z.strictObject({
   }),
   // The agent's own final summary — untrusted text, shown labelled as such, never used as authority.
   agentSummary: z.string().max(4000),
+  verification: Verification,
 });
 export type UploadChangesetRequest = z.infer<typeof UploadChangesetRequest>;
 
@@ -103,6 +135,8 @@ export const PushDraftPrAction = z.object({
   changesetSha256: z.string().regex(/^[0-9a-f]{64}$/),
   files: z.array(z.object({ path: z.string(), change: z.enum(["added", "modified", "deleted"]) })),
   stats: z.object({ added: z.int(), removed: z.int() }),
+  // Part of the approved hash: the owner approves code AND the verification result shown with it.
+  verification: Verification,
 });
 export type PushDraftPrAction = z.infer<typeof PushDraftPrAction>;
 

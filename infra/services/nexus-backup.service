@@ -1,0 +1,11 @@
+# NEXUS encrypted backup, run daily by nexus-backup.timer. Rendered and installed by scripts/runner-service.mjs.
+[Unit]
+Description=NEXUS encrypted backup
+
+[Service]
+Type=oneshot
+WorkingDirectory={{REPO}}
+Environment="PATH={{PATH}}"
+ExecStart="{{NODE}}" "{{REPO}}/scripts/backup.mjs"
+StandardOutput=append:{{LOGS}}/backup.log
+StandardError=append:{{LOGS}}/backup.log

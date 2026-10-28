@@ -11,9 +11,12 @@ import {
   Job,
   JobList,
   Me,
+  OwnerSessionList,
   PairingCodeResponse,
   RepositoryList,
+  Runner,
   RunnerList,
+  SystemControls,
   type ApprovalDecisionRequest,
   type ApprovalStatus,
   type CreateJobRequest,
@@ -72,8 +75,8 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
   return parsed.data;
 }
 
-const post = (headers: Record<string, string> = {}, body?: unknown): RequestInit => ({
-  method: "POST",
+const post = (headers: Record<string, string> = {}, body?: unknown, method = "POST"): RequestInit => ({
+  method,
   headers: body === undefined ? headers : { "content-type": "application/json", ...headers },
   body: body === undefined ? undefined : JSON.stringify(body),
 });
@@ -82,6 +85,16 @@ export const api = {
   me: () => request("/v1/me", Me),
   runners: () => request("/v1/runners", RunnerList).then((r) => r.items),
   pairRunner: () => request("/v1/runners/pair", PairingCodeResponse, post()),
+  revokeRunner: (id: string) => request(`/v1/runners/${encodeURIComponent(id)}/revoke`, Runner, post()),
+  system: () => request("/v1/system", SystemControls),
+  setEmergencyStop: (engaged: boolean) =>
+    request("/v1/system/emergency-stop", SystemControls, post({}, { engaged }, "PUT")),
+  setDailyBudget: (dailyCapUsd: number) =>
+    request("/v1/system/budget", SystemControls, post({}, { dailyCapUsd }, "PUT")),
+  sessions: () => request("/v1/sessions", OwnerSessionList).then((l) => l.items),
+  // 204: no body.
+  revokeSession: (id: string) =>
+    request(`/v1/sessions/${encodeURIComponent(id)}`, z.null(), post({}, undefined, "DELETE")),
   jobs: (q: { limit: number; status?: JobStatus }) =>
     request(
       `/v1/jobs?${new URLSearchParams({ limit: String(q.limit), ...(q.status && { status: q.status }) })}`,
@@ -112,6 +125,8 @@ export type ApprovalQuery = { status: ApprovalStatus } | { jobId: string };
 export const keys = {
   me: ["me"] as const,
   runners: ["runners"] as const,
+  system: ["system"] as const,
+  sessions: ["sessions"] as const,
   jobs: ["jobs"] as const,
   job: (id: string) => ["jobs", id] as const,
   github: ["github"] as const,

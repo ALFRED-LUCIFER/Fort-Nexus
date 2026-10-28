@@ -1,0 +1,10 @@
+# Daily NEXUS backup at 03:30; Persistent runs a missed one after boot/wake.
+[Unit]
+Description=Daily NEXUS encrypted backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

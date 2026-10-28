@@ -1,13 +1,16 @@
+# Dev: `pnpm db:up` starts postgres only. Home deployment: `node scripts/nexus.mjs up` (docs/runbooks/bootstrap.md).
+# The runner is not here: it runs on the host as a service (scripts/runner-service.mjs) because it drives Docker.
 name: nexus
 services:
   postgres:
     image: postgres:18-alpine
     environment:
       POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: nexus # local-only dev credential; bound to loopback below
+      # Loopback only. Read once, when the volume is first initialised: set it in .env before the first `up`.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus}
       POSTGRES_DB: nexus
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql
     healthcheck:
@@ -16,5 +19,43 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/api/Dockerfile
+    image: nexus-api:local
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: ${NEXUS_ENV_FILE:-../../.env}
+        required: false
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://nexus:${POSTGRES_PASSWORD:-nexus}@postgres:5432/nexus
+      # Binds all interfaces of its own network namespace only; the host side is published on loopback below.
+      API_HOST: 0.0.0.0
+      API_BIND_ALL_IN_CONTAINER: "1"
+      API_PORT: "8787"
+      GITHUB_APP_FILE: /run/nexus/github-app.json
+    # The host user, so the mounted 0600 github-app.json is readable (set by scripts/nexus.mjs).
+    user: "${NEXUS_UID:-10001}:${NEXUS_GID:-10001}"
+    ports:
+      - "127.0.0.1:${API_PORT:-8787}:8787"
+    volumes:
+      - type: bind
+        source: ${NEXUS_HOME:-${HOME}/.nexus}/github-app.json
+        target: /run/nexus/github-app.json
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
 volumes:
   pgdata:

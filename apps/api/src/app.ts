@@ -32,6 +32,8 @@ import { createHub, type Hub } from "./notify.ts";
 import { githubRoutes } from "./routes/github.ts";
 import { ownerRoutes } from "./routes/owner.ts";
 import { runnerRegisterRoute, runnerRoutes } from "./routes/runner.ts";
+import { systemRoutes } from "./routes/system.ts";
+import { emergencyStopEngaged } from "./system.ts";
 
 export type Deps = {
   config: Config;
@@ -223,8 +225,12 @@ export async function buildApp(config: Config) {
     scope.post("/api/auth/*", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, handler);
   });
 
-  // GitHub routes share the owner scope, so its session hook guards them too.
-  await app.register(async (scope) => ownerRoutes(scope, deps).then(() => githubRoutes(scope, deps)));
+  // GitHub and system routes share the owner scope, so its session hook guards them too.
+  await app.register(async (scope) =>
+    ownerRoutes(scope, deps)
+      .then(() => githubRoutes(scope, deps))
+      .then(() => systemRoutes(scope, deps)),
+  );
   await app.register(async (scope) => runnerRegisterRoute(scope, deps));
   await app.register(async (scope) => runnerRoutes(scope, deps));
 
@@ -252,6 +258,8 @@ export async function buildApp(config: Config) {
     await reap();
     reaper = setInterval(reap, REAPER_INTERVAL_MS);
     // Approved pushes a crash interrupted; in the background so GitHub latency never blocks startup.
+    // Held while the emergency stop is engaged: releasing it reconciles them (routes/system.ts).
+    if (await emergencyStopEngaged(db)) return;
     executor
       .reconcile()
       .then((n) => {

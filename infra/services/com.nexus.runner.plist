@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- NEXUS runner, macOS LaunchAgent. Rendered and installed by scripts/runner-service.mjs (fills the placeholders). -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.nexus.runner</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{NODE}}</string>
+    <string>--env-file-if-exists={{REPO}}/.env.runner</string>
+    <string>{{REPO}}/apps/runner/src/main.ts</string>
+    <string>start</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{{REPO}}/apps/runner</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{{PATH}}</string>
+  </dict>
+  <!-- Starts at login, restarts after a crash (non-zero exit), at most every 10 s. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>{{LOGS}}/runner.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{LOGS}}/runner.log</string>
+</dict>
+</plist>

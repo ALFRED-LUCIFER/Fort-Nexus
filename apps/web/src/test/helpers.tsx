@@ -120,6 +120,8 @@ export const job = (over: Partial<Job> = {}): Job => ({
   outcome: null,
   stateVersion: 1,
   lastEventSequence: 0,
+  issue: null,
+  estimatedCostUsd: null,
   createdAt: T0,
   updatedAt: T0,
   ...over,

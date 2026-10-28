@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { SSE_RUN_EVENT, type Approval, type Job } from "@nexus/contracts";
+import { SSE_RUN_EVENT, type Approval, type Job, type Verification } from "@nexus/contracts";
 import {
   FakeEventSource,
   JOB_ID,
@@ -21,6 +21,31 @@ const HASH = `7f3a91c2${"0".repeat(52)}4c91`;
 const OTHER_HASH = `9e1b44d0${"1".repeat(52)}aa07`;
 const APPROVAL_ID = "44444444-4444-4444-8444-444444444444";
 const HEAD = "nexus/issue-42-22222222";
+
+const PASSED: Verification = {
+  status: "passed",
+  source: "package.json",
+  install: ["npm", "ci"],
+  test: ["npm", "test"],
+  exitCode: 0,
+  durationMs: 42_000,
+  outputTail: "Tests: 12 passed",
+};
+const FAILED: Verification = {
+  ...PASSED,
+  status: "failed",
+  exitCode: 1,
+  outputTail: "FAIL tests/money.test.ts\n  ✕ rounds half up\nTests: 1 failed, 11 passed",
+};
+const NOT_CONFIGURED: Verification = {
+  status: "not_configured",
+  source: null,
+  install: null,
+  test: null,
+  exitCode: null,
+  durationMs: 1,
+  outputTail: "",
+};
 
 const issueJob = (over: Partial<Job> = {}): Job =>
   job({
@@ -58,6 +83,7 @@ const approval = (over: Partial<Approval> = {}): Approval => ({
       { path: "tests/money.test.ts", change: "added" },
     ],
     stats: { added: 12, removed: 3 },
+    verification: PASSED,
   },
   actionHash: HASH,
   createdAt: T0,
@@ -123,6 +149,8 @@ describe("approval gate", () => {
     expect(fact(gate, "branch")).toBe(`main ← ${HEAD}`);
     expect(fact(gate, "changes")).toBe("2 files · +12 −3");
     expect(fact(gate, "action hash")).toBe("7f3a91c2…4c91");
+    expect(fact(gate, "tests")).toBe("passed (exit 0) · run by NEXUS in the sandbox");
+    expect(within(gate).queryByRole("note")).toBeNull();
     expect(gate.textContent).toMatch(/Never merges\. main is protected\./);
     const files = within(screen.getByRole("region", { name: /^Changed files/ })).getAllByRole("listitem");
     expect(files.map((li) => li.textContent)).toEqual([
@@ -135,6 +163,7 @@ describe("approval gate", () => {
     expect(confirm.textContent).toMatch(
       new RegExp(`2 files to the new branch ${HEAD} on acme/web .* against main`),
     );
+    expect(confirm.textContent).toMatch(/NEXUS ran the tests in the sandbox: they passed\./);
     await user.click(within(confirm).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(decisions(calls)).toHaveLength(0);
@@ -149,6 +178,53 @@ describe("approval gate", () => {
     expect(
       screen.getByText(/Draft PR #7 is open on GitHub for your review\. NEXUS never merges\./),
     ).toBeTruthy();
+  });
+
+  it.each([
+    [
+      "failed",
+      FAILED,
+      "Tests failed.",
+      "failed (exit 1) · run by NEXUS in the sandbox",
+      /they FAILED \(exit code 1\)/,
+    ],
+    [
+      "error",
+      { ...FAILED, status: "error", exitCode: null, outputTail: "[nexus] install failed with exit code 1" },
+      "Tests couldn't run.",
+      "couldn't run · run by NEXUS in the sandbox",
+      /NEXUS couldn't run the tests\./,
+    ],
+  ] as const)(
+    "verification %s: an amber warning on the gate, still approvable, and the confirm step repeats it",
+    async (_, verification, warning, tests, confirmText) => {
+      const calls = open(issueJob(), {
+        "GET /v1/approvals": () =>
+          json({ items: [approval({ action: { ...approval().action, verification } })] }),
+        [`POST /v1/approvals/${APPROVAL_ID}/decision`]: () => json(approval({ status: "APPROVED" })),
+      });
+      const user = userEvent.setup();
+      const gate = await screen.findByRole("region", { name: `Push ${HEAD} and open a draft PR?` });
+      const note = within(gate).getByRole("note");
+      expect(note.textContent).toMatch(new RegExp(`^${warning}`));
+      expect(note.textContent).toMatch(/You can still approve/);
+      expect(fact(gate, "tests")).toBe(tests);
+      await user.click(within(gate).getByRole("button", { name: "Approve push" }));
+      const confirm = screen.getByRole("alertdialog", { name: "Approve this push?" });
+      expect(confirm.textContent).toMatch(confirmText);
+      await user.click(within(confirm).getByRole("button", { name: "Approve push" }));
+      await waitFor(() => expect(decisions(calls)).toHaveLength(1));
+    },
+  );
+
+  it("not verified: the gate says so plainly, without a warning", async () => {
+    open(issueJob(), {
+      "GET /v1/approvals": () =>
+        json({ items: [approval({ action: { ...approval().action, verification: NOT_CONFIGURED } })] }),
+    });
+    const gate = await screen.findByRole("region", { name: `Push ${HEAD} and open a draft PR?` });
+    expect(fact(gate, "tests")).toBe("not verified by NEXUS");
+    expect(within(gate).queryByRole("note")).toBeNull();
   });
 
   it("denies without a confirm step and says nothing was pushed", async () => {
@@ -250,6 +326,84 @@ describe("issue run", () => {
       expect(states()).toEqual(["done", "skipped", "done", "skipped", "waiting", "pending"]),
     );
     expect(screen.getByText("not verified")).toBeTruthy();
+  });
+
+  it("drives the Test stage from NEXUS's own test.completed, never from the agent", () => {
+    const base = [
+      event(1, "job.created"),
+      event(2, "job.state.changed", { to: "RUNNING" }),
+      event(3, "agent.started", { engine: "claude-agent-sdk" }),
+      event(4, "job.state.changed", { to: "VERIFYING" }),
+    ];
+    const test = (status: "VERIFYING" | "AWAITING_APPROVAL", extra: ReturnType<typeof event>[] = []) =>
+      issueStages(status, null, [...base, ...extra], null)[3];
+    // Running: the agent may claim "all tests pass", but only NEXUS's run counts.
+    expect(
+      test("VERIFYING", [event(5, "agent.message", { kind: "summary", text: "All tests pass." })]),
+    ).toMatchObject({ state: "active" });
+    expect(test("AWAITING_APPROVAL", [event(5, "test.completed", PASSED)])).toMatchObject({ state: "done" });
+    expect(test("AWAITING_APPROVAL", [event(5, "test.completed", FAILED)])).toMatchObject({
+      state: "failed",
+      note: "tests failed",
+    });
+    expect(
+      test("AWAITING_APPROVAL", [event(5, "test.completed", { ...FAILED, status: "error", exitCode: null })]),
+    ).toMatchObject({ state: "failed", note: "couldn't run" });
+    expect(test("AWAITING_APPROVAL", [event(5, "test.completed", NOT_CONFIGURED)])).toMatchObject({
+      state: "skipped",
+      note: "not configured",
+    });
+    expect(issueStages("COMPLETED", "COMPLETED_NO_CHANGES", base, null)[3]).toMatchObject({
+      state: "skipped",
+      note: "no changes",
+    });
+  });
+
+  it("shows the issue title, the work branch up front and NEXUS's verification card", async () => {
+    open(
+      issueJob({
+        status: "VERIFYING",
+        issue: { fullName: "acme/web", issueNumber: 42, title: "Cart totals round wrong", workBranch: HEAD },
+      }),
+      { "GET /v1/approvals": () => json({ items: [] }) },
+    );
+    expect(await screen.findByRole("heading", { name: "Cart totals round wrong" })).toBeTruthy();
+    expect(screen.getByText(/^Run · issue → draft PR · #42 on acme\/web · /)).toBeTruthy();
+    const tile = (k: string) =>
+      screen.getByText(k, { selector: "span.font-mono" }).nextElementSibling!.textContent;
+    expect(tile("branch")).toBe(HEAD);
+    expect(screen.queryByRole("region", { name: /^Tests/ })).toBeNull();
+
+    const es = await stream();
+    act(() => es.emit(SSE_RUN_EVENT, event(1, "test.completed", FAILED)));
+    const card = await screen.findByRole("region", { name: "Tests failed · exit code 1" });
+    expect(card.textContent).toMatch(/^Tests · run by NEXUS in the sandbox/);
+    expect(fact(card, "install")).toBe("npm ci");
+    expect(fact(card, "test")).toBe("npm test");
+    expect(fact(card, "exit code")).toBe("1");
+    expect(fact(card, "duration")).toBe("42.0 s");
+    expect(fact(card, "config")).toBe("package.json (auto-detected)");
+    expect(within(card).getByLabelText("Test output (last lines, redacted)").textContent).toMatch(
+      /✕ rounds half up\nTests: 1 failed, 11 passed$/,
+    );
+    const term = screen.getByRole("region", { name: "Run output" });
+    expect(term.textContent).toMatch(/failed · npm test · exit 1/);
+  });
+
+  it("not configured: the card says NEXUS didn't verify and points at the agent's unverified report", async () => {
+    open(issueJob({ status: "VERIFYING" }), { "GET /v1/approvals": () => json({ items: [] }) });
+    const es = await stream();
+    act(() => {
+      es.emit(SSE_RUN_EVENT, event(1, "agent.message", { kind: "summary", text: "All tests pass." }));
+      es.emit(SSE_RUN_EVENT, event(2, "test.completed", NOT_CONFIGURED));
+    });
+    const card = await screen.findByRole("region", { name: "Tests not verified by NEXUS" });
+    expect(card.textContent).toMatch(/^Tests · not run/);
+    expect(card.textContent).toMatch(/agent report \(unverified\)/);
+    expect(within(card).queryByLabelText(/Test output/)).toBeNull();
+    expect(screen.getByRole("region", { name: "Agent report (unverified)" }).textContent).toMatch(
+      /All tests pass\./,
+    );
   });
 
   it("keeps Draft PR open until external_action.completed, even when the approval says EXECUTED", () => {

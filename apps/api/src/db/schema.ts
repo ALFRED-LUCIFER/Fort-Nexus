@@ -1,9 +1,11 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   primaryKey,
   text,
@@ -150,6 +152,8 @@ export const jobs = pgTable(
     outcome: text("outcome").$type<JobOutcome>(),
     // DEV_ISSUE_TO_PR: the issue and base commit pinned at creation (FR-GH-09).
     issueSnapshot: jsonb("issue_snapshot").$type<IssueSnapshot>(),
+    // Sum of the runner's summary-event cost estimates (FR-OBS-03); null until one arrives.
+    estimatedCostUsd: numeric("estimated_cost_usd", { precision: 12, scale: 6, mode: "number" }),
     stateVersion: integer("state_version").notNull().default(0),
     lastEventSequence: integer("last_event_sequence").notNull().default(0),
     createdAt: ts("created_at").notNull().defaultNow(),
@@ -277,3 +281,21 @@ export const externalActions = pgTable("external_actions", {
   createdAt: ts("created_at").notNull().defaultNow(),
   updatedAt: ts("updated_at").notNull().defaultNow(),
 });
+
+// Owner-level safety controls: exactly one row (id = 1), seeded by its migration (FR-INB-04, FR-SEC-08).
+export const systemControls = pgTable(
+  "system_controls",
+  {
+    id: integer("id").primaryKey(),
+    emergencyStopEngaged: boolean("emergency_stop_engaged").notNull().default(false),
+    emergencyStopChangedAt: ts("emergency_stop_changed_at"),
+    dailyBudgetUsd: numeric("daily_budget_usd", { precision: 12, scale: 6, mode: "number" })
+      .notNull()
+      .default(20),
+    updatedAt: ts("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    check("system_controls_singleton", sql`${t.id} = 1`),
+    check("system_controls_budget_positive", sql`${t.dailyBudgetUsd} > 0`),
+  ],
+);

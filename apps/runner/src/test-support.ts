@@ -102,11 +102,18 @@ export const git = (args: string[]) =>
     encoding: "utf8",
   }).trim();
 
-// A source repo with one commit on `main`, mirrored bare into <dir>/<owner>/<name>.git.
-export async function bareRepo(dir: string, owner = "acme", name = "demo", defaultBranch = "main") {
+// A source repo with one commit on `main` (README.md + `files`), mirrored bare into <dir>/<owner>/<name>.git.
+export async function bareRepo(
+  dir: string,
+  owner = "acme",
+  name = "demo",
+  defaultBranch = "main",
+  files: Record<string, string> = {},
+) {
   const src = await mkdtemp(join(tmpdir(), "nexus-src-"));
   git(["init", "-q", "-b", defaultBranch, src]);
   await writeFile(join(src, "README.md"), "hello\n");
+  for (const [path, content] of Object.entries(files)) await writeFile(join(src, path), content);
   git(["-C", src, "add", "."]);
   git(["-C", src, "commit", "-q", "-m", "init"]);
   const mirror = join(dir, owner, `${name}.git`);

@@ -20,9 +20,11 @@ import { audit } from "./audit.ts";
 import type { Db, Tx } from "./db/index.ts";
 import { approvals, jobs, runEventBatches, runEvents, runners } from "./db/schema.ts";
 import { HttpError, invalidTransition, notFound } from "./errors.ts";
+import { workBranch } from "./issue-to-pr.ts";
+import { assertCanStart, emergencyStopEngaged, reportedCostUsd } from "./system.ts";
 
 export const JOB_EVENTS_CHANNEL = "nexus_job_events";
-const LEASED: JobStatus[] = ["PREPARING", "RUNNING", "VERIFYING"];
+export const LEASED: JobStatus[] = ["PREPARING", "RUNNING", "VERIFYING"];
 // Types only the server may emit; runners get 400 if they try.
 const SERVER_ONLY_EVENTS = new Set<RunEventType>([
   "job.created",
@@ -52,6 +54,15 @@ export const toJobDto = (j: JobRow): Job => ({
   outcome: j.outcome,
   stateVersion: j.stateVersion,
   lastEventSequence: j.lastEventSequence,
+  issue: j.issueSnapshot
+    ? {
+        fullName: j.issueSnapshot.fullName,
+        issueNumber: j.issueSnapshot.issueNumber,
+        title: j.issueSnapshot.title,
+        workBranch: workBranch(j.issueSnapshot.issueNumber, j.id),
+      }
+    : null,
+  estimatedCostUsd: j.estimatedCostUsd,
   createdAt: j.createdAt.toISOString(),
   updatedAt: j.updatedAt.toISOString(),
 });
@@ -178,6 +189,8 @@ export async function createJob(
     idempotencyKey: string;
     body: CreateJobRequest;
     correlationId: string;
+    /** The owner's day for the daily budget (config OWNER_TIMEZONE). */
+    timezone: string;
     /** DEV_ISSUE_TO_PR: validates against GitHub and pins the issue. Runs only for a new key, outside the tx. */
     pinIssue: (body: Extract<CreateJobRequest, { jobType: "DEV_ISSUE_TO_PR" }>) => Promise<IssueSnapshot>;
   },
@@ -197,9 +210,11 @@ export async function createJob(
   const [existing] = await db.select().from(jobs).where(byKey);
   if (existing) return replay(existing);
   const body = input.body;
+  await assertCanStart(db, body, input.timezone); // before GitHub is called; re-checked under lock below
   const snapshot = body.jobType === "DEV_ISSUE_TO_PR" ? await input.pinIssue(body) : null;
 
   return db.transaction(async (tx) => {
+    await assertCanStart(tx, body, input.timezone);
     const target = input.body.runnerId;
     if (target) {
       const [r] = await tx
@@ -382,6 +397,7 @@ export async function tryLease(db: Db, runner: RunnerRow): Promise<JobRow | null
     // Lock the runner row so concurrent lease calls from one runner can't exceed its capacity.
     const [locked] = await tx.select().from(runners).where(eq(runners.id, runner.id)).for("update");
     if (!locked || locked.revokedAt) return null;
+    if (await emergencyStopEngaged(tx)) return null;
     const [held] = await tx
       .select({ n: count() })
       .from(jobs)
@@ -496,6 +512,7 @@ export async function appendRunnerEvents(
       outcome = t.outcome ?? outcome;
       stateVersion += 1;
     }
+    const cost = reportedCostUsd(body.events);
     await tx.insert(runEventBatches).values({ jobId: job.id, batchId: body.batchId, runnerId: runner.id });
     const seq = await writeEvents(tx, job.id, job.lastEventSequence, runnerActor(runner.id), events);
     await tx
@@ -506,6 +523,7 @@ export async function appendRunnerEvents(
         stateVersion,
         lastEventSequence: seq,
         leaseExpiresAt: LEASED.includes(status) ? job.leaseExpiresAt : null,
+        ...(cost === null ? {} : { estimatedCostUsd: (job.estimatedCostUsd ?? 0) + cost }),
         updatedAt: now,
       })
       .where(eq(jobs.id, job.id));
