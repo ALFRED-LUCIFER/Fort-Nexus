@@ -12,6 +12,21 @@ const QUEUED_PAGE = 100;
 export const useRunners = () =>
   useQuery({ queryKey: keys.runners, queryFn: api.runners, refetchInterval: POLL_MS });
 
+// The API caches GitHub for 60 s; polling faster would only re-read that cache.
+const GITHUB_POLL_MS = 60_000;
+
+export const useGithubStatus = () =>
+  useQuery({ queryKey: keys.github, queryFn: api.githubStatus, refetchInterval: GITHUB_POLL_MS });
+
+/** Repositories once the app is installed somewhere; disabled (no 409s) until then. */
+export const useRepositories = (enabled: boolean) =>
+  useQuery({
+    queryKey: keys.repositories,
+    queryFn: api.repositories,
+    enabled,
+    refetchInterval: GITHUB_POLL_MS,
+  });
+
 export const useRecentJobs = () =>
   useQuery({
     queryKey: [...keys.jobs, "recent"],

@@ -14,6 +14,7 @@ import {
   dockerRunArgs,
   imageExists,
   removeLeftovers,
+  writableUser,
 } from "./sandbox.ts";
 import { eventsOf, fakeApi, json, leaseFor, stdoutOf, terminal, timeline } from "./test-support.ts";
 
@@ -104,6 +105,60 @@ describe("dockerRunArgs", () => {
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
     expect(pkg.scripts["sandbox:build"]).toBe(`docker build -t ${SANDBOX_IMAGE} ../../infra/sandbox`);
     expect(SANDBOX_BUILD_COMMAND).toBe("pnpm --filter @nexus/runner sandbox:build");
+  });
+
+  it("the image pins the same Agent SDK version the runner's types come from", () => {
+    const read = (p: string) => JSON.parse(readFileSync(new URL(p, import.meta.url), "utf8"));
+    const sdk = "@anthropic-ai/claude-agent-sdk";
+    const runner = read("../package.json").devDependencies[sdk];
+    expect(runner).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(read("../../../infra/sandbox/agent/package.json").dependencies[sdk]).toBe(runner);
+    expect(
+      read("../../../infra/sandbox/agent/package-lock.json").packages[`node_modules/${sdk}`].version,
+    ).toBe(runner);
+  });
+
+  it("claude job: read-only task dir, writable worktree, internal network, secrets by name only", () => {
+    const args = dockerRunArgs({
+      jobId: ID,
+      runnerLabel: "r1",
+      workspace: "/tmp/job",
+      workspaceReadOnly: true,
+      mounts: [{ source: "/data/work/x", target: "/workspace/repo" }],
+      argv: ["nexus-agent"],
+      network: `nexus-net-${ID}`,
+      user: "1000:1000",
+      env: { HTTPS_PROXY: "http://nexus-proxy:3128" },
+      passEnv: ["ANTHROPIC_API_KEY"],
+    });
+    const after = (flag: string) => args.flatMap((a, i) => (a === flag ? [args[i + 1]] : []));
+    expect(after("--mount")).toEqual([
+      "type=bind,source=/tmp/job,target=/workspace,readonly",
+      "type=bind,source=/data/work/x,target=/workspace/repo",
+    ]);
+    expect(after("--network")).toEqual([`nexus-net-${ID}`]);
+    expect(after("--user")).toEqual(["1000:1000"]);
+    expect(after("--env")).toEqual(["HOME=/tmp", "HTTPS_PROXY=http://nexus-proxy:3128", "ANTHROPIC_API_KEY"]);
+  });
+
+  it.each([
+    ["a mount target outside /workspace", { mounts: [{ source: "/tmp/a", target: "/etc" }] }],
+    ["a traversing mount target", { mounts: [{ source: "/tmp/a", target: "/workspace/../etc" }] }],
+    ["$HOME as an extra mount", { mounts: [{ source: homedir(), target: "/workspace/repo" }] }],
+    ["an env name that smuggles a value", { passEnv: ["A=b"] }],
+    ["a non-numeric user", { user: "root" }],
+    ["an odd network name", { network: "host net" }],
+  ])("rejects %s", (_, extra) => {
+    expect(() =>
+      dockerRunArgs({ jobId: ID, runnerLabel: "r1", workspace: "/tmp/x", argv: ["true"], ...extra }),
+    ).toThrow();
+  });
+
+  it("writableUser: the uid that owns the bind-mounted worktree, never real root", () => {
+    expect(writableUser("docker-rootless", 1000, 1000)).toBe("0:0"); // container root = the host user
+    expect(writableUser("docker-rootful", 1000, 1001)).toBe("1000:1001");
+    expect(writableUser("docker-rootful", 0, 0)).toBe("10001:10001");
+    expect(writableUser("docker-desktop", 501, 20)).toBe("10001:10001");
   });
 });
 

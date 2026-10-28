@@ -123,6 +123,49 @@ describe("run drawer", () => {
     expect(await screen.findByText(/^Output from /)).toBeTruthy();
     expect(screen.queryByText(/^Live on /)).toBeNull();
   });
+
+  it("shows the sandbox runtime and warns when the job ran on the host", async () => {
+    open(job({ status: "RUNNING", runnerId: RUNNER_ID }));
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const es = FakeEventSource.instances[0]!;
+    act(() => {
+      es.open();
+      es.emit(
+        SSE_RUN_EVENT,
+        event(1, "workspace.created", { hostname: "box", sandbox: { runtime: "bogus" } }),
+      );
+    });
+    await waitFor(() => expect(seqs()).toEqual([1]));
+    expect(screen.queryByText(/Not sandboxed/)).toBeNull(); // invalid payloads are ignored
+
+    act(() =>
+      es.emit(
+        SSE_RUN_EVENT,
+        event(2, "workspace.created", { hostname: "box", sandbox: { runtime: "none" } }),
+      ),
+    );
+    expect((await screen.findByRole("note")).textContent).toMatch(
+      /Not sandboxed.*directly on the home machine/,
+    );
+    expect(screen.getByText("none · host")).toBeTruthy();
+  });
+
+  it("names the container runtime without a warning when sandboxed", async () => {
+    open(job({ status: "RUNNING", runnerId: RUNNER_ID }));
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const es = FakeEventSource.instances[0]!;
+    act(() => {
+      es.open();
+      es.emit(
+        SSE_RUN_EVENT,
+        event(1, "workspace.created", {
+          sandbox: { runtime: "docker-rootless", image: "nexus-sandbox:1", container: "nx-1" },
+        }),
+      );
+    });
+    expect(await screen.findByText("docker-rootless · nexus-sandbox:1")).toBeTruthy();
+    expect(screen.queryByText(/Not sandboxed/)).toBeNull();
+  });
 });
 
 describe("explain", () => {

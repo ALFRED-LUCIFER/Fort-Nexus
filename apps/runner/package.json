@@ -9,10 +9,13 @@
     "pair": "node src/main.ts pair",
     "typecheck": "tsc -p .",
     "test": "vitest run",
-    "sandbox:build": "docker build -t nexus-sandbox:1 ../../infra/sandbox"
+    "sandbox:build": "docker build -t nexus-sandbox:2 ../../infra/sandbox"
   },
   "dependencies": {
     "@nexus/contracts": "workspace:*",
     "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.310"
   }
 }

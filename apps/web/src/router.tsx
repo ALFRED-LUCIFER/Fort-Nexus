@@ -16,15 +16,31 @@ import { Board } from "./board/Board.tsx";
 export const Workspace = z.enum(["all", "dev", "business"]);
 export type Workspace = z.infer<typeof Workspace>;
 
-// Deep-linkable board state: `/?ws=dev&drawer=run:<uuid>`. Bad values fall back instead of erroring.
+// The router JSON-parses search values, so a hand-typed `q=123` arrives as a number.
+const text = (max: number) =>
+  z
+    .preprocess((v) => (typeof v === "number" || typeof v === "boolean" ? String(v) : v), z.string().max(max))
+    .optional()
+    .catch(undefined);
+
+// Deep-linkable board state: `/?ws=dev&drawer=run:<uuid>`, `drawer=repo:<repoId>` (with issue filters),
+// `drawer=issue:<repoId>:<number>`. Bad values fall back instead of erroring.
 export const BoardSearch = z.object({
   ws: Workspace.optional().catch(undefined),
   drawer: z
     .string()
-    .regex(/^run:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+    .regex(
+      /^(run:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|repo:[1-9]\d{0,19}|issue:[1-9]\d{0,19}:[1-9]\d{0,9})$/i,
+    )
     .optional()
     .catch(undefined),
+  state: z.enum(["open", "closed", "all"]).optional().catch(undefined),
+  labels: text(500),
+  assignee: text(39),
+  q: text(256),
+  page: z.int().min(1).max(40).optional().catch(undefined),
 });
+export type BoardSearch = z.infer<typeof BoardSearch>;
 
 const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({ component: Outlet });
 

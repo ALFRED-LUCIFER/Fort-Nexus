@@ -25,12 +25,18 @@ export type OutputChunk = { stream: Stream; text: string };
 // Buffers child output by whole lines (so redaction never sees half a secret), keeps stdout/stderr
 // interleaving, and caps the redacted total at OUTPUT_CAP_BYTES.
 export class OutputBuffer {
+  // Exact values (e.g. the provider key) masked before the generic patterns run.
+  readonly #secrets: readonly string[];
   #partial: Record<Stream, string> = { stdout: "", stderr: "" };
   #ready: OutputChunk[] = [];
   #lines = 0;
   #chars = 0;
   #used = 0;
   #truncated = false;
+
+  constructor(secrets: readonly string[] = []) {
+    this.#secrets = secrets;
+  }
 
   get shouldFlush(): boolean {
     return this.#lines >= FLUSH_LINES || this.#chars >= FLUSH_CHARS;
@@ -53,7 +59,7 @@ export class OutputBuffer {
     const out: OutputChunk[] = [];
     for (const { stream, text } of this.#ready.splice(0)) {
       if (this.#truncated) break;
-      let safe = redact(text);
+      let safe = redact(this.#secrets.reduce((t, s) => t.replaceAll(s, "[REDACTED]"), text));
       const bytes = Buffer.byteLength(safe);
       if (this.#used + bytes > OUTPUT_CAP_BYTES) {
         safe =

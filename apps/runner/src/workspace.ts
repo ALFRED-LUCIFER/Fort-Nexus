@@ -21,7 +21,7 @@ const GIT_ENV = {
   GIT_TERMINAL_PROMPT: "0",
 };
 
-const git = (args: string[]) =>
+export const git = (args: string[]) =>
   new Promise<string>((resolve, reject) =>
     execFile("git", args, { env: GIT_ENV, timeout: 120_000 }, (err, stdout, stderr) =>
       err

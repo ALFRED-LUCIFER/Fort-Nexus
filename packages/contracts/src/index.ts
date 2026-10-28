@@ -3,3 +3,4 @@ export * from "./events.ts";
 export * from "./runners.ts";
 export * from "./errors.ts";
 export * from "./auth.ts";
+export * from "./github.ts";

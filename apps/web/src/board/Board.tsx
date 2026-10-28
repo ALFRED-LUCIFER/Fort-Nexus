@@ -8,12 +8,15 @@ import {
   RUNNER_TONE,
   clock,
   preferredRunner,
+  useGithubStatus,
   useQueuedJobs,
   useRecentJobs,
+  useRepositories,
   useRunners,
 } from "../lib/queries.ts";
 import { CommandBar } from "./CommandBar.tsx";
 import { P1Button } from "./P1Button.tsx";
+import { IssueDrawer, RepoDrawer } from "./github.tsx";
 import { RunDrawer } from "./RunDrawer.tsx";
 import { CodeZone, EmptyZone, SystemsZone, type ZoneProps } from "./zones.tsx";
 
@@ -34,14 +37,19 @@ export function Board() {
   const navigate = route.useNavigate();
   const queryClient = useQueryClient();
   const ws = search.ws ?? "all";
-  const runId = search.drawer?.slice("run:".length);
+  // drawer = run:<jobId> | repo:<repoId> | issue:<repoId>:<number> (validated by BoardSearch).
+  const [drawerKind, drawerId, drawerNumber] = search.drawer?.split(":") ?? [];
 
   const runners = useRunners();
   const jobs = useRecentJobs();
   const queued = useQueuedJobs();
   const runner = preferredRunner(runners.data);
+  const github = useGithubStatus();
+  const repos = useRepositories(github.data?.configured === true && github.data.installations.length > 0);
 
-  const openRun = (id: string) => void navigate({ search: (s) => ({ ...s, drawer: `run:${id}` }) });
+  const openRun = (id: string) => void navigate({ search: { ws: search.ws, drawer: `run:${id}` } });
+  const openRepo = (id: string) => void navigate({ search: { ws: search.ws, drawer: `repo:${id}` } });
+  const closeDrawer = () => void navigate({ search: { ws: search.ws } });
 
   // Pan / zoom. Positions are in screen px; the board is scaled around its top-left corner.
   const vpRef = useRef<HTMLDivElement>(null);
@@ -99,7 +107,7 @@ export function Board() {
       ? runners.data.find((r) => r.status === "OFFLINE")
       : undefined;
 
-  // One banner: inside the run drawer while it is open (a modal drawer hides the board), above the board otherwise.
+  // One banner: inside the open drawer (a modal drawer hides the board), above the board otherwise.
   const offlineBanner = offline && (
     <div
       role="status"
@@ -136,13 +144,26 @@ export function Board() {
       id: "code",
       ws: "dev",
       label: "Code",
-      sub: codeSub(jobs.data?.items.length, jobs.data?.items.filter((j) => j.status === "RUNNING").length),
+      sub: codeSub(
+        repos.data?.items.length,
+        jobs.data?.items.length,
+        jobs.data?.items.filter((j) => j.status === "RUNNING").length,
+      ),
       x: 40,
       y: 480,
       w: 800,
       h: 640,
       tint: "oklch(0.80 0.06 195 / .16)",
-      body: <CodeZone query={jobs} runners={runners.data} onOpen={openRun} />,
+      body: (
+        <CodeZone
+          github={github}
+          repos={repos}
+          query={jobs}
+          runners={runners.data}
+          onOpen={openRun}
+          onOpenRepo={openRepo}
+        />
+      ),
     },
     {
       id: "biz",
@@ -279,7 +300,7 @@ export function Board() {
         </div>
 
         <CommandBar runners={runners.data} onQueued={openRun}>
-          {!runId && offlineBanner}
+          {!search.drawer && offlineBanner}
           {runners.error && (
             <div
               role="alert"
@@ -413,22 +434,33 @@ export function Board() {
         </P1Button>
       </div>
 
-      {runId && (
-        <RunDrawer
-          jobId={runId}
+      {drawerKind === "run" && drawerId && (
+        <RunDrawer jobId={drawerId} banner={offlineBanner} onClose={closeDrawer} />
+      )}
+      {drawerKind === "repo" && drawerId && (
+        <RepoDrawer repoId={drawerId} banner={offlineBanner} onClose={closeDrawer} />
+      )}
+      {drawerKind === "issue" && drawerId && drawerNumber && (
+        <IssueDrawer
+          repoId={drawerId}
+          number={Number(drawerNumber)}
           banner={offlineBanner}
-          onClose={() => void navigate({ search: (s) => ({ ...s, drawer: undefined }) })}
+          onClose={closeDrawer}
         />
       )}
     </div>
   );
 }
 
-function codeSub(total: number | undefined, running: number | undefined) {
-  if (total === undefined) return "";
-  return total === 0
-    ? "no runs yet"
-    : `${total} recent ${total === 1 ? "run" : "runs"} · ${running ?? 0} running`;
+function codeSub(repos: number | undefined, total: number | undefined, running: number | undefined) {
+  const parts = repos === undefined ? [] : [`${repos} ${repos === 1 ? "repo" : "repos"}`];
+  if (total !== undefined)
+    parts.push(
+      total === 0
+        ? "no runs yet"
+        : `${total} recent ${total === 1 ? "run" : "runs"} · ${running ?? 0} running`,
+    );
+  return parts.join(" · ");
 }
 
 function sysSub(runners: readonly Runner[] | undefined) {

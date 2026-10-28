@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { JobStatus, RunEvent, SSE_RUN_EVENT, type Job } from "@nexus/contracts";
+import { JobStatus, RunEvent, SSE_RUN_EVENT, SandboxInfo, type Job } from "@nexus/contracts";
 import { clock, duration } from "../lib/queries.ts";
 
 export type StreamState = "connecting" | "live" | "reconnecting" | "ended";
@@ -83,6 +83,7 @@ export interface RunFacts {
   argv?: string;
   exitCode?: number;
   durationMs?: number;
+  sandbox?: SandboxInfo;
 }
 
 export function runFacts(events: readonly RunEvent[]): RunFacts {
@@ -98,6 +99,7 @@ export function runFacts(events: readonly RunEvent[]): RunFacts {
     argv,
     exitCode: num(done?.exitCode),
     durationMs: num(done?.durationMs),
+    sandbox: SandboxInfo.safeParse(ws?.sandbox).data,
   };
 }
 

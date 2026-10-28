@@ -73,3 +73,11 @@ export type AppendEventsResponse = z.infer<typeof AppendEventsResponse>;
 // SSE: `id:` = sequence, `event:` = "run-event", `data:` = RunEvent JSON. Clients resume with Last-Event-ID or ?afterSequence=.
 export const SSE_RUN_EVENT = "run-event";
 export const JobEventsQuery = z.object({ afterSequence: z.coerce.number().int().nonnegative().optional() });
+
+// `workspace.created` payload.sandbox: where the runner executed the job. `none` = directly on the host.
+export const SandboxInfo = z.object({
+  runtime: z.enum(["docker-desktop", "docker-rootless", "docker-rootful", "none"]),
+  image: z.string().optional(),
+  container: z.string().optional(),
+});
+export type SandboxInfo = z.infer<typeof SandboxInfo>;

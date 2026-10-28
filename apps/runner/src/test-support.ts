@@ -1,4 +1,9 @@
 // Test helpers shared by run.test.ts and sandbox.test.ts. Not imported by runtime code.
+import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { devNull, tmpdir } from "node:os";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { AppendEventsRequest } from "@nexus/contracts";
 import { createApi } from "./api.ts";
@@ -72,3 +77,27 @@ export const stdoutOf = (appends: AppendEventsRequest[]) =>
     .filter((e) => e.payload.stream === "stdout")
     .map((e) => e.payload.text)
     .join("");
+
+// Looks like a real provider key, so the generic redaction patterns would also catch it.
+// Generated per run so no key-shaped literal lives in the repo (secret scanning).
+export const FAKE_KEY = `sk-ant-api03-TESTKEY_${randomBytes(24).toString("hex")}`;
+
+export const git = (args: string[]) =>
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
+    env: { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" },
+    encoding: "utf8",
+  }).trim();
+
+// A source repo with one commit on `main`, mirrored bare into <dir>/<owner>/<name>.git.
+export async function bareRepo(dir: string, owner = "acme", name = "demo", defaultBranch = "main") {
+  const src = await mkdtemp(join(tmpdir(), "nexus-src-"));
+  git(["init", "-q", "-b", defaultBranch, src]);
+  await writeFile(join(src, "README.md"), "hello\n");
+  git(["-C", src, "add", "."]);
+  git(["-C", src, "commit", "-q", "-m", "init"]);
+  const mirror = join(dir, owner, `${name}.git`);
+  await mkdir(join(dir, owner), { recursive: true });
+  git(["clone", "-q", "--mirror", src, mirror]);
+  await rm(src, { recursive: true, force: true });
+  return mirror;
+}

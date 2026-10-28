@@ -1,32 +1,12 @@
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
-import { devNull, tmpdir } from "node:os";
+import { mkdir, mkdtemp, realpath, rm, symlink, utimes } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { bareRepo, git } from "./test-support.ts";
 import { createWorkspaces, withMirrorLock } from "./workspace.ts";
-
-const git = (args: string[]) =>
-  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
-    env: { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" },
-    encoding: "utf8",
-  }).trim();
-
-// A source repo with one commit on `main`, mirrored bare into <dir>/<owner>/<name>.git.
-async function bareRepo(dir: string, owner = "acme", name = "demo", defaultBranch = "main") {
-  const src = await mkdtemp(join(tmpdir(), "nexus-src-"));
-  git(["init", "-q", "-b", defaultBranch, src]);
-  await writeFile(join(src, "README.md"), "hello\n");
-  git(["-C", src, "add", "."]);
-  git(["-C", src, "commit", "-q", "-m", "init"]);
-  const mirror = join(dir, owner, `${name}.git`);
-  await mkdir(join(dir, owner), { recursive: true });
-  git(["clone", "-q", "--mirror", src, mirror]);
-  await rm(src, { recursive: true, force: true });
-  return mirror;
-}
 
 let data = "";
 let outside = "";

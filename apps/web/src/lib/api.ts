@@ -2,11 +2,15 @@ import { z } from "zod";
 import {
   ApiError,
   CreateJobResponse,
+  GithubStatus,
   IDEMPOTENCY_HEADER,
+  IssueDetail,
+  IssueList,
   Job,
   JobList,
   Me,
   PairingCodeResponse,
+  RepositoryList,
   RunnerList,
   type CreateJobRequest,
   type JobStatus,
@@ -23,6 +27,15 @@ export class ApiRequestError extends Error {
     this.status = status;
     this.code = code;
   }
+}
+
+/** Issue-list filters as they live in the board URL; the API validates them (IssueListQuery). */
+export interface IssueFilters {
+  state?: "open" | "closed" | "all";
+  labels?: string;
+  assignee?: string;
+  q?: string;
+  page?: number;
 }
 
 export const UNREACHABLE = "Can't reach the NEXUS API. Check that it is running on the home machine.";
@@ -74,6 +87,15 @@ export const api = {
   createJob: (body: CreateJobRequest, idempotencyKey: string) =>
     request("/v1/jobs", CreateJobResponse, post({ [IDEMPOTENCY_HEADER]: idempotencyKey }, body)),
   cancelJob: (id: string) => request(`/v1/jobs/${encodeURIComponent(id)}/cancel`, Job, post()),
+  githubStatus: () => request("/v1/github/status", GithubStatus),
+  repositories: () => request("/v1/repositories", RepositoryList),
+  issues: (repoId: string, f: IssueFilters) => {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(f)) if (v !== undefined && v !== "") params.set(k, String(v));
+    return request(`/v1/repositories/${encodeURIComponent(repoId)}/issues?${params}`, IssueList);
+  },
+  issue: (repoId: string, number: number) =>
+    request(`/v1/repositories/${encodeURIComponent(repoId)}/issues/${number}`, IssueDetail),
 };
 
 export const keys = {
@@ -81,4 +103,8 @@ export const keys = {
   runners: ["runners"] as const,
   jobs: ["jobs"] as const,
   job: (id: string) => ["jobs", id] as const,
+  github: ["github"] as const,
+  repositories: ["github", "repositories"] as const,
+  issues: (repoId: string, f: IssueFilters) => ["github", "issues", repoId, f] as const,
+  issue: (repoId: string, number: number) => ["github", "issue", repoId, number] as const,
 };

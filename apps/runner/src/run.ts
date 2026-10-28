@@ -66,7 +66,7 @@ const within = (p: Promise<unknown>, ms: number) =>
     });
   });
 
-// shortcut: no ExecutionAdapter interface yet, it arrives with the Claude Agent SDK adapter (ENG-05).
+// shortcut: no ExecutionAdapter interface yet: the Claude engine (claude.ts) is not dispatched by job type until ENG-07, add it then.
 export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): JobHandle {
   const {
     timeoutMs = DIAGNOSTIC_TIMEOUT_MS,
@@ -258,7 +258,7 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
     }
 
     const cwd = await mkdtemp(join(tmpdir(), "nexus-job-"));
-    // shortcut: read-only for the container user under rootful/rootless uid mapping, writable workspaces arrive with the worktree job (ENG-05).
+    // Diagnostics never write; worktree jobs run as writableUser() (claude.ts) so the container can write them.
     if (container) await chmod(cwd, 0o755);
     let timer: NodeJS.Timeout | undefined;
     try {

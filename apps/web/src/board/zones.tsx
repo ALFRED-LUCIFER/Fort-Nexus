@@ -1,8 +1,9 @@
 import { useState, type ReactNode } from "react";
 import { useMutation, type UseQueryResult } from "@tanstack/react-query";
-import type { JobList, Runner } from "@nexus/contracts";
+import type { GithubStatus, JobList, RepositoryList, Runner } from "@nexus/contracts";
 import { api } from "../lib/api.ts";
 import { RUNNER_TONE, ago, clock, isActive, jobTone, statusLabel, useNow } from "../lib/queries.ts";
+import { githubSetupHint } from "./github.tsx";
 
 export interface ZoneProps {
   id: string;
@@ -76,23 +77,93 @@ const nodeGrid = "m-0 flex list-none flex-wrap content-start gap-[30px] p-0";
 
 const LIFECYCLE = ["QUEUED", "PREPARING", "RUNNING", "VERIFYING"];
 
+// shortcut: the zone shows the first 3 repositories; the repo drawer lists all of them.
+const ZONE_REPOS = 3;
+
 export function CodeZone({
+  github,
+  repos,
   query,
   runners,
   onOpen,
+  onOpenRepo,
 }: {
+  github: UseQueryResult<GithubStatus>;
+  repos: UseQueryResult<RepositoryList>;
   query: UseQueryResult<JobList>;
   runners: readonly Runner[] | undefined;
   onOpen: (id: string) => void;
+  onOpenRepo: (id: string) => void;
 }) {
+  const now = useNow(30_000);
+  const hint = githubSetupHint(github);
+  const items = repos.data?.items ?? [];
   const jobs = query.data?.items;
-  if (!jobs?.length)
-    return (
-      <QueryState
-        query={query}
-        empty="No runs yet. Use Execute in the command bar to run a diagnostic on your home runner."
-      />
-    );
+  return (
+    <div className="flex flex-col gap-6">
+      <section aria-labelledby="code-repos" className="flex flex-col gap-3">
+        <h3 id="code-repos" className="kicker m-0">
+          Repositories
+        </h3>
+        {hint ??
+          (items.length === 0 ? (
+            <QueryState
+              query={repos}
+              empty="The NEXUS app's installations have no repositories yet. Add some in the installation settings on GitHub."
+            />
+          ) : (
+            <ul className={nodeGrid}>
+              {items.slice(0, ZONE_REPOS).map((r) => (
+                <li key={r.id}>
+                  <Node
+                    dot="var(--green)"
+                    kicker={`Repository · ${r.private ? "private" : "public"}`}
+                    title={r.fullName}
+                    meta={`${r.defaultBranch} · updated ${ago(r.pushedAt ?? r.updatedAt, now)}`}
+                    onClick={() => onOpenRepo(r.id)}
+                  />
+                </li>
+              ))}
+              {items.length > ZONE_REPOS && (
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => onOpenRepo(items[0]!.id)}
+                    className="rounded-[20px] border border-line bg-card px-4 py-3.5 text-[13px] font-medium text-teal shadow-nx"
+                  >
+                    All {items.length} repositories →
+                  </button>
+                </li>
+              )}
+            </ul>
+          ))}
+      </section>
+      <section aria-labelledby="code-runs" className="flex flex-col gap-3">
+        <h3 id="code-runs" className="kicker m-0">
+          Recent runs
+        </h3>
+        {jobs?.length ? (
+          <RunNodes jobs={jobs} runners={runners} onOpen={onOpen} />
+        ) : (
+          <QueryState
+            query={query}
+            empty="No runs yet. Use Execute in the command bar to run a diagnostic on your home runner."
+          />
+        )}
+      </section>
+    </div>
+  );
+}
+
+function RunNodes({
+  jobs,
+  runners,
+  onOpen,
+}: {
+  jobs: JobList["items"];
+  runners: readonly Runner[] | undefined;
+  onOpen: (id: string) => void;
+}) {
   return (
     <ul className={nodeGrid}>
       {jobs.map((j) => {

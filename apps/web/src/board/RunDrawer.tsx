@@ -1,10 +1,10 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isTerminal, type JobStatus, type RunEvent } from "@nexus/contracts";
 import { api, keys } from "../lib/api.ts";
 import { duration, jobTone, statusLabel, useRunners } from "../lib/queries.ts";
+import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { explain, liveStatus, runFacts, toLine, useRunEvents, type StreamState } from "./runEvents.ts";
 
 const POLL_MS = 5_000;
@@ -19,22 +19,9 @@ export function RunDrawer({
   onClose: () => void;
 }) {
   return (
-    <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
-      <Dialog.Portal>
-        <Dialog.Content
-          aria-describedby={undefined}
-          className="nx-drawer fixed top-20 right-4 bottom-4 z-10 flex w-[min(760px,calc(100%-32px))] flex-col overflow-hidden rounded-[26px] border border-line bg-glass2 outline-none"
-          style={{
-            backdropFilter: "blur(30px) saturate(1.5)",
-            WebkitBackdropFilter: "blur(30px) saturate(1.5)",
-            boxShadow: "0 30px 90px -30px rgba(40,30,10,.4)",
-          }}
-        >
-          {banner && <div className="flex-none px-6 pt-4">{banner}</div>}
-          <RunBody key={jobId} jobId={jobId} />
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <Drawer banner={banner} onClose={onClose}>
+      <RunBody key={jobId} jobId={jobId} />
+    </Drawer>
   );
 }
 
@@ -62,35 +49,11 @@ function RunBody({ jobId }: { jobId: string }) {
     },
   });
 
-  const header = (kicker: string, title: string) => (
-    <div className="flex items-start gap-4 border-b border-hair px-6 pt-5 pb-4">
-      <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <span className="kicker">{kicker}</span>
-        <Dialog.Title className="m-0 font-serif text-[30px] leading-[1.1] font-normal text-pretty">
-          {title}
-        </Dialog.Title>
-      </div>
-      <Dialog.Close className="flex-none rounded-xl bg-hair px-3 py-2.5 text-[12px] font-medium text-ink2">
-        Back to board <span className="ml-1.5 font-mono text-[10.5px] text-ink3">esc</span>
-      </Dialog.Close>
-    </div>
-  );
-
   if (!job.data || !status) {
     return (
       <>
-        {header("Run", job.error ? "Can't open this run" : "Loading run…")}
-        <div className="px-6 py-5">
-          {job.error ? (
-            <p role="alert" className="m-0 text-[14px] text-coral">
-              {job.error.message}
-            </p>
-          ) : (
-            <p role="status" className="m-0 text-[13px] text-ink3">
-              Loading…
-            </p>
-          )}
-        </div>
+        <DrawerHeader kicker="Run" title={job.error ? "Can't open this run" : "Loading run…"} />
+        <DrawerState error={job.error} />
       </>
     );
   }
@@ -112,10 +75,10 @@ function RunBody({ jobId }: { jobId: string }) {
 
   return (
     <>
-      {header(
-        `Run · diagnostic · ${j.id.slice(0, 8)}`,
-        `${preset} on ${runner?.name ?? facts.hostname ?? "the home machine"}`,
-      )}
+      <DrawerHeader
+        kicker={`Run · diagnostic · ${j.id.slice(0, 8)}`}
+        title={`${preset} on ${runner?.name ?? facts.hostname ?? "the home machine"}`}
+      />
       <div className="nx-stagger flex min-h-0 flex-1 flex-col gap-[18px] overflow-auto px-6 pt-5 pb-6">
         <StageBar status={status} events={events} />
         <div
@@ -127,12 +90,35 @@ function RunBody({ jobId }: { jobId: string }) {
             {explain(status, facts, runnerName, online)}
           </p>
         </div>
+        {facts.sandbox?.runtime === "none" && (
+          <p
+            role="note"
+            className="m-0 flex-none rounded-2xl px-4 py-3 text-[13px] leading-[1.5] text-ink"
+            style={{ background: "oklch(0.70 0.13 65 / .16)" }}
+          >
+            <strong className="font-medium">Not sandboxed.</strong> This run executed directly on the home
+            machine, not in a container (the runner is set to RUNNER_SANDBOX=none).
+          </p>
+        )}
         <Terminal events={events} stream={stream} status={status} runnerName={runner?.name ?? runnerName} />
-        <div className="grid flex-none grid-cols-2 gap-2.5 sm:grid-cols-4">
+        <div className="grid flex-none grid-cols-2 gap-2.5 sm:grid-cols-5">
           <Stat k="status" v={statusLabel(status)} />
           <Stat k="runner" v={runner?.name ?? (j.runnerId ? j.runnerId.slice(0, 8) : "not claimed yet")} />
           <Stat k="duration" v={dur === undefined ? "—" : duration(dur)} />
           <Stat k="exit code" v={facts.exitCode === undefined ? "—" : String(facts.exitCode)} />
+          <Stat
+            k="sandbox"
+            v={
+              facts.sandbox
+                ? [
+                    facts.sandbox.runtime === "none" ? "none · host" : facts.sandbox.runtime,
+                    facts.sandbox.image,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+                : "—"
+            }
+          />
         </div>
         {!terminal && status !== "RECOVERY_REQUIRED" && (
           <div className="flex flex-none flex-col items-end gap-2">

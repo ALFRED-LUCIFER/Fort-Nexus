@@ -27,6 +27,7 @@ import { HttpError } from "./errors.ts";
 import { loadGithubAppConfig } from "./github/app-config.ts";
 import { reapExpiredLeases } from "./jobs.ts";
 import { createHub, type Hub } from "./notify.ts";
+import { githubRoutes } from "./routes/github.ts";
 import { ownerRoutes } from "./routes/owner.ts";
 import { runnerRegisterRoute, runnerRoutes } from "./routes/runner.ts";
 
@@ -209,7 +210,8 @@ export async function buildApp(config: Config) {
     scope.post("/api/auth/*", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, handler);
   });
 
-  await app.register(async (scope) => ownerRoutes(scope, deps));
+  // GitHub routes share the owner scope, so its session hook guards them too.
+  await app.register(async (scope) => ownerRoutes(scope, deps).then(() => githubRoutes(scope, github)));
   await app.register(async (scope) => runnerRegisterRoute(scope, deps));
   await app.register(async (scope) => runnerRoutes(scope, deps));
 

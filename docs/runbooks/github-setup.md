@@ -36,6 +36,18 @@ Restart the API (`pnpm --filter @nexus/api dev` reloads on file changes, not on 
 - The login page shows the setup command — the API found no app file at `GITHUB_APP_FILE`. Run step 2, then restart the API.
 - The API refuses to start with "must not be readable by group/others" — run `chmod 600 ~/.nexus/github-app.json`.
 
+## 5. Repositories and issues
+
+The board's **Code** zone lists the repositories of the app's installations; a repository opens its drawer (accounts, repositories, issues with filters) and an issue opens its body, extracted acceptance criteria and comments. NEXUS reads GitHub with short-lived installation tokens that never leave the API.
+
+- **"GitHub isn't set up"** with the setup command — no app file; run step 2.
+- **"Install it on GitHub"** — the app has no installation; run step 3.
+- **A repository is missing** — it isn't in an installation. Add it under the installation's repository access; NEXUS answers 404 for any repository outside its installations, even if it exists on GitHub.
+- **"NEXUS can't access … anymore"** — the repository was removed from the installation, or the installation was suspended or uninstalled. NEXUS never falls back to other credentials; re-grant access on GitHub.
+- **Rate limit** — NEXUS stops calling GitHub until the reset time it shows, then continues.
+
+Data is cached for 60 seconds (the drawers show "synced … ago"); changes on GitHub appear within a minute. Webhook-driven sync comes with FR-GH-10 — the app's webhook stays inactive until then.
+
 ## Origins and callback URLs
 
 GitHub only redirects back to callback URLs registered on the app, and Better Auth only finishes a sign-in on the same origin that started it (its state cookie lives there). So **`PUBLIC_ORIGIN` must be the origin in your browser's address bar, and `<PUBLIC_ORIGIN>/api/auth/callback/github` must be one of the app's callback URLs.** Setup registers the one for the `PUBLIC_ORIGIN` it ran with.
