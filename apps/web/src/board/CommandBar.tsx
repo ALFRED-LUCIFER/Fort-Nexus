@@ -10,6 +10,7 @@ import {
 import { api, keys } from "../lib/api.ts";
 import { preferredRunner } from "../lib/queries.ts";
 import { P1Button } from "./P1Button.tsx";
+import { useCreatePlan } from "./plans.tsx";
 import { useScope } from "./scope.tsx";
 import { talkBlocked } from "./Talk.tsx";
 
@@ -63,7 +64,7 @@ function useAsk(onOpened: () => void) {
 
 /**
  * Command bar (top centre). Under it, in one column: `children` (status banners), then the
- * Execute preview, the Ask status or the Plan "not yet" note.
+ * Execute preview, the Ask status or the Plan status (Plan drafts a plan from the typed goal and opens it).
  */
 export function CommandBar({
   runners,
@@ -81,20 +82,23 @@ export function CommandBar({
 }) {
   const [text, setText] = useState("");
   const [mode, setMode] = useState<Mode>("Execute");
-  const [panel, setPanel] = useState<"preview" | "note" | "ask" | null>(null);
+  const [panel, setPanel] = useState<"preview" | "plan" | "ask" | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const asking = useAsk(() => {
+  const done = () => {
     setPanel(null);
     setText("");
-  });
+  };
+  const asking = useAsk(done);
+  const planning = useCreatePlan(done);
 
   const close = () => {
     setPanel(null);
     inputRef.current?.focus();
   };
   const submit = () => {
-    setPanel(mode === "Execute" ? "preview" : mode === "Ask" ? "ask" : "note");
+    setPanel(mode === "Execute" ? "preview" : mode === "Ask" ? "ask" : "plan");
     if (mode === "Ask") asking.ask(text.trim());
+    if (mode === "Plan") planning.create(text.trim());
   };
   const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") submit();
@@ -182,31 +186,33 @@ export function CommandBar({
             </div>
           </Panel>
         )}
-        {panel === "note" && (
-          <Panel>
-            <p role="status" className="m-0 font-serif text-[22px] leading-tight italic">
-              {mode} isn’t available yet.
+        {panel === "plan" && (
+          <Panel label="Plan">
+            {planning.blocked || !text.trim() ? (
+              <p role="status" className="m-0 text-[13.5px] leading-snug text-ink2">
+                {planning.blocked ?? "Type a goal first, then press Enter."}
+              </p>
+            ) : planning.pending ? (
+              <p role="status" className="m-0 font-serif text-[22px] leading-tight italic">
+                The Chief of Staff is drafting a plan…
+              </p>
+            ) : (
+              planning.error && (
+                <p role="alert" className="m-0 text-[13px] leading-snug text-coral">
+                  {planning.error.message} Press Enter to try again; the same goal is drafted once.
+                </p>
+              )
+            )}
+            <p className="m-0 text-[12.5px] text-ink3">
+              Nothing runs until you approve the exact plan in its drawer.
             </p>
-            <p className="m-0 text-[13px] text-ink2">
-              Ask answers from NEXUS’s own records. Execute runs a typed diagnostic on your home runner.
-            </p>
-            <div className="flex justify-end gap-2">
+            <div className="flex justify-end">
               <button
                 type="button"
                 onClick={close}
                 className="rounded-xl border border-hair px-3.5 py-2.5 text-[12.5px] font-medium text-ink2"
               >
                 Close
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setMode("Execute");
-                  setPanel("preview");
-                }}
-                className="rounded-xl bg-teal px-3.5 py-2.5 text-[12.5px] font-medium text-onacc"
-              >
-                Switch to Execute
               </button>
             </div>
           </Panel>

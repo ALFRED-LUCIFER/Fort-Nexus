@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, or } from "drizzle-orm";
+import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import {
   AgentKey,
   AgentTool,
@@ -17,6 +17,7 @@ import { workspaces } from "../db/schema.ts";
 import { HttpError, notFound } from "../errors.ts";
 import { canonical, ownerActor } from "../jobs.ts";
 import { resolveProject, type ProjectScope } from "../workspaces.ts";
+import { planSteps } from "../plans/schema.ts";
 import { agentProfileVersions as versions } from "./schema.ts";
 
 // EPIC AGT (FR-AGT-06/07), FR-WKS-04/05, PRD C-04 and §11.16: project version > workspace version > built-in default
@@ -35,7 +36,13 @@ const STANDARD = {
 /** Built-in defaults: conservative tools per role; Product drafts only. */
 export const DEFAULT_AGENT_SETTINGS: Record<AgentKey, AgentProfileSettings> = {
   CHIEF_OF_STAFF: { ...STANDARD, tools: [...AgentTool.options] },
-  DEVELOPER: { ...STANDARD, tools: ["jobs.read", "jobs.create.issue_run", "github.read"] },
+  // A coding run needs the issue-run defaults (CreateJobRequest budget); plan steps are capped to these.
+  DEVELOPER: {
+    ...STANDARD,
+    maxCostUsdPerTask: 5,
+    maxTurns: 60,
+    tools: ["jobs.read", "jobs.create.issue_run", "github.read"],
+  },
   QA: { ...STANDARD, tools: ["jobs.read", "github.read", "jobs.create.diagnostic"] },
   DEVOPS: { ...STANDARD, tools: ["monitoring.read", "jobs.read", "jobs.create.diagnostic"] },
   PRODUCT: { ...STANDARD, autonomy: "DRAFT", tools: ["github.read", "research.search"] },
@@ -174,9 +181,28 @@ export async function pinnedAgentProfile(
   return toEffective(agent, row);
 }
 
-// Plan steps arrive with the Chief of Staff plans (wave 3 B); this is the one place that counts them.
-async function agentRecords(_db: Db, _scope: ProjectScope): Promise<Map<AgentKey, AgentSummary["record"]>> {
-  return new Map();
+/** Each agent's finished plan steps in the project; step status comes from source events only (FR-AGT-09). */
+async function agentRecords(db: Db, scope: ProjectScope): Promise<Map<AgentKey, AgentSummary["record"]>> {
+  const rows = await db
+    .select({
+      agent: planSteps.agent,
+      succeeded: sql<number>`count(*) filter (where ${planSteps.status} = 'SUCCEEDED')::int`,
+      failed: sql<number>`count(*) filter (where ${planSteps.status} = 'FAILED')::int`,
+      last: sql<Date | null>`max(${planSteps.finishedAt})`,
+    })
+    .from(planSteps)
+    .where(eq(planSteps.projectId, scope.projectId))
+    .groupBy(planSteps.agent);
+  return new Map(
+    rows.map((r) => [
+      r.agent,
+      {
+        stepsSucceeded: r.succeeded,
+        stepsFailed: r.failed,
+        lastActiveAt: r.last ? new Date(r.last).toISOString() : null,
+      },
+    ]),
+  );
 }
 
 export async function listAgents(db: Db, ownerId: string, projectId: string): Promise<AgentList> {

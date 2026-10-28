@@ -36,23 +36,24 @@ Checks on the merged tree: typecheck, lint, prettier, tests (api 126, web 69, ru
 Coordinator: `resolveProject` / `ownerWorkspaceIds`, contracts, adapters removed, `scope.ts` deleted, migration squashed.
 Checks on the merged tree: typecheck, lint, prettier, tests (api 215, web 114, runner 165+1 skipped, contracts 16), web build.
 
-## Wave 3 — in progress (spec: `docs/specs/p1-wave-3.md`)
+## Wave 3 — done on `p1` (spec: `docs/specs/p1-wave-3.md`)
 
-| Agent | Scope | Status |
+| Agent | Delivered | Tests |
 |---|---|---|
-| A — Agent registry | roster, append-only versioned profiles (project > workspace > default), global ceiling, Agents grouping + drawer, Talk pins Chief of Staff version | running |
-| B — Plans | goal → typed step plan, owner approves exact hash, one-step-at-a-time executor, success only from source records, Plans & queue zone, command bar Plan | running |
-| C — AI explanations | finding "why it matters", incident triage: cache-once, citations checked, labelled AI inference | running |
-| D — Revenue + products | gross/refunds/net with exact formula, top products (masked), Talk answers | running |
+| A — Agent registry | 7 agents, append-only versioned profiles (project > workspace > default), global ceiling (AUTONOMOUS only with R0/R1 tools, coding engine only Developer/QA, cost/turn caps), Agents grouping + drawer + Settings tab, Talk pins the Chief of Staff version | resolution, ceiling, append-only, pinning, decoy |
+| B — Plans | goal → typed steps (model drafts, server blocks/hashes), owner approves exact hash, one step at a time, success only from source records, restart-safe idempotency keys, notifications, Plans zone + drawer, command bar Plan | FR-AGT-01/09, executor races + crash, narrowing, emergency stop, decoy |
+| C — AI explanations | finding "why it matters" + incident triage: cache-once claim rows, citations limited to own evidence, labelled AI inference | cache-once incl. concurrency, citation rejection, decoy |
+| D — Revenue + products | gross/refunds/net (refund-day), top products masked in SQL, Talk answers | cross-midnight cents, masking, NOT_DEFINED, decoy |
 
-Coordinator first: contracts `agents.ts`, `plans.ts`, explanation/triage/revenue/top-products, `Thread.profileVersionId`.
-Merge step: delete `agent-profile-adapter.ts` files, re-squash P1 migration (keep conversation + agent-profile triggers), all checks, push, update PR #1.
+Coordinator: contracts first; adapters removed (real `resolveAgentProfile` everywhere); agent records count plan steps; plan issue-run budgets narrowed to the agent's caps before hashing (and re-checked before running); Developer default caps $5 / 60 turns; return lines → NOT_DEFINED; shortcut comments for known limits; one squashed `0006_p1.sql` with the conversation and agent-profile triggers re-appended.
+Checks on the merged tree: typecheck, lint, prettier, tests (api 258, web 141, runner 165+1 skipped, contracts 19), web build.
 
 ## Next
 
 - Owner check: one live Talk turn on Anthropic and on Foundry.
 - Owner check: one real n8n workflow against `/v1/automations/trigger` (runbook untested against live n8n).
-- Wave 3 candidates: agent registry + orchestrator (V1C), LLM "why it matters" in briefs and incident triage, FR-BIZ-04..06, voice (FR-CWV-02/03), code-split the web bundle (892 kB).
+- Owner check: one live plan (Anthropic/Foundry) from goal to an issue run, and one Explain/Triage call.
+- Wave 4 candidates: code-split the web bundle (946 kB, lazy drawers), voice push-to-talk + TTS (FR-CWV-02/03, P1C), FR-BIZ-06 funnel, plan editing before approval, parallel plan steps (FR-AGT-08, P2).
 
 ## Deferred (named, not built)
 
