@@ -172,7 +172,13 @@ function NoticeRow({ n }: { n: Notification }) {
         onClick={() => open(n)}
         className="rounded-[11px] border border-hair px-[11px] py-[9px] text-[12px] font-medium whitespace-nowrap text-ink"
       >
-        {n.subject.jobId ? "Open the run" : n.subject.incidentId ? "Open the incident" : "Open settings"}
+        {n.subject.jobId
+          ? "Open the run"
+          : n.subject.incidentId
+            ? "Open the incident"
+            : n.subject.planId
+              ? "Open the plan"
+              : "Open settings"}
         <span className="sr-only">: {n.title}</span>
       </button>
     </li>

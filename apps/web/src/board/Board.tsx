@@ -24,6 +24,7 @@ import { IssueDrawer, RepoDrawer } from "./github.tsx";
 import { InboxDrawer } from "./Inbox.tsx";
 import { AppNodes, IncidentDrawer, SystemsDrawer, appsSub, useMonitoredApps } from "./monitoring.tsx";
 import { NotificationToasts, useScopeNotifications } from "./notifications.tsx";
+import { PlanDrawer, PlansZone, plansSub, usePlans } from "./plans.tsx";
 import { ResearchDrawer, ResearchZone, researchSub, useWatchlists } from "./research.tsx";
 import { RunDrawer } from "./RunDrawer.tsx";
 import { ScopeNav, useScope } from "./scope.tsx";
@@ -68,12 +69,14 @@ export function Board() {
   const watchlists = useWatchlists();
   const unread = useScopeNotifications().unread ?? 0;
   const apps = useMonitoredApps(projectId, scope.ready);
+  const plans = usePlans();
 
   const openRun = (id: string) => void navigate({ search: { ...scope.keep, drawer: `run:${id}` } });
   const openRepo = (id: string) => void navigate({ search: { ...scope.keep, drawer: `repo:${id}` } });
   const openResearch = () => void navigate({ search: { ...scope.keep, drawer: "research" } });
   const openIncident = (id: string) => void navigate({ search: { ...scope.keep, drawer: `incident:${id}` } });
   const openSystems = () => void navigate({ search: { ...scope.keep, drawer: "systems" } });
+  const openPlan = (id: string) => void navigate({ search: { ...scope.keep, drawer: `plan:${id}` } });
   const closeDrawer = () => void navigate({ search: scope.keep });
 
   // Pan / zoom. Positions are in screen px; the board is scaled around its top-left corner.
@@ -259,13 +262,15 @@ export function Board() {
     {
       id: "plan",
       label: "Plans & queue",
-      sub: queued.data ? `${queued.data} queued` : "",
+      sub: [plansSub(plans.data), queued.data ? `${queued.data} queued runs` : ""]
+        .filter(Boolean)
+        .join(" · "),
       x: 880,
       y: 1780,
       w: 1160,
       h: 520,
       tint: "oklch(0.85 0.06 95 / .18)",
-      body: <EmptyZone>No plans yet. Plans arrive in P1; queued runs show in Code.</EmptyZone>,
+      body: <PlansZone onOpen={openPlan} />,
     },
   ];
 
@@ -483,6 +488,9 @@ export function Board() {
       )}
       {drawerKind === "incident" && drawerId && (
         <IncidentDrawer id={drawerId} banner={banner} onClose={closeDrawer} />
+      )}
+      {drawerKind === "plan" && drawerId && (
+        <PlanDrawer id={drawerId} banner={banner} onClose={closeDrawer} />
       )}
       {drawerKind === "issue" && drawerId && drawerNumber && (
         <IssueDrawer repoId={drawerId} number={Number(drawerNumber)} banner={banner} onClose={closeDrawer} />

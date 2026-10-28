@@ -57,6 +57,7 @@ const detail = (p: ActionProposal | null = null): ThreadDetail => ({
     projectId: PROJECT_ID,
     title: "How is my run?",
     subjectJobId: JOB,
+    profileVersionId: null,
     createdAt: T0,
     updatedAt: T0,
   },

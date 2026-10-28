@@ -59,7 +59,9 @@ export function useOpenNotification() {
       ? `run:${n.subject.jobId}`
       : n.subject.incidentId
         ? `incident:${n.subject.incidentId}`
-        : "settings";
+        : n.subject.planId
+          ? `plan:${n.subject.planId}`
+          : "settings";
     void navigate({ search: { ...keepOf(n), drawer } });
   };
 }

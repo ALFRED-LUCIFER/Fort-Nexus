@@ -126,13 +126,15 @@ describe("board", () => {
     expect(calls.filter((c) => c.method !== "GET")).toHaveLength(0);
   });
 
-  it("explains that Plan isn't available yet (Ask is covered in Talk.test.tsx)", async () => {
-    board([runner()]);
+  it("Plan in the All view asks for a project and sends nothing (Plan is covered in plans.test.tsx)", async () => {
+    const calls = board([runner()]);
     const user = userEvent.setup();
     renderApp("/");
     await user.click(await screen.findByRole("button", { name: "Plan", pressed: false }));
-    await user.type(screen.getByRole("textbox", { name: "Command" }), "what is running?{Enter}");
-    expect(await screen.findByText("Plan isn’t available yet.")).toBeTruthy();
+    await user.type(screen.getByRole("textbox", { name: "Command" }), "check the runner{Enter}");
+    const panel = await screen.findByRole("region", { name: "Plan" });
+    expect(within(panel).getByRole("status").textContent).toMatch(/^Pick a project first/);
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(0);
   });
 
   it("pairs a runner when none is paired", async () => {

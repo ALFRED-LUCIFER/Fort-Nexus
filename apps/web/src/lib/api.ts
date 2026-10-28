@@ -31,6 +31,8 @@ import {
   OwnerSessionList,
   PairingCodeResponse,
   PaymentFailuresResponse,
+  Plan,
+  PlanList,
   PostTurnResponse,
   Project,
   RepositoryList,
@@ -53,11 +55,13 @@ import {
   type CreateConnectorRequest,
   type CreateJobRequest,
   type CreateMonitoredAppRequest,
+  type CreatePlanRequest,
   type CreateProjectRequest,
   type CreateThreadRequest,
   type CreateWatchlistRequest,
   type FindingSearchQuery,
   type JobStatus,
+  type PlanDecisionRequest,
   type ProposalDecisionRequest,
   type UpdateAutomationClientRequest,
   type UpdateConnectorRequest,
@@ -297,6 +301,18 @@ export const api = {
   incident: (id: string) => request(`/v1/incidents/${encodeURIComponent(id)}`, Incident),
   setIncidentStatus: (id: string, status: "ACKNOWLEDGED" | "RESOLVED") =>
     request(`/v1/incidents/${encodeURIComponent(id)}/status`, Incident, post({}, { status })),
+  // projectId omitted = the read-only "All" view.
+  plans: (projectId?: string) =>
+    request(`/v1/plans${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`, PlanList).then(
+      (l) => l.items,
+    ),
+  plan: (id: string) => request(`/v1/plans/${encodeURIComponent(id)}`, Plan),
+  // Drafting calls the model: a retry with the same key returns the same plan.
+  createPlan: (body: CreatePlanRequest, idempotencyKey: string) =>
+    request("/v1/plans", Plan, post({ [IDEMPOTENCY_HEADER]: idempotencyKey }, body)),
+  decidePlan: (id: string, body: PlanDecisionRequest) =>
+    request(`/v1/plans/${encodeURIComponent(id)}/decision`, Plan, post({}, body)),
+  cancelPlan: (id: string) => request(`/v1/plans/${encodeURIComponent(id)}/cancel`, Plan, post()),
 };
 
 export type FindingFilters = Partial<Omit<FindingSearchQuery, "cursor">>;
@@ -341,4 +357,7 @@ export const keys = {
   monitoring: ["monitoring"] as const,
   monitoredApps: (projectId: string | undefined) => ["monitoring", "apps", projectId ?? "all"] as const,
   incident: (id: string) => ["monitoring", "incident", id] as const,
+  plans: ["plans"] as const,
+  plansOf: (projectId: string | undefined) => ["plans", "list", projectId ?? "all"] as const,
+  plan: (id: string) => ["plans", id] as const,
 };

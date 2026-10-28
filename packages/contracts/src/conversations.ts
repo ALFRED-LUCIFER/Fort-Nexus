@@ -30,7 +30,7 @@ export type CreateThreadRequest = z.infer<typeof CreateThreadRequest>;
 
 // FR-CXR-04: every material claim points at a record NEXUS read itself, with its as-of time.
 export const SourceRef = z.object({
-  kind: z.enum(["JOB", "RUN_EVENT", "APPROVAL", "PULL_REQUEST", "METRIC", "FINDING"]),
+  kind: z.enum(["JOB", "RUN_EVENT", "APPROVAL", "PULL_REQUEST", "METRIC", "FINDING", "RESEARCH_RUN"]),
   id: z.string().max(200),
   label: z.string().max(200),
   asOf: z.iso.datetime({ offset: true }),

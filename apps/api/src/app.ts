@@ -35,6 +35,8 @@ import { reapExpiredLeases } from "./jobs.ts";
 import { monitoringRoutes } from "./monitoring/routes.ts";
 import { createMonitoring, type Monitoring } from "./monitoring/service.ts";
 import { createHub, type Hub } from "./notify.ts";
+import { createPlanExecutor } from "./plans/executor.ts";
+import { planRoutes } from "./plans/routes.ts";
 import { researchRoutes } from "./research/routes.ts";
 import { createResearch, type Research } from "./research/service.ts";
 import { githubRoutes } from "./routes/github.ts";
@@ -160,6 +162,8 @@ export async function buildApp(config: Config) {
     monitoring,
   };
 
+  const planExecutor = createPlanExecutor(deps, app.log);
+
   app.addHook("onRequest", async (request, reply) => {
     reply.header("x-request-id", request.id);
   });
@@ -278,7 +282,8 @@ export async function buildApp(config: Config) {
       .then(() => conversationRoutes(scope, deps))
       .then(() => researchRoutes(scope, deps))
       .then(() => automationRoutes(scope, deps))
-      .then(() => monitoringRoutes(scope, deps)),
+      .then(() => monitoringRoutes(scope, deps))
+      .then(() => planRoutes(scope, deps)),
   );
   // n8n's signed trigger: its own scope, outside the owner session (like the runner routes).
   await app.register(async (scope) => automationTriggerRoute(scope, deps));
@@ -306,6 +311,7 @@ export async function buildApp(config: Config) {
       }),
       research.tick(),
       monitoring.tick(),
+      planExecutor.tick(),
     ]).catch((err: unknown) => app.log.error({ err }, "reaper failed"));
   app.addHook("onReady", async () => {
     await reap();
