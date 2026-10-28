@@ -7,6 +7,7 @@ import {
   HealthCheckList,
   Incident,
   IncidentList,
+  IncidentTriage,
   ListIncidentsQuery,
   MonitoredApp,
   MonitoredAppList,
@@ -27,6 +28,7 @@ import {
   updateApp,
   type Ctx,
 } from "./service.ts";
+import { getTriage, triageIncident } from "./triage.ts";
 
 const IdParams = z.object({ id: z.uuid() });
 
@@ -36,7 +38,7 @@ const ctx = (req: FastifyRequest): Ctx => {
 };
 
 /** EPIC MON. Registered inside the owner scope: session required, mutations need a trusted Origin. */
-export async function monitoringRoutes(app: FastifyInstance, { db, monitoring }: Deps) {
+export async function monitoringRoutes(app: FastifyInstance, { db, monitoring, config }: Deps) {
   const r = app.withTypeProvider<ZodTypeProvider>();
 
   r.get(
@@ -90,5 +92,22 @@ export async function monitoringRoutes(app: FastifyInstance, { db, monitoring }:
     "/v1/incidents/:id/status",
     { schema: { params: IdParams, body: SetIncidentStatusRequest, response: { 200: Incident } } },
     async (req) => setIncidentStatus(db, ctx(req), req.params.id, req.body.status),
+  );
+
+  // FR-MON-07: written once per incident (201), then served from the store (200) without calling the model.
+  r.post(
+    "/v1/incidents/:id/triage",
+    { schema: { params: IdParams, response: { 200: IncidentTriage, 201: IncidentTriage } } },
+    async (req, reply) => {
+      const { created, triage } = await triageIncident(db, config.aiFile, ctx(req), req.params.id);
+      reply.code(created ? 201 : 200);
+      return triage;
+    },
+  );
+
+  r.get(
+    "/v1/incidents/:id/triage",
+    { schema: { params: IdParams, response: { 200: IncidentTriage } } },
+    async (req) => getTriage(db, owner(req).id, req.params.id),
   );
 }

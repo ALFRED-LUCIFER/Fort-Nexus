@@ -9,6 +9,7 @@ import {
 import {
   CreateWatchlistRequest,
   type Finding,
+  type FindingExplanation,
   type ResearchRun,
   type ScoringWeights,
   type SkipReason,
@@ -19,6 +20,7 @@ import {
 } from "@nexus/contracts";
 import { api, keys, type FindingFilters } from "../lib/api.ts";
 import { ago, clock, until, useNow, useWorkspaces } from "../lib/queries.ts";
+import { AiError, AiLabel } from "./aiInference.tsx";
 import { Drawer, DrawerHeader } from "./Drawer.tsx";
 import { useScope, type Scope } from "./scope.tsx";
 import { EmptyZone } from "./zones.tsx";
@@ -307,8 +309,10 @@ function ResearchBody() {
             </ul>
           )}
         </section>
-        {current && <LatestBrief key={current.id} w={current} />}
-        {items.length > 0 && <FindingSearch projectId={scope.project?.id} watchlists={items} />}
+        {current && <LatestBrief key={current.id} w={current} blocked={blocked} />}
+        {items.length > 0 && (
+          <FindingSearch projectId={scope.project?.id} watchlists={items} blocked={blocked} />
+        )}
       </div>
     </>
   );
@@ -574,7 +578,8 @@ function CreateWatchlist({ projectId, onCreated }: { projectId: string; onCreate
   );
 }
 
-function LatestBrief({ w }: { w: Watchlist }) {
+/** `blocked`: why findings can't be explained here (All or archived), else null. */
+function LatestBrief({ w, blocked }: { w: Watchlist; blocked: string | null }) {
   const now = useNow(30_000);
   const runs = useQuery({
     queryKey: keys.researchRuns(w.id),
@@ -624,7 +629,7 @@ function LatestBrief({ w }: { w: Watchlist }) {
           ) : (
             <ul aria-label="Brief findings" className="m-0 flex list-none flex-col gap-2.5 p-0">
               {brief.data!.findings.map((f) => (
-                <FindingCard key={f.id} f={f} />
+                <FindingCard key={f.id} f={f} blocked={blocked} />
               ))}
             </ul>
           )}
@@ -647,13 +652,15 @@ function LatestBrief({ w }: { w: Watchlist }) {
   );
 }
 
-function FindingCard({ f }: { f: Finding }) {
+function FindingCard({ f, blocked }: { f: Finding; blocked: string | null }) {
   const now = useNow(30_000);
   const queryClient = useQueryClient();
+  const blockedId = useId();
   const read = useMutation({
     mutationFn: () => api.readFinding(f.id),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: keys.research }),
   });
+  const explain = useMutation({ mutationFn: () => api.explainFinding(f.id) });
   const b = f.scoreBreakdown;
   return (
     <li className="flex flex-col gap-2 rounded-2xl border border-hair px-4 py-3.5">
@@ -713,16 +720,78 @@ function FindingCard({ f }: { f: Finding }) {
           {read.error.message}
         </p>
       )}
+      {explain.data ? (
+        <Explanation f={f} e={explain.data} />
+      ) : (
+        <>
+          <button
+            type="button"
+            disabled={!!blocked || explain.isPending}
+            aria-describedby={blocked ? blockedId : undefined}
+            onClick={() => explain.mutate()}
+            className={`${ghostBtn} self-start`}
+          >
+            {explain.isPending ? "Explaining…" : "Explain"}
+            <span className="sr-only">: why it matters, {f.title}</span>
+          </button>
+          {blocked && (
+            <span id={blockedId} hidden>
+              {blocked}
+            </span>
+          )}
+        </>
+      )}
+      {explain.error && <AiError error={explain.error} />}
     </li>
+  );
+}
+
+/** FR-RES-08: the AI's take, labelled as unverified; links only to the finding's own sources it cited. */
+function Explanation({ f, e }: { f: Finding; e: FindingExplanation }) {
+  const cited = f.sources.filter((s) => e.citedUrls.includes(s.url) && linkable(s.url));
+  return (
+    <section
+      aria-label={`AI explanation: ${f.title}`}
+      className="flex flex-col gap-1.5 rounded-xl bg-hair px-3 py-2.5 text-[12.5px] leading-normal text-ink2"
+    >
+      <AiLabel confidence={e.confidence} model={e.model} />
+      <p className="m-0 break-words">
+        <span className="font-medium text-ink">Why it matters: </span>
+        {e.whyItMatters}
+      </p>
+      <p className="m-0 break-words">
+        <span className="font-medium text-ink">Recommended action: </span>
+        {e.recommendedAction}
+      </p>
+      <p className="m-0">
+        Cited:{" "}
+        {cited.map((s, i) => (
+          <span key={s.url}>
+            {i > 0 && ", "}
+            <a
+              href={s.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-teal underline"
+            >
+              {s.publisher}
+              <span className="sr-only">, opens in a new tab</span>
+            </a>
+          </span>
+        ))}
+      </p>
+    </section>
   );
 }
 
 function FindingSearch({
   projectId,
   watchlists,
+  blocked,
 }: {
   projectId: string | undefined;
   watchlists: readonly Watchlist[];
+  blocked: string | null;
 }) {
   const [form, setFilters] = useState<FindingFilters>({});
   const filters = { ...form, projectId };
@@ -808,7 +877,7 @@ function FindingSearch({
       ) : (
         <ul aria-label="Search results" className="m-0 flex list-none flex-col gap-2.5 p-0">
           {items.map((f) => (
-            <FindingCard key={f.id} f={f} />
+            <FindingCard key={f.id} f={f} blocked={blocked} />
           ))}
         </ul>
       )}

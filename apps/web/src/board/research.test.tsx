@@ -5,6 +5,7 @@ import {
   IDEMPOTENCY_HEADER,
   IdempotencyKey,
   type Finding,
+  type FindingExplanation,
   type ResearchBrief,
   type ResearchRun,
   type Watchlist,
@@ -395,6 +396,84 @@ describe("research drawer", () => {
       await within(d).findByText(/Can't refresh: Service unavailable Showing what NEXUS had at/),
     ).toBeTruthy();
     expect(within(d).getByRole("list", { name: "Watchlists" })).toBeTruthy();
+  });
+});
+
+describe("FR-RES-08 explanations", () => {
+  const explanation = (f: Finding): FindingExplanation => ({
+    findingId: f.id,
+    whyItMatters: "Streaming lands in the SDK you ship with.",
+    recommendedAction: "Read the release notes before upgrading.",
+    confidence: "MEDIUM",
+    // The second URL isn't one of the finding's sources: the panel never links it.
+    citedUrls: ["https://acme.dev/blog/sdk-2", "https://elsewhere.example/"],
+    model: "claude-test-model",
+    profileVersionId: null,
+    createdAt: NOW,
+  });
+
+  it("Explain on a brief finding shows the AI's take labelled as unverified inference, citing only the finding's sources", async () => {
+    const f = findings[0]!;
+    const calls = board({
+      [`POST /v1/research/findings/${f.id}/explain`]: () => json(explanation(f), 201),
+    });
+    const user = userEvent.setup();
+    renderApp(IN_DRAWER);
+    const d = await drawer();
+    const brief = await within(d).findByRole("list", { name: "Brief findings" });
+    await user.click(within(brief).getByRole("button", { name: `Explain: why it matters, ${f.title}` }));
+    const panel = await within(d).findByRole("region", { name: `AI explanation: ${f.title}` });
+    expect(
+      within(panel).getByText("AI inference: unverified · medium confidence · claude-test-model"),
+    ).toBeTruthy();
+    expect(panel.textContent).toContain("Why it matters: Streaming lands in the SDK you ship with.");
+    expect(panel.textContent).toContain("Recommended action: Read the release notes before upgrading.");
+    const links = within(panel).getAllByRole("link");
+    expect(links.map((a) => a.getAttribute("href"))).toEqual(["https://acme.dev/blog/sdk-2"]);
+    expect(links[0]!.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual([
+      `/v1/research/findings/${f.id}/explain`,
+    ]);
+  });
+
+  it("not configured shows the setup hint; a failure shows the error", async () => {
+    const f = findings[0]!;
+    let reply = json(
+      {
+        error: {
+          code: "CONFLICT",
+          message: "NEXUS needs an AI provider for this. On the home machine create ~/.nexus/ai.json.",
+          details: { reason: "ai_provider_not_configured", runbook: "docs/runbooks/ai-provider.md" },
+        },
+        requestId: "req-x",
+      },
+      409,
+    );
+    board({ [`POST /v1/research/findings/${f.id}/explain`]: () => reply });
+    const user = userEvent.setup();
+    renderApp(IN_DRAWER);
+    const brief = await within(await drawer()).findByRole("list", { name: "Brief findings" });
+    const button = within(brief).getByRole("button", { name: `Explain: why it matters, ${f.title}` });
+    await user.click(button);
+    expect(await within(brief).findByText("AI isn't set up yet")).toBeTruthy();
+
+    reply = apiError(
+      502,
+      "INTERNAL",
+      "The model cited a source outside this finding. Nothing was saved; try again.",
+    );
+    await user.click(button);
+    expect((await within(brief).findByRole("alert")).textContent).toMatch(/Nothing was saved; try again/);
+  });
+
+  it("All is read-only: Explain is disabled with Pick a project first", async () => {
+    const calls = board();
+    renderApp("/?drawer=research");
+    const brief = await within(await drawer()).findByRole("list", { name: "Brief findings" });
+    const btn = within(brief).getAllByRole("button", { name: /^Explain/ })[0] as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(why(btn)).toBe(PICK_PROJECT);
+    expect(calls.some((c) => c.path.endsWith("/explain"))).toBe(false);
   });
 });
 

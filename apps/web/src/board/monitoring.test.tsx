@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { HealthCheck, Incident, MonitoredApp, Notification } from "@nexus/contracts";
+import type { HealthCheck, Incident, IncidentTriage, MonitoredApp, Notification } from "@nexus/contracts";
 import {
   IN_PROJECT,
   ME,
+  apiError,
   OTHER_PROJECT_ID,
   PROJECT_ID,
   json,
@@ -133,9 +134,7 @@ describe("Systems zone", () => {
       expect.stringMatching(/Timed out$/),
       expect.stringMatching(/HTTP error · HTTP 503$/),
     ]);
-    expect(within(d).getByRole("button", { name: "Agent triage" }).getAttribute("aria-disabled")).toBe(
-      "true",
-    );
+    expect((within(d).getByRole("button", { name: "Triage" }) as HTMLButtonElement).disabled).toBe(false);
     expect(within(d).getByRole("button", { name: "Create fix issue" }).getAttribute("aria-disabled")).toBe(
       "true",
     );
@@ -176,6 +175,94 @@ describe("Systems zone", () => {
       true,
     );
     expect(within(d).getByText("This belongs to another project: switch to it first.")).toBeTruthy();
+  });
+});
+
+describe("FR-MON-07 incident triage", () => {
+  const triage = (): IncidentTriage => ({
+    incidentId: INC,
+    hypotheses: [
+      {
+        text: "The upstream returns 503 under load.",
+        confidence: "MEDIUM",
+        evidenceCheckIds: [current.evidence[0]!.id, current.evidence[2]!.id],
+      },
+      {
+        text: "The home host's network dropped.",
+        confidence: "LOW",
+        evidenceCheckIds: [current.evidence[1]!.id],
+      },
+    ],
+    suggestedNextStep: "Look at the app's own logs around the first failure.",
+    model: "claude-test-model",
+    profileVersionId: null,
+    createdAt: NOW,
+  });
+
+  it("shows hypotheses labelled as unverified AI inference, each with its confidence and links to the cited checks", async () => {
+    const calls = board({ [`POST /v1/incidents/${INC}/triage`]: () => json(triage(), 201) });
+    const user = userEvent.setup();
+    renderApp(`${IN_PROJECT}&drawer=incident:${INC}`);
+    const d = await drawer();
+    await user.click(await within(d).findByRole("button", { name: "Triage" }));
+    const panel = await within(d).findByRole("region", { name: "Triage" });
+    expect(within(panel).getByText("AI inference: unverified · claude-test-model")).toBeTruthy();
+    const items = within(within(panel).getByRole("list", { name: "Hypotheses" })).getAllByRole("listitem");
+    expect(items.map((li) => li.textContent)).toEqual([
+      expect.stringMatching(
+        /^The upstream returns 503 under load\.medium confidence · evidence:check at .+check at /,
+      ),
+      expect.stringMatching(/^The home host's network dropped\.low confidence · evidence:check at /),
+    ]);
+    expect(within(panel).getByText(/Look at the app's own logs/)).toBeTruthy();
+    expect(within(d).queryByRole("button", { name: "Triage" })).toBeNull();
+
+    await user.click(within(items[1]!).getByRole("button", { name: /check at/ }));
+    const evidence = within(within(d).getByRole("list", { name: /Evidence/ })).getAllByRole("listitem");
+    expect(document.activeElement).toBe(evidence[1]);
+    expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual([
+      `/v1/incidents/${INC}/triage`,
+    ]);
+  });
+
+  it("not configured shows the setup hint; a failure shows the error and the button stays", async () => {
+    let reply = json(
+      {
+        error: {
+          code: "CONFLICT",
+          message: "NEXUS needs an AI provider for this. On the home machine create ~/.nexus/ai.json.",
+          details: { reason: "ai_provider_not_configured", runbook: "docs/runbooks/ai-provider.md" },
+        },
+        requestId: "req-x",
+      },
+      409,
+    );
+    board({ [`POST /v1/incidents/${INC}/triage`]: () => reply });
+    const user = userEvent.setup();
+    renderApp(`${IN_PROJECT}&drawer=incident:${INC}`);
+    const d = await drawer();
+    await user.click(await within(d).findByRole("button", { name: "Triage" }));
+    expect(await within(d).findByText("AI isn't set up yet")).toBeTruthy();
+    expect(within(d).getByText(/create ~\/\.nexus\/ai\.json/)).toBeTruthy();
+
+    reply = apiError(
+      502,
+      "INTERNAL",
+      "The model didn't produce a valid answer. Nothing was saved; try again.",
+    );
+    await user.click(within(d).getByRole("button", { name: "Triage" }));
+    expect((await within(d).findByRole("alert")).textContent).toMatch(/Nothing was saved; try again/);
+  });
+
+  it("in All the Triage button is disabled with Pick a project first", async () => {
+    const calls = board();
+    renderApp(`/?drawer=incident:${INC}`);
+    const btn = (await within(await drawer()).findByRole("button", { name: "Triage" })) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(document.getElementById(btn.getAttribute("aria-describedby")!)?.textContent).toMatch(
+      /Pick a project first/,
+    );
+    expect(calls.some((c) => c.path.endsWith("/triage"))).toBe(false);
   });
 });
 

@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   CreateWatchlistRequest,
   Finding,
+  FindingExplanation,
   FindingList,
   FindingSearchQuery,
   IDEMPOTENCY_HEADER,
@@ -19,6 +20,7 @@ import {
 import type { Deps } from "../app.ts";
 import { ownerActor } from "../jobs.ts";
 import { owner } from "../routes/owner.ts";
+import { explainFinding, getExplanation } from "./explain.ts";
 import {
   archiveWatchlist,
   createManualRun,
@@ -41,7 +43,7 @@ const ctx = (req: FastifyRequest): Ctx => ({
 });
 
 /** EPIC RES. Registered inside the owner scope: session required, mutations need a trusted Origin. */
-export async function researchRoutes(app: FastifyInstance, { db, research }: Deps) {
+export async function researchRoutes(app: FastifyInstance, { db, research, config }: Deps) {
   const r = app.withTypeProvider<ZodTypeProvider>();
 
   r.get(
@@ -120,5 +122,22 @@ export async function researchRoutes(app: FastifyInstance, { db, research }: Dep
     "/v1/research/findings/:id/read",
     { schema: { params: IdParams, response: { 200: Finding } } },
     async (req) => markRead(db, ctx(req), req.params.id),
+  );
+
+  // FR-RES-08: written once per finding (201), then served from the store (200) without calling the model.
+  r.post(
+    "/v1/research/findings/:id/explain",
+    { schema: { params: IdParams, response: { 200: FindingExplanation, 201: FindingExplanation } } },
+    async (req, reply) => {
+      const { created, explanation } = await explainFinding(db, config.aiFile, ctx(req), req.params.id);
+      reply.code(created ? 201 : 200);
+      return explanation;
+    },
+  );
+
+  r.get(
+    "/v1/research/findings/:id/explanation",
+    { schema: { params: IdParams, response: { 200: FindingExplanation } } },
+    async (req) => getExplanation(db, owner(req).id, req.params.id),
   );
 }
