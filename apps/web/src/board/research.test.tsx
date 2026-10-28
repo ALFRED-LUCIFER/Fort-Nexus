@@ -10,7 +10,23 @@ import {
   type Watchlist,
 } from "@nexus/contracts";
 import { keys } from "../lib/api.ts";
-import { ME, apiError, json, mockFetch, renderApp, runner, type Call } from "../test/helpers.tsx";
+import {
+  BIZ_PROJECT_ID,
+  IN_PROJECT,
+  ME,
+  OTHER_PROJECT_ID,
+  PROJECT_ID,
+  WORKSPACES,
+  apiError,
+  json,
+  mockFetch,
+  project,
+  renderApp,
+  runner,
+  workspaces,
+  type Call,
+} from "../test/helpers.tsx";
+import { PICK_PROJECT } from "./scope.tsx";
 
 const NOW = new Date().toISOString();
 const SOON = new Date(Date.now() + 3 * 3600_000).toISOString();
@@ -19,6 +35,7 @@ const R1 = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 const watchlist = (over: Partial<Watchlist> = {}): Watchlist => ({
   id: W1,
+  projectId: PROJECT_ID,
   name: "AI SDKs",
   keywords: ["sdk"],
   sources: [
@@ -39,6 +56,7 @@ const finding = (over: Partial<Finding> = {}): Finding => {
   const id = `cccccccc-cccc-4ccc-8ccc-${String(++n).padStart(12, "0")}`;
   return {
     id,
+    projectId: PROJECT_ID,
     watchlistId: W1,
     title: "Acme SDK 2.0 released",
     excerpt: "Streaming support lands.",
@@ -134,6 +152,9 @@ beforeEach(() => {
 });
 
 const drawer = () => screen.findByRole("dialog");
+/** The research drawer in the Dev project "home", where watchlists can be created and run. */
+const IN_DRAWER = `${IN_PROJECT}&drawer=research`;
+const why = (el: HTMLElement) => document.getElementById(el.getAttribute("aria-describedby")!)?.textContent;
 
 describe("Research zone", () => {
   it("invites the owner to create a watchlist when there is none", async () => {
@@ -217,7 +238,7 @@ describe("research drawer", () => {
       },
     });
     const user = userEvent.setup();
-    renderApp("/?drawer=research");
+    renderApp(IN_DRAWER);
     const d = await drawer();
     expect(
       await within(d).findByText(/No brief yet\. Run it now, or wait for the scheduled one in/),
@@ -240,7 +261,7 @@ describe("research drawer", () => {
       },
     });
     const user = userEvent.setup();
-    renderApp("/?drawer=research");
+    renderApp(IN_DRAWER);
     const d = await drawer();
     await user.click(await within(d).findByRole("button", { name: "Pause schedule, AI SDKs" }));
     expect(await within(d).findByRole("button", { name: "Resume schedule, AI SDKs" })).toBeTruthy();
@@ -266,7 +287,7 @@ describe("research drawer", () => {
       },
     });
     const user = userEvent.setup();
-    renderApp("/?drawer=research");
+    renderApp(IN_DRAWER);
     const d = await drawer();
     await user.click(await within(d).findByRole("button", { name: "New watchlist" }));
     const form = within(d).getByRole("form", { name: "New watchlist" });
@@ -282,6 +303,7 @@ describe("research drawer", () => {
 
     await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
     expect(calls.find((c) => c.method === "POST")!.body).toEqual({
+      projectId: PROJECT_ID,
       name: "Agents",
       keywords: ["agents", "mcp"],
       sources: [
@@ -298,7 +320,7 @@ describe("research drawer", () => {
     lists = [];
     const calls = board();
     const user = userEvent.setup();
-    renderApp("/?drawer=research");
+    renderApp(IN_DRAWER);
     const d = await drawer();
     await user.click(await within(d).findByRole("button", { name: "New watchlist" }));
     const form = within(d).getByRole("form", { name: "New watchlist" });
@@ -373,5 +395,67 @@ describe("research drawer", () => {
       await within(d).findByText(/Can't refresh: Service unavailable Showing what NEXUS had at/),
     ).toBeTruthy();
     expect(within(d).getByRole("list", { name: "Watchlists" })).toBeTruthy();
+  });
+});
+
+describe("research scope", () => {
+  const research = (c: Call) => c.path.startsWith("/v1/research/") && c.method === "GET";
+
+  it("All is read-only: create, run, pause and weights are disabled with the reason; each watchlist names its project", async () => {
+    const calls = board();
+    renderApp("/?drawer=research");
+    const d = await drawer();
+    const list = await within(d).findByRole("list", { name: "Watchlists" });
+    expect(list.textContent).toMatch(/AI SDKsHome · next brief/);
+    for (const name of ["New watchlist", "Run now, AI SDKs", "Pause schedule, AI SDKs", "Save weights"]) {
+      const btn = within(d).getByRole("button", { name }) as HTMLButtonElement;
+      expect(btn.disabled, name).toBe(true);
+      expect(why(btn), name).toBe(PICK_PROJECT);
+    }
+    expect(calls.filter(research).every((c) => !c.query.has("projectId"))).toBe(true);
+  });
+
+  it("NFR-CNV-05: lists and search are asked for the current project only; the decoy project shows none of home's", async () => {
+    const calls = board({
+      "GET /v1/research/watchlists": (c) =>
+        json({ items: c.query.get("projectId") === PROJECT_ID ? lists : [] }),
+      "GET /v1/research/findings": (c) =>
+        json({ items: c.query.get("projectId") === PROJECT_ID ? findings : [], nextCursor: null }),
+    });
+    const user = userEvent.setup();
+    renderApp(`/?ws=dev&project=${OTHER_PROJECT_ID}&drawer=research`);
+    const d = await drawer();
+    expect(await within(d).findByText(/No watchlists yet/)).toBeTruthy();
+    expect(within(d).queryByText("AI SDKs")).toBeNull();
+    const asked = calls.filter((c) => c.path === "/v1/research/watchlists");
+    expect(asked.map((c) => c.query.get("projectId"))).toEqual(asked.map(() => OTHER_PROJECT_ID));
+
+    await user.click(within(d).getByRole("button", { name: "New watchlist" })); // enabled in a project
+    expect(within(d).getByRole("form", { name: "New watchlist" })).toBeTruthy();
+  });
+
+  it("a Business project can research: its controls are enabled", async () => {
+    board();
+    renderApp(`/?ws=business&project=${BIZ_PROJECT_ID}&drawer=research`);
+    const run = await within(await drawer()).findByRole("button", { name: "Run now, AI SDKs" });
+    expect((run as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("an archived project keeps its research readable but can't create or run", async () => {
+    board({
+      "GET /v1/workspaces": () =>
+        json(
+          workspaces([project({ archivedAt: "2026-10-28T10:00:00.000Z" })], WORKSPACES.items[1]!.projects),
+        ),
+    });
+    renderApp(IN_DRAWER);
+    const d = await drawer();
+    const run = (await within(d).findByRole("button", { name: "Run now, AI SDKs" })) as HTMLButtonElement;
+    await waitFor(() => expect(run.disabled).toBe(true));
+    expect(why(run)).toMatch(/^Home is archived/);
+    expect((within(d).getByRole("button", { name: "New watchlist" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(await within(d).findByRole("list", { name: "Brief findings" })).toBeTruthy();
   });
 });

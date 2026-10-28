@@ -14,8 +14,9 @@ import type {
 } from "@nexus/contracts";
 import { audit, type AuditEntry } from "../audit.ts";
 import type { Db, Tx } from "../db/index.ts";
+import { projects } from "../db/schema.ts";
 import { notFound } from "../errors.ts";
-import type { ProjectScope } from "../scope.ts";
+import { ownerWorkspaceIds, resolveProject } from "../workspaces.ts";
 import { fetchSession, hostLimiter } from "./fetch.ts";
 import { parseFeed, type FeedItem } from "./feed.ts";
 import {
@@ -34,8 +35,10 @@ type WatchlistRow = typeof researchWatchlists.$inferSelect;
 type RunRow = typeof researchRuns.$inferSelect;
 type FindingRow = typeof researchFindings.$inferSelect;
 
-/** Who is asking and for which project; every query and audit record carries it. */
-export type Ctx = { scope: ProjectScope; actor: string; correlationId: string };
+/** Who is asking; every object is resolved against this owner's projects (FR-CSP-01). */
+export type Ctx = { ownerId: string; actor: string; correlationId: string };
+type Scope = { workspaceId: string; projectId: string };
+type Table = typeof researchWatchlists | typeof researchRuns | typeof researchFindings;
 
 const SCHEDULER = "system:research-scheduler";
 const DEDUPE_WINDOW_MS = 14 * 86_400_000;
@@ -43,17 +46,28 @@ const RUN_LIST_LIMIT = 30;
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null);
 
-const inScope = (
-  s: ProjectScope,
-  t: typeof researchWatchlists | typeof researchRuns | typeof researchFindings,
-) => and(eq(t.workspaceId, s.workspaceId), eq(t.projectId, s.projectId));
+/** Lists: one project (404 unless the owner's), or the read-only "All" view across the owner's workspaces. */
+async function visible(db: Db | Tx, ownerId: string, projectId: string | undefined, t: Table) {
+  if (!projectId) return inArray(t.workspaceId, await ownerWorkspaceIds(db, ownerId));
+  const s = await resolveProject(db, ownerId, projectId);
+  return and(eq(t.workspaceId, s.workspaceId), eq(t.projectId, s.projectId));
+}
 
-const record = (tx: Db | Tx, ctx: Ctx, e: Omit<AuditEntry, "actor" | "correlationId">) =>
+/** Reads by id: the row must sit in one of the owner's workspaces, else it doesn't exist for this caller. */
+const owned = async (db: Db | Tx, ownerId: string, t: Table, id: string) =>
+  and(eq(t.id, id), inArray(t.workspaceId, await ownerWorkspaceIds(db, ownerId)));
+
+const record = (
+  tx: Db | Tx,
+  who: { actor: string; correlationId: string },
+  s: Scope,
+  e: Omit<AuditEntry, "actor" | "correlationId">,
+) =>
   audit(tx, {
     ...e,
-    actor: ctx.actor,
-    correlationId: ctx.correlationId,
-    metadata: { ...ctx.scope, ...e.metadata },
+    actor: who.actor,
+    correlationId: who.correlationId,
+    metadata: { workspaceId: s.workspaceId, projectId: s.projectId, ...e.metadata },
   });
 
 export const sourceLabel = (s: ResearchSource) => (s.kind === "FEED" ? s.url : `GitHub releases · ${s.repo}`);
@@ -136,27 +150,31 @@ async function toFindingDtos(db: Db | Tx, rows: FindingRow[]): Promise<Finding[]
 
 // ── Watchlists ──
 
-export async function listWatchlists(db: Db, scope: ProjectScope) {
+export async function listWatchlists(db: Db, ownerId: string, projectId?: string) {
   const rows = await db
     .select()
     .from(researchWatchlists)
-    .where(and(inScope(scope, researchWatchlists), isNull(researchWatchlists.archivedAt)))
+    .where(
+      and(await visible(db, ownerId, projectId, researchWatchlists), isNull(researchWatchlists.archivedAt)),
+    )
     .orderBy(researchWatchlists.id);
   return rows.map(toWatchlistDto);
 }
 
 export async function createWatchlist(db: Db, ctx: Ctx, body: CreateWatchlistRequest) {
   return db.transaction(async (tx) => {
+    const s = await resolveProject(tx, ctx.ownerId, body.projectId, { write: true });
     const [w] = await tx
       .insert(researchWatchlists)
       .values({
-        ...ctx.scope,
         ...body,
+        workspaceId: s.workspaceId,
+        projectId: s.projectId,
         nextRunAt: nextRunAt(body.schedule, new Date()),
         createdBy: ctx.actor,
       })
       .returning();
-    await record(tx, ctx, {
+    await record(tx, ctx, s, {
       action: "research.watchlist.create",
       resourceType: "research_watchlist",
       resourceId: w!.id,
@@ -166,25 +184,31 @@ export async function createWatchlist(db: Db, ctx: Ctx, body: CreateWatchlistReq
   });
 }
 
-async function lockWatchlist(tx: Tx, scope: ProjectScope, id: string) {
+/** The owner's live watchlist, row-locked; its project must accept writes (archived → 409). */
+async function lockWatchlist(tx: Tx, ownerId: string, id: string) {
   const [w] = await tx
     .select()
     .from(researchWatchlists)
-    .where(
-      and(
-        eq(researchWatchlists.id, id),
-        inScope(scope, researchWatchlists),
-        isNull(researchWatchlists.archivedAt),
-      ),
-    )
+    .where(and(await owned(tx, ownerId, researchWatchlists, id), isNull(researchWatchlists.archivedAt)))
     .for("update");
   if (!w) throw notFound("Watchlist");
+  await resolveProject(tx, ownerId, w.projectId, { write: true });
   return w;
+}
+
+/** For other modules (automations): the owner's live watchlist, or 404. */
+export async function getWatchlist(db: Db, ownerId: string, id: string): Promise<Watchlist> {
+  const [w] = await db
+    .select()
+    .from(researchWatchlists)
+    .where(and(await owned(db, ownerId, researchWatchlists, id), isNull(researchWatchlists.archivedAt)));
+  if (!w) throw notFound("Watchlist");
+  return toWatchlistDto(w);
 }
 
 export async function updateWatchlist(db: Db, ctx: Ctx, id: string, body: UpdateWatchlistRequest) {
   return db.transaction(async (tx) => {
-    await lockWatchlist(tx, ctx.scope, id);
+    await lockWatchlist(tx, ctx.ownerId, id);
     const [w] = await tx
       .update(researchWatchlists)
       .set({
@@ -194,7 +218,7 @@ export async function updateWatchlist(db: Db, ctx: Ctx, id: string, body: Update
       })
       .where(eq(researchWatchlists.id, id))
       .returning();
-    await record(tx, ctx, {
+    await record(tx, ctx, w!, {
       action: "research.watchlist.update",
       resourceType: "research_watchlist",
       resourceId: id,
@@ -210,12 +234,12 @@ export async function updateWatchlist(db: Db, ctx: Ctx, id: string, body: Update
 /** Archives: stops scheduling and hides it from the list; its runs and findings stay searchable. */
 export async function archiveWatchlist(db: Db, ctx: Ctx, id: string) {
   await db.transaction(async (tx) => {
-    await lockWatchlist(tx, ctx.scope, id);
+    const w = await lockWatchlist(tx, ctx.ownerId, id);
     await tx
       .update(researchWatchlists)
       .set({ archivedAt: new Date(), nextRunAt: null, updatedAt: new Date() })
       .where(eq(researchWatchlists.id, id));
-    await record(tx, ctx, {
+    await record(tx, ctx, w, {
       action: "research.watchlist.archive",
       resourceType: "research_watchlist",
       resourceId: id,
@@ -225,15 +249,24 @@ export async function archiveWatchlist(db: Db, ctx: Ctx, id: string) {
 
 // ── Runs ──
 
-/** A MANUAL run; replaying the same Idempotency-Key returns the same run (`created: false`). */
-export async function createManualRun(db: Db, ctx: Ctx, watchlistId: string, idempotencyKey: string) {
+/**
+ * A MANUAL run; replaying the same idempotency key returns the same run. The caller hands it to
+ * `Research.start`, which ignores a run that is settled or already executing.
+ */
+export async function createManualRun(
+  db: Db,
+  ctx: Ctx,
+  watchlistId: string,
+  idempotencyKey: string,
+): Promise<ResearchRun> {
   return db.transaction(async (tx) => {
-    const w = await lockWatchlist(tx, ctx.scope, watchlistId);
+    const w = await lockWatchlist(tx, ctx.ownerId, watchlistId);
     const now = new Date();
     const [run] = await tx
       .insert(researchRuns)
       .values({
-        ...ctx.scope,
+        workspaceId: w.workspaceId,
+        projectId: w.projectId,
         watchlistId: w.id,
         trigger: "MANUAL",
         idempotencyKey,
@@ -247,25 +280,28 @@ export async function createManualRun(db: Db, ctx: Ctx, watchlistId: string, ide
         .select()
         .from(researchRuns)
         .where(and(eq(researchRuns.watchlistId, w.id), eq(researchRuns.idempotencyKey, idempotencyKey)));
-      return { run: toRunDto(existing!), created: false };
+      return toRunDto(existing!);
     }
     await tx.update(researchWatchlists).set({ lastRunAt: now }).where(eq(researchWatchlists.id, w.id));
-    await record(tx, ctx, {
+    await record(tx, ctx, w, {
       action: "research.run.start",
       resourceType: "research_run",
       resourceId: run.id,
       metadata: { watchlistId: w.id, trigger: "MANUAL" },
     });
-    return { run: toRunDto(run), created: true };
+    return toRunDto(run);
   });
 }
 
-export async function listRuns(db: Db, scope: ProjectScope, watchlistId?: string) {
+export async function listRuns(db: Db, ownerId: string, q: { projectId?: string; watchlistId?: string }) {
   const rows = await db
     .select()
     .from(researchRuns)
     .where(
-      and(inScope(scope, researchRuns), watchlistId ? eq(researchRuns.watchlistId, watchlistId) : undefined),
+      and(
+        await visible(db, ownerId, q.projectId, researchRuns),
+        q.watchlistId ? eq(researchRuns.watchlistId, q.watchlistId) : undefined,
+      ),
     )
     .orderBy(desc(researchRuns.id))
     .limit(RUN_LIST_LIMIT); // shortcut: newest 30 runs only; add a cursor when someone needs older briefs here
@@ -273,11 +309,11 @@ export async function listRuns(db: Db, scope: ProjectScope, watchlistId?: string
 }
 
 /** FR-RES-08: one run and the findings it first saw, best score first. */
-export async function getBrief(db: Db, scope: ProjectScope, runId: string): Promise<ResearchBrief> {
+export async function getBrief(db: Db, ownerId: string, runId: string): Promise<ResearchBrief> {
   const [run] = await db
     .select()
     .from(researchRuns)
-    .where(and(eq(researchRuns.id, runId), inScope(scope, researchRuns)));
+    .where(await owned(db, ownerId, researchRuns, runId));
   if (!run) throw notFound("Research run");
   const rows = await db.select().from(researchFindings).where(eq(researchFindings.firstRunId, run.id));
   const findings = await toFindingDtos(db, rows);
@@ -289,14 +325,10 @@ export async function getBrief(db: Db, scope: ProjectScope, runId: string): Prom
 const dayStart = (d: string) => new Date(`${d}T00:00:00Z`);
 
 /** FR-RES-09: Postgres full-text over title + excerpt; newest first by uuidv7 id. */
-export async function searchFindings(
-  db: Db,
-  scope: ProjectScope,
-  q: Omit<FindingSearchQuery, "cursor"> & { cursor?: string },
-): Promise<FindingList> {
+export async function searchFindings(db: Db, ownerId: string, q: FindingSearchQuery): Promise<FindingList> {
   const f = researchFindings;
   const where: (SQL | undefined)[] = [
-    inScope(scope, f),
+    await visible(db, ownerId, q.projectId, f),
     q.q
       ? sql`to_tsvector('english', ${f.title} || ' ' || ${f.excerpt}) @@ websearch_to_tsquery('english', ${q.q})`
       : undefined,
@@ -326,9 +358,10 @@ export async function markRead(db: Db, ctx: Ctx, id: string) {
     const [f] = await tx
       .select()
       .from(researchFindings)
-      .where(and(eq(researchFindings.id, id), inScope(ctx.scope, researchFindings)))
+      .where(await owned(tx, ctx.ownerId, researchFindings, id))
       .for("update");
     if (!f) throw notFound("Finding");
+    await resolveProject(tx, ctx.ownerId, f.projectId, { write: true }); // an archived project is read-only
     let row = f;
     if (!f.readAt) {
       [row] = (await tx
@@ -337,7 +370,7 @@ export async function markRead(db: Db, ctx: Ctx, id: string) {
         .where(eq(researchFindings.id, id))
         .returning()) as [FindingRow];
       // Findings are part of their watchlist; the finding id goes in metadata.
-      await record(tx, ctx, {
+      await record(tx, ctx, f, {
         action: "research.finding.read",
         resourceType: "research_watchlist",
         resourceId: f.watchlistId,
@@ -460,12 +493,8 @@ export function createResearch(db: Db, log: FastifyBaseLogger, shutdown: AbortSi
   // processes, replace this with a heartbeat lease per run.
   const bootedAt = new Date();
   const limiter = hostLimiter();
-  const inflight = new Set<Promise<void>>();
-  const system = (correlationId: string, r: ProjectScope): Ctx => ({
-    scope: { workspaceId: r.workspaceId, projectId: r.projectId },
-    actor: SCHEDULER,
-    correlationId,
-  });
+  const inflight = new Map<string, Promise<void>>();
+  const system = (correlationId: string) => ({ actor: SCHEDULER, correlationId });
 
   async function fail(runId: string, error: string) {
     await db.transaction(async (tx) => {
@@ -475,7 +504,7 @@ export function createResearch(db: Db, log: FastifyBaseLogger, shutdown: AbortSi
         .where(and(eq(researchRuns.id, runId), eq(researchRuns.status, "RUNNING")))
         .returning();
       if (run)
-        await record(tx, system(run.id, run), {
+        await record(tx, system(run.id), run, {
           action: "research.run.fail",
           resourceType: "research_run",
           resourceId: run.id,
@@ -487,6 +516,8 @@ export function createResearch(db: Db, log: FastifyBaseLogger, shutdown: AbortSi
 
   async function execute(runId: string) {
     const [run] = await db.select().from(researchRuns).where(eq(researchRuns.id, runId));
+    // A replayed run that has settled, or one a restart left behind (the tick fails it), never runs (again).
+    if (run!.status !== "RUNNING" || run!.startedAt < bootedAt) return;
     const [w] = await db.select().from(researchWatchlists).where(eq(researchWatchlists.id, run!.watchlistId));
     const session = fetchSession(limiter, shutdown);
     const skipped: ResearchRun["skippedSources"] = [];
@@ -523,7 +554,7 @@ export function createResearch(db: Db, log: FastifyBaseLogger, shutdown: AbortSi
         .update(researchRuns)
         .set({ status, finishedAt: new Date(), newFindings, skippedSources: skipped })
         .where(eq(researchRuns.id, runId));
-      await record(tx, system(runId, w!), {
+      await record(tx, system(runId), w!, {
         action: "research.run.finish",
         resourceType: "research_run",
         resourceId: runId,
@@ -533,8 +564,9 @@ export function createResearch(db: Db, log: FastifyBaseLogger, shutdown: AbortSi
     });
   }
 
-  /** Runs `runId` in the background; the outcome lands on the run row. */
+  /** Runs `runId` in the background; the outcome lands on the run row. A run already executing is left alone. */
   function start(runId: string) {
+    if (inflight.has(runId)) return;
     const p = execute(runId)
       .catch(async (err: unknown) => {
         log.error({ err, runId }, "research run failed");
@@ -546,8 +578,8 @@ export function createResearch(db: Db, log: FastifyBaseLogger, shutdown: AbortSi
         );
       })
       .catch((err: unknown) => log.error({ err, runId }, "could not record research run failure"))
-      .finally(() => inflight.delete(p));
-    inflight.add(p);
+      .finally(() => inflight.delete(runId));
+    inflight.set(runId, p);
   }
 
   /** RES-G01: claims each due window exactly once (unique per watchlist + local date) and starts only those runs. */
@@ -558,10 +590,18 @@ export function createResearch(db: Db, log: FastifyBaseLogger, shutdown: AbortSi
       .where(and(eq(researchRuns.status, "RUNNING"), lt(researchRuns.startedAt, bootedAt)));
     for (const r of stale) await fail(r.id, "The API restarted during this run; it was not retried.");
 
+    // An archived project's watchlists wait; once unarchived, the next tick runs one brief for the current window.
     const due = await db
       .select({ id: researchWatchlists.id })
       .from(researchWatchlists)
-      .where(and(lte(researchWatchlists.nextRunAt, now), isNull(researchWatchlists.archivedAt)));
+      .innerJoin(projects, eq(projects.id, researchWatchlists.projectId))
+      .where(
+        and(
+          lte(researchWatchlists.nextRunAt, now),
+          isNull(researchWatchlists.archivedAt),
+          isNull(projects.archivedAt),
+        ),
+      );
     for (const { id } of due) {
       const runId = await db.transaction(async (tx) => {
         const [w] = await tx
@@ -595,7 +635,7 @@ export function createResearch(db: Db, log: FastifyBaseLogger, shutdown: AbortSi
           .set({ nextRunAt: next, ...(run ? { lastRunAt: now } : {}) })
           .where(eq(researchWatchlists.id, w.id));
         if (run)
-          await record(tx, system(run.id, w), {
+          await record(tx, system(run.id), w, {
             action: "research.run.start",
             resourceType: "research_run",
             resourceId: run.id,
@@ -611,7 +651,7 @@ export function createResearch(db: Db, log: FastifyBaseLogger, shutdown: AbortSi
     tick,
     start,
     close: async () => {
-      await Promise.allSettled(inflight);
+      await Promise.allSettled(inflight.values());
     },
   };
 }

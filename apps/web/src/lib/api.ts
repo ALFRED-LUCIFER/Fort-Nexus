@@ -216,7 +216,11 @@ export const api = {
     ),
   decideProposal: (id: string, body: ProposalDecisionRequest) =>
     request(`/v1/conversations/proposals/${encodeURIComponent(id)}/decision`, ActionProposal, post({}, body)),
-  watchlists: () => request("/v1/research/watchlists", WatchlistList).then((l) => l.items),
+  watchlists: (projectId: string | undefined) =>
+    request(
+      `/v1/research/watchlists${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`,
+      WatchlistList,
+    ).then((l) => l.items),
   createWatchlist: (body: z.input<typeof CreateWatchlistRequest>) =>
     request("/v1/research/watchlists", Watchlist, post({}, body)),
   updateWatchlist: (id: string, body: UpdateWatchlistRequest) =>
@@ -270,6 +274,7 @@ export const keys = {
   thread: (id: string) => ["conversations", id] as const,
   research: ["research"] as const,
   watchlists: ["research", "watchlists"] as const,
+  watchlistsOf: (projectId: string | undefined) => ["research", "watchlists", projectId ?? "all"] as const,
   researchRuns: (watchlistId: string) => ["research", "runs", watchlistId] as const,
   brief: (runId: string) => ["research", "brief", runId] as const,
   findings: (f: FindingFilters) => ["research", "findings", f] as const,
