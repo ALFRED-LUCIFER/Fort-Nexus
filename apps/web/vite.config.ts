@@ -15,5 +15,7 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     css: false,
+    // A test can wait on several find* calls (5 s each, see setup.ts); the 5 s default cut them off on slow CI.
+    testTimeout: 20_000,
   },
 });

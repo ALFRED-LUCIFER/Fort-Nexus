@@ -290,7 +290,8 @@ const auditFor = (resourceId: string, action: string) =>
   appDb.db
     .select()
     .from(auditRecords)
-    .where(and(eq(auditRecords.resourceId, resourceId), eq(auditRecords.action, action)));
+    .where(and(eq(auditRecords.resourceId, resourceId), eq(auditRecords.action, action)))
+    .orderBy(auditRecords.id); // uuidv7: oldest first, so [0] is the first call and .at(-1) the latest
 
 describe("business connector registry", () => {
   it("requires the owner session and a trusted origin", async () => {
