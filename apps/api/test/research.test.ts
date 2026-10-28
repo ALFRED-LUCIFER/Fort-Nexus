@@ -4,17 +4,24 @@ import type { z } from "zod";
 import type {
   CreateWatchlistRequest,
   FindingList,
+  Project,
   ResearchBrief,
   ResearchRun,
   Watchlist,
   WatchlistList,
+  WorkspaceList,
 } from "@nexus/contracts";
-import { answer } from "../src/conversations/tools.ts";
 import { createDb } from "../src/db/index.ts";
 import { auditRecords } from "../src/db/schema.ts";
-import { P1_SCOPE } from "../src/scope.ts";
 import { researchRuns, researchWatchlists } from "../src/research/schema.ts";
-import { createResearch } from "../src/research/service.ts";
+import {
+  createManualRun,
+  createResearch,
+  getWatchlist,
+  markRead,
+  searchFindings,
+  updateWatchlist,
+} from "../src/research/service.ts";
 import { localDate, nextSlot } from "../src/research/schedule.ts";
 import { createTestApp, ownerSession, type TestApp } from "./helpers/owner-session.ts";
 
@@ -22,6 +29,11 @@ import { createTestApp, ownerSession, type TestApp } from "./helpers/owner-sessi
 let t: TestApp;
 let cookie: string;
 let db: ReturnType<typeof createDb>;
+let ownerId: string;
+let ws: WorkspaceList;
+// Project A holds the data; B is the decoy (NFR-CNV-05).
+let A: Project;
+let B: Project;
 let site: Record<string, () => Response> = {};
 let fetches: { url: string; init: RequestInit }[] = [];
 let unexpected: string[] = [];
@@ -53,8 +65,20 @@ const send = (method: string, url: string, payload?: unknown, headers: Record<st
     ...(payload === undefined ? {} : { payload: payload as object }),
   });
 
+async function newProject(mode: "DEV" | "BUSINESS", slug: string) {
+  const workspaceId = ws.items.find((w) => w.mode === mode)!.id;
+  const res = await send("POST", `/v1/workspaces/${workspaceId}/projects`, { name: slug, slug });
+  expect(res.statusCode, res.body).toBe(201);
+  return res.json<Project>();
+}
+
 async function createWatchlist(body: Partial<z.input<typeof CreateWatchlistRequest>>) {
-  const res = await send("POST", "/v1/research/watchlists", { name: "AI SDKs", schedule, ...body });
+  const res = await send("POST", "/v1/research/watchlists", {
+    projectId: A.id,
+    name: "AI SDKs",
+    schedule,
+    ...body,
+  });
   expect(res.statusCode, res.body).toBe(201);
   return res.json<Watchlist>();
 }
@@ -81,6 +105,10 @@ beforeAll(async () => {
   t = await createTestApp();
   cookie = await ownerSession(t);
   db = createDb(t.databaseUrl);
+  ownerId = (await send("GET", "/v1/me")).json<{ id: string }>().id;
+  ws = (await send("GET", "/v1/workspaces")).json<WorkspaceList>();
+  A = await newProject("DEV", "research-a");
+  B = await newProject("DEV", "research-b");
 });
 afterAll(async () => {
   await t.app.close();
@@ -148,7 +176,7 @@ describe("watchlists", () => {
     ]);
     for (const a of audits) {
       expect(a.actor).toMatch(/^user:/);
-      expect(a.metadata).toMatchObject(P1_SCOPE);
+      expect(a.metadata).toMatchObject({ workspaceId: A.workspaceId, projectId: A.id });
     }
     expect(audits[0]!.correlationId).toMatch(/^[0-9a-f-]{36}$/);
   });
@@ -246,7 +274,8 @@ describe("runs", () => {
     const [stale] = await db.db
       .insert(researchRuns)
       .values({
-        ...P1_SCOPE,
+        workspaceId: A.workspaceId,
+        projectId: A.id,
         watchlistId: w.id,
         trigger: "SCHEDULED",
         windowDate: "2026-01-01",
@@ -356,25 +385,14 @@ describe("pipeline", () => {
     const first = await finished((await runNow(w.id)).id);
     expect(first.findings.map((f) => [f.title, f.label])).toEqual([[claim, "UNVERIFIED"]]);
 
-    // Talk relays it as the publisher's claim, with the finding as its source.
-    const talk = await answer(
-      { kind: "RESEARCH_SEARCH", query: "trillion agent market" },
-      {
-        db: db.db,
-        github: null,
-        ownerId: "owner",
-        subjectJobId: null,
-        connectorsDir: "/nonexistent",
-        correlationId: "c",
-      },
-    );
-    expect(talk.text).toContain(`blog.example claims: "${claim}" (unverified`);
-    expect(talk.sources).toEqual([
-      expect.objectContaining({
-        kind: "FINDING",
-        id: first.findings[0]!.id,
-        url: "https://blog.example/market",
-      }),
+    // Talk's RESEARCH_SEARCH reads through this call with the thread's project; the label travels with it.
+    const hits = await searchFindings(db.db, ownerId, {
+      projectId: A.id,
+      q: "trillion agent market",
+      limit: 5,
+    });
+    expect(hits.items.map((f) => [f.id, f.label, f.sources[0]!.publisher])).toEqual([
+      [first.findings[0]!.id, "UNVERIFIED", "blog.example"],
     ]);
 
     await send("PATCH", `/v1/research/watchlists/${w.id}`, {
@@ -498,5 +516,141 @@ describe("findings search", () => {
     expect((await send("GET", "/v1/research/findings?cursor=not-a-uuid")).statusCode).toBe(400);
     expect((await send("POST", `/v1/research/findings/${crypto.randomUUID()}/read`)).statusCode).toBe(404);
     expect((await send("GET", `/v1/research/runs/${crypto.randomUUID()}`)).statusCode).toBe(404);
+  });
+});
+
+describe("project scope (decoy project B)", () => {
+  let w: Watchlist;
+  let brief: ResearchBrief;
+  beforeEach(async () => {
+    if (w) return;
+    site["https://scope.example/robots.txt"] = allowAll;
+    site["https://scope.example/a.xml"] = () =>
+      rss([{ title: "Quokka runtime ships edge caching", link: "https://scope.example/quokka" }]);
+    w = await createWatchlist({
+      name: "Only in A",
+      sources: [feed("https://scope.example/a.xml", "PRIMARY")],
+    });
+    brief = await finished((await runNow(w.id)).id);
+    expect(brief.findings).toHaveLength(1);
+  });
+
+  const ids = async (url: string) =>
+    (await send("GET", url)).json<{ items: { id: string }[] }>().items.map((i) => i.id);
+
+  it("NFR-CNV-05: B's watchlists, runs and findings never contain A's; All aggregates the owner's projects", async () => {
+    expect(w.projectId).toBe(A.id);
+    expect(brief.findings[0]!.projectId).toBe(A.id);
+
+    expect(await ids(`/v1/research/watchlists?projectId=${B.id}`)).toEqual([]);
+    expect(await ids(`/v1/research/runs?projectId=${B.id}`)).toEqual([]);
+    expect(await ids(`/v1/research/runs?projectId=${B.id}&watchlistId=${w.id}`)).toEqual([]);
+    expect(await ids(`/v1/research/findings?projectId=${B.id}&q=quokka`)).toEqual([]);
+    expect(await ids(`/v1/research/findings?projectId=${B.id}&watchlistId=${w.id}`)).toEqual([]);
+    // Talk in B searches through the same call and sees nothing of A.
+    expect((await searchFindings(db.db, ownerId, { projectId: B.id, q: "quokka", limit: 5 })).items).toEqual(
+      [],
+    );
+
+    expect(await ids(`/v1/research/watchlists?projectId=${A.id}`)).toContain(w.id);
+    expect(await ids(`/v1/research/findings?projectId=${A.id}&q=quokka`)).toEqual([brief.findings[0]!.id]);
+    expect(await ids("/v1/research/watchlists")).toContain(w.id);
+    expect(await ids("/v1/research/findings?q=quokka")).toEqual([brief.findings[0]!.id]);
+    expect(await ids(`/v1/research/runs?watchlistId=${w.id}`)).toEqual([brief.run.id]);
+  });
+
+  it("NFR-CNV-05: another owner can't list, read or change A's objects; an unknown project is a 404", async () => {
+    const stranger = { ownerId: "someone-else", actor: "user:someone-else", correlationId: "c" };
+    expect((await searchFindings(db.db, stranger.ownerId, { q: "quokka", limit: 5 })).items).toEqual([]);
+    await expect(
+      searchFindings(db.db, stranger.ownerId, { projectId: A.id, limit: 5 }),
+    ).rejects.toMatchObject({ statusCode: 404 });
+    await expect(getWatchlist(db.db, stranger.ownerId, w.id)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(updateWatchlist(db.db, stranger, w.id, { name: "mine now" })).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    await expect(createManualRun(db.db, stranger, w.id, "stranger-key")).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    await expect(markRead(db.db, stranger, brief.findings[0]!.id)).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    expect((await getWatchlist(db.db, ownerId, w.id)).name).toBe("Only in A");
+
+    for (const url of [
+      `/v1/research/watchlists?projectId=${crypto.randomUUID()}`,
+      `/v1/research/runs?projectId=${crypto.randomUUID()}`,
+      `/v1/research/findings?projectId=${crypto.randomUUID()}`,
+    ])
+      expect((await send("GET", url)).statusCode, url).toBe(404);
+    const foreign = await send("POST", "/v1/research/watchlists", {
+      projectId: crypto.randomUUID(),
+      name: "x",
+      schedule,
+      sources: [feed("https://scope.example/a.xml", "PRIMARY")],
+    });
+    expect(foreign.statusCode).toBe(404);
+    const unscoped = await send("POST", "/v1/research/watchlists", {
+      name: "x",
+      schedule,
+      sources: [feed("https://scope.example/a.xml", "PRIMARY")],
+    });
+    expect(unscoped.statusCode).toBe(400);
+  });
+
+  it("createManualRun (automations): pinned ctx, the same key replays the same run", async () => {
+    const ctx = { ownerId, actor: "automation:test", correlationId: crypto.randomUUID() };
+    const run = await createManualRun(db.db, ctx, w.id, "automation:c1:k1");
+    expect(run).toMatchObject({ watchlistId: w.id, trigger: "MANUAL", status: "RUNNING" });
+    expect((await createManualRun(db.db, ctx, w.id, "automation:c1:k1")).id).toBe(run.id);
+    const [start] = await db.db.select().from(auditRecords).where(eq(auditRecords.resourceId, run.id));
+    expect(start).toMatchObject({ action: "research.run.start", actor: "automation:test" });
+    expect(start!.metadata).toMatchObject({ workspaceId: A.workspaceId, projectId: A.id });
+    await db.db.update(researchRuns).set({ status: "FAILED" }).where(eq(researchRuns.id, run.id));
+  });
+
+  it("an archived project is read-only (409) and its schedule waits; a Business project can watch too", async () => {
+    const p = await newProject("DEV", "research-archived");
+    site["https://archived.example/robots.txt"] = allowAll;
+    site["https://archived.example/feed.xml"] = () => rss([]);
+    const pw = await createWatchlist({
+      projectId: p.id,
+      sources: [feed("https://archived.example/feed.xml", "PRIMARY")],
+    });
+    expect((await send("PATCH", `/v1/projects/${p.id}`, { archived: true })).statusCode).toBe(200);
+
+    expect((await send("PATCH", `/v1/research/watchlists/${pw.id}`, { name: "x" })).statusCode).toBe(409);
+    expect((await send("DELETE", `/v1/research/watchlists/${pw.id}`)).statusCode).toBe(409);
+    const run = await send("POST", `/v1/research/watchlists/${pw.id}/run`, undefined, {
+      "idempotency-key": "archived-key",
+    });
+    expect(run.statusCode).toBe(409);
+    const create = await send("POST", "/v1/research/watchlists", {
+      projectId: p.id,
+      name: "x",
+      schedule,
+      sources: [feed("https://archived.example/feed.xml", "PRIMARY")],
+    });
+    expect(create.statusCode).toBe(409);
+    expect(await ids(`/v1/research/watchlists?projectId=${p.id}`)).toEqual([pw.id]); // history stays readable
+
+    // The scheduler skips it while archived and resumes with one brief once unarchived.
+    const slot = nextSlot(schedule, new Date(Date.now() - 86_400_000));
+    await db.db.update(researchWatchlists).set({ nextRunAt: slot }).where(eq(researchWatchlists.id, pw.id));
+    const scheduler = createResearch(db.db, t.app.log, new AbortController().signal);
+    await scheduler.tick();
+    const runsOf = () => db.db.select().from(researchRuns).where(eq(researchRuns.watchlistId, pw.id));
+    expect(await runsOf()).toEqual([]);
+    await send("PATCH", `/v1/projects/${p.id}`, { archived: false });
+    await scheduler.tick();
+    expect(await runsOf()).toHaveLength(1);
+    await scheduler.close();
+
+    const shop = await newProject("BUSINESS", "research-shop");
+    const bw = await createWatchlist({
+      projectId: shop.id,
+      sources: [feed("https://archived.example/feed.xml", "SECONDARY")],
+    });
+    expect(bw.projectId).toBe(shop.id);
   });
 });

@@ -8,6 +8,7 @@ import {
   FindingSearchQuery,
   IDEMPOTENCY_HEADER,
   IdempotencyKey,
+  ProjectFilterQuery,
   ResearchBrief,
   ResearchRun,
   ResearchRunList,
@@ -18,7 +19,6 @@ import {
 import type { Deps } from "../app.ts";
 import { ownerActor } from "../jobs.ts";
 import { owner } from "../routes/owner.ts";
-import { projectScope } from "../scope.ts";
 import {
   archiveWatchlist,
   createManualRun,
@@ -35,7 +35,7 @@ import {
 const IdParams = z.object({ id: z.uuid() });
 
 const ctx = (req: FastifyRequest): Ctx => ({
-  scope: projectScope(),
+  ownerId: owner(req).id,
   actor: ownerActor(owner(req).id),
   correlationId: req.id,
 });
@@ -44,9 +44,11 @@ const ctx = (req: FastifyRequest): Ctx => ({
 export async function researchRoutes(app: FastifyInstance, { db, research }: Deps) {
   const r = app.withTypeProvider<ZodTypeProvider>();
 
-  r.get("/v1/research/watchlists", { schema: { response: { 200: WatchlistList } } }, async () => ({
-    items: await listWatchlists(db, projectScope()),
-  }));
+  r.get(
+    "/v1/research/watchlists",
+    { schema: { querystring: ProjectFilterQuery, response: { 200: WatchlistList } } },
+    async (req) => ({ items: await listWatchlists(db, owner(req).id, req.query.projectId) }),
+  );
 
   r.post(
     "/v1/research/watchlists",
@@ -79,13 +81,8 @@ export async function researchRoutes(app: FastifyInstance, { db, research }: Dep
       },
     },
     async (req, reply) => {
-      const { run, created } = await createManualRun(
-        db,
-        ctx(req),
-        req.params.id,
-        req.headers[IDEMPOTENCY_HEADER],
-      );
-      if (created) research.start(run.id);
+      const run = await createManualRun(db, ctx(req), req.params.id, req.headers[IDEMPOTENCY_HEADER]);
+      if (run.status === "RUNNING") research.start(run.id);
       reply.code(202);
       return run;
     },
@@ -95,17 +92,17 @@ export async function researchRoutes(app: FastifyInstance, { db, research }: Dep
     "/v1/research/runs",
     {
       schema: {
-        querystring: z.object({ watchlistId: z.uuid().optional() }),
+        querystring: ProjectFilterQuery.extend({ watchlistId: z.uuid().optional() }),
         response: { 200: ResearchRunList },
       },
     },
-    async (req) => ({ items: await listRuns(db, projectScope(), req.query.watchlistId) }),
+    async (req) => ({ items: await listRuns(db, owner(req).id, req.query) }),
   );
 
   r.get(
     "/v1/research/runs/:id",
     { schema: { params: IdParams, response: { 200: ResearchBrief } } },
-    async (req) => getBrief(db, projectScope(), req.params.id),
+    async (req) => getBrief(db, owner(req).id, req.params.id),
   );
 
   r.get(
@@ -116,7 +113,7 @@ export async function researchRoutes(app: FastifyInstance, { db, research }: Dep
         response: { 200: FindingList },
       },
     },
-    async (req) => searchFindings(db, projectScope(), req.query),
+    async (req) => searchFindings(db, owner(req).id, req.query),
   );
 
   r.post(

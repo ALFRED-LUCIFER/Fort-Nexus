@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useId, useState, type FormEvent, type ReactNode } from "react";
 import {
   useInfiniteQuery,
   useMutation,
@@ -18,8 +18,9 @@ import {
   type Watchlist,
 } from "@nexus/contracts";
 import { api, keys, type FindingFilters } from "../lib/api.ts";
-import { ago, clock, until, useNow } from "../lib/queries.ts";
+import { ago, clock, until, useNow, useWorkspaces } from "../lib/queries.ts";
 import { Drawer, DrawerHeader } from "./Drawer.tsx";
+import { useScope, type Scope } from "./scope.tsx";
 import { EmptyZone } from "./zones.tsx";
 
 const POLL_MS = 30_000;
@@ -66,8 +67,20 @@ const WEIGHTS: [keyof ScoringWeights, string][] = [
   ["opportunity", "Opportunity"],
 ];
 
-export const useWatchlists = () =>
-  useQuery({ queryKey: keys.watchlists, queryFn: api.watchlists, refetchInterval: POLL_MS });
+/** The current project's watchlists, or every project's in the read-only All view. */
+export function useWatchlists() {
+  const scope = useScope();
+  const projectId = scope.project?.id;
+  return useQuery({
+    queryKey: keys.watchlistsOf(projectId),
+    queryFn: () => api.watchlists(projectId),
+    enabled: scope.ready,
+    refetchInterval: POLL_MS,
+  });
+}
+
+/** Research works in projects of either mode; only All (no project) and archived projects are read-only. */
+const researchBlocked = (scope: Scope) => (scope.project && !scope.project.archivedAt ? null : scope.blocked);
 
 const scheduleText = (w: Watchlist) =>
   `${w.schedule.localTime} ${w.schedule.timezone} · ${
@@ -142,10 +155,11 @@ export function ResearchZone({
   onOpen: () => void;
 }) {
   const now = useNow(30_000);
+  const projectId = useScope().project?.id;
   const has = !!watchlists.data?.length;
   const findings = useQuery({
-    queryKey: keys.findings({ limit: PAGE }),
-    queryFn: () => api.findings({ limit: PAGE }),
+    queryKey: keys.findings({ projectId, limit: PAGE }),
+    queryFn: () => api.findings({ projectId, limit: PAGE }),
     enabled: has,
     refetchInterval: POLL_MS,
   });
@@ -217,14 +231,27 @@ export function ResearchDrawer({ banner, onClose }: { banner?: ReactNode; onClos
 }
 
 function ResearchBody() {
+  const scope = useScope();
+  const blocked = researchBlocked(scope);
+  const blockedId = useId();
+  const workspaces = useWorkspaces();
   const watchlists = useWatchlists();
   const [selected, setSelected] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const items = watchlists.data ?? [];
   const current = items.find((w) => w.id === selected) ?? items[0];
+  // All mixes projects: name each watchlist's project.
+  const projectName = (id: string) =>
+    scope.project
+      ? undefined
+      : (workspaces.data?.items.flatMap((w) => w.projects).find((p) => p.id === id)?.name ??
+        "another project");
   return (
     <>
-      <DrawerHeader kicker="Research · public sources · scores are triage aids, not facts" title="Research" />
+      <DrawerHeader
+        kicker={`Research · ${scope.project?.name ?? "all projects"} · public sources · scores are triage aids, not facts`}
+        title="Research"
+      />
       <div className="nx-stagger flex min-h-0 flex-1 flex-col gap-7 overflow-auto px-6 pt-5 pb-6">
         <section aria-labelledby="res-watchlists" className="flex flex-col gap-3">
           <div className="flex items-center gap-3">
@@ -234,14 +261,22 @@ function ResearchBody() {
             <button
               type="button"
               aria-expanded={creating}
+              disabled={!!blocked}
+              aria-describedby={blocked ? blockedId : undefined}
               onClick={() => setCreating((c) => !c)}
               className={ghostBtn}
             >
               {creating ? "Close form" : "New watchlist"}
             </button>
           </div>
-          {creating && (
+          {blocked && (
+            <p id={blockedId} className="m-0 text-[12.5px] leading-snug text-ink2">
+              {blocked}
+            </p>
+          )}
+          {creating && !blocked && scope.project && (
             <CreateWatchlist
+              projectId={scope.project.id}
               onCreated={(w) => {
                 setCreating(false);
                 setSelected(w.id);
@@ -263,6 +298,8 @@ function ResearchBody() {
                 <WatchlistItem
                   key={w.id}
                   w={w}
+                  project={projectName(w.projectId)}
+                  blocked={blocked ? blockedId : undefined}
                   selected={w.id === current?.id}
                   onSelect={() => setSelected(w.id)}
                 />
@@ -271,13 +308,27 @@ function ResearchBody() {
           )}
         </section>
         {current && <LatestBrief key={current.id} w={current} />}
-        {items.length > 0 && <FindingSearch watchlists={items} />}
+        {items.length > 0 && <FindingSearch projectId={scope.project?.id} watchlists={items} />}
       </div>
     </>
   );
 }
 
-function WatchlistItem({ w, selected, onSelect }: { w: Watchlist; selected: boolean; onSelect: () => void }) {
+function WatchlistItem({
+  w,
+  project,
+  blocked,
+  selected,
+  onSelect,
+}: {
+  w: Watchlist;
+  /** Its project's name, shown in All. */
+  project: string | undefined;
+  /** Id of the reason the controls are disabled; undefined when they work. */
+  blocked: string | undefined;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   const now = useNow(30_000);
   const queryClient = useQueryClient();
   const refresh = () => queryClient.invalidateQueries({ queryKey: keys.research });
@@ -311,13 +362,20 @@ function WatchlistItem({ w, selected, onSelect }: { w: Watchlist; selected: bool
           {w.name}
           <span className="sr-only">{selected ? ", brief shown below" : ", show its brief"}</span>
         </button>
-        <button type="button" disabled={run.isPending} onClick={() => run.mutate()} className={primaryBtn}>
+        <button
+          type="button"
+          disabled={!!blocked || run.isPending}
+          aria-describedby={blocked}
+          onClick={() => run.mutate()}
+          className={primaryBtn}
+        >
           {run.isPending ? "Starting…" : "Run now"}
           <span className="sr-only">, {w.name}</span>
         </button>
         <button
           type="button"
-          disabled={update.isPending}
+          disabled={!!blocked || update.isPending}
+          aria-describedby={blocked}
           onClick={() => update.mutate({ schedule: { ...w.schedule, paused: !paused } })}
           className={ghostBtn}
         >
@@ -326,6 +384,7 @@ function WatchlistItem({ w, selected, onSelect }: { w: Watchlist; selected: bool
         </button>
       </div>
       <span className="font-mono text-[11.5px] leading-[1.5] text-ink2">
+        {project && `${project} · `}
         {paused || !w.nextRunAt ? "paused" : `next brief ${until(w.nextRunAt, now)}`} · {scheduleText(w)} ·
         last run {ago(w.lastRunAt, now)}
       </span>
@@ -334,7 +393,12 @@ function WatchlistItem({ w, selected, onSelect }: { w: Watchlist; selected: bool
         {w.sources.map((s) => (s.kind === "FEED" ? new URL(s.url).host : s.repo)).join(", ")}
         {w.keywords.length > 0 && <> · keywords: {w.keywords.join(", ")}</>}
       </span>
-      <Weights w={w} saving={update.isPending} onSave={(weights) => update.mutate({ weights })} />
+      <Weights
+        w={w}
+        blocked={blocked}
+        saving={update.isPending}
+        onSave={(weights) => update.mutate({ weights })}
+      />
       {error && (
         <p role="alert" className="m-0 text-[13px] text-coral">
           {error.message}
@@ -346,10 +410,12 @@ function WatchlistItem({ w, selected, onSelect }: { w: Watchlist; selected: bool
 
 function Weights({
   w,
+  blocked,
   saving,
   onSave,
 }: {
   w: Watchlist;
+  blocked: string | undefined;
   saving: boolean;
   onSave: (weights: ScoringWeights) => void;
 }) {
@@ -380,7 +446,8 @@ function Weights({
         {allZero && <p className="m-0 text-coral">At least one weight must be above 0.</p>}
         <button
           type="button"
-          disabled={!changed || allZero || saving}
+          disabled={!!blocked || !changed || allZero || saving}
+          aria-describedby={blocked}
           onClick={() => onSave(draft)}
           className={`${ghostBtn} self-start`}
         >
@@ -391,7 +458,7 @@ function Weights({
   );
 }
 
-function CreateWatchlist({ onCreated }: { onCreated: (w: Watchlist) => void }) {
+function CreateWatchlist({ projectId, onCreated }: { projectId: string; onCreated: (w: Watchlist) => void }) {
   const queryClient = useQueryClient();
   const [problem, setProblem] = useState<string | null>(null);
   const create = useMutation({
@@ -417,6 +484,7 @@ function CreateWatchlist({ onCreated }: { onCreated: (w: Watchlist) => void }) {
     ];
     if (sources.length === 0) return setProblem("Add at least one feed or GitHub repository.");
     const parsed = CreateWatchlistRequest.safeParse({
+      projectId,
       name: data.get("name"),
       keywords: lines(data.get("keywords")),
       sources,
@@ -649,8 +717,15 @@ function FindingCard({ f }: { f: Finding }) {
   );
 }
 
-function FindingSearch({ watchlists }: { watchlists: readonly Watchlist[] }) {
-  const [filters, setFilters] = useState<FindingFilters>({});
+function FindingSearch({
+  projectId,
+  watchlists,
+}: {
+  projectId: string | undefined;
+  watchlists: readonly Watchlist[];
+}) {
+  const [form, setFilters] = useState<FindingFilters>({});
+  const filters = { ...form, projectId };
   const results = useInfiniteQuery({
     queryKey: [...keys.findings(filters), "search"],
     queryFn: ({ pageParam }) => api.findings({ ...filters, limit: PAGE, cursor: pageParam }),
