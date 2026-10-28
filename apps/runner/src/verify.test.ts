@@ -288,7 +288,9 @@ describe.skipIf(!dockerUp)("runVerification in the real sandbox", () => {
           test: [
             "node",
             "-e",
-            "console.log('x'.repeat(20000));console.log('token=abc123secret');console.error('1 test failed');process.exit(3)",
+            // stdout and stderr reach the runner on separate pipes in no fixed order: write the stderr line only once
+            // stdout has flushed (and a beat later), so it is reliably last and inside the tail.
+            "process.stdout.write('x'.repeat(20000)+'\\ntoken=abc123secret\\n',()=>setTimeout(()=>{console.error('1 test failed');process.exit(3)},300))",
           ],
         }),
       },
