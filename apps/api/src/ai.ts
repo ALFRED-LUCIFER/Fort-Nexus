@@ -148,5 +148,6 @@ export async function callTool<T>(
 }
 
 /** Every URL written in `text` (scheme://…), trailing punctuation trimmed; keeps model text to its input's URLs. */
+// shortcut: finds scheme:// URLs only, not bare domains; AI text is rendered unlinked, so a bare domain is never a link.
 export const urlsIn = (text: string) =>
   [...text.matchAll(/[a-z][a-z0-9+.-]*:\/\/[^\s<>"'`)\]]+/gi)].map((m) => m[0].replace(/[.,;:!?]+$/, ""));

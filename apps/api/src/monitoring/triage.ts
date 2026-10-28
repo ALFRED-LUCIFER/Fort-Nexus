@@ -17,6 +17,8 @@ const AGENT = "DEVOPS";
 const TOOL = "record_triage";
 const MAX_TOKENS = 8192;
 // Older than any live call (the SDK gives up after 3 × 60 s): the request that claimed it died, so it may be retaken.
+// shortcut: a request that dies mid-call blocks retries with 409 until its claim is 5 min old; add a claim heartbeat if
+// that wait shows up in practice. Profile maxCostUsdPerTask/responseDetail aren't applied (max_tokens caps the call).
 const STALE_CLAIM_MS = 5 * 60_000;
 
 const Output = z.strictObject(IncidentTriage.pick({ hypotheses: true, suggestedNextStep: true }).shape);
