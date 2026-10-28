@@ -9,7 +9,10 @@ describe("loadConfig", () => {
     expect(loadConfig({})).toEqual({
       NEXUS_API_URL: "http://127.0.0.1:8787",
       RUNNER_TOKEN_FILE: join(homedir(), ".nexus", "runner-token"),
+      RUNNER_DATA_DIR: join(homedir(), ".nexus"),
+      RUNNER_SANDBOX: "docker",
     });
+    expect(() => loadConfig({ RUNNER_SANDBOX: "host" })).toThrow();
   });
 
   it("only allows plain http on loopback", () => {

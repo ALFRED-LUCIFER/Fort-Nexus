@@ -9,7 +9,7 @@
     "typecheck": "tsc -p .",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "owner:create": "node --env-file-if-exists=../../.env src/cli/create-owner.ts"
+    "github:setup": "node --env-file-if-exists=../../.env src/cli/github-setup.ts"
   },
   "dependencies": {
     "@fastify/cookie": "11.1.5",

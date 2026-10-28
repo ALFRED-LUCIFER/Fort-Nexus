@@ -1,50 +1,92 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { vi } from "vitest";
-import { ME, apiError, json, mockFetch, renderApp } from "./test/helpers.tsx";
+import { GITHUB_SETUP_COMMAND } from "@nexus/contracts";
+import { apiError, json, mockFetch, renderApp } from "./test/helpers.tsx";
 
-async function submit() {
-  const user = userEvent.setup();
-  await user.type(await screen.findByLabelText("Email"), "owner@example.com");
-  await user.type(screen.getByLabelText("Password"), "secret-password");
-  await user.click(screen.getByRole("button", { name: "Sign in" }));
-}
+const CONFIGURED = { github: { configured: true, ownerLogin: "octo-owner" } };
+const status = (body: unknown = CONFIGURED) => ({ "GET /v1/auth/status": () => json(body) });
+const continueButton = () => screen.findByRole("button", { name: "Continue with GitHub" });
+
+afterEach(() => {
+  window.location.hash = "";
+});
 
 describe("login", () => {
-  it("sends unauthenticated visitors to the login page", async () => {
-    mockFetch({ "GET /v1/me": () => apiError(401, "UNAUTHENTICATED", "Sign in first.") });
+  it("sends unauthenticated visitors to Continue with GitHub", async () => {
+    mockFetch({ "GET /v1/me": () => apiError(401, "UNAUTHENTICATED", "Sign in first."), ...status() });
     renderApp("/");
-    expect(await screen.findByRole("button", { name: "Sign in" })).toBeTruthy();
+    expect(await continueButton()).toBeTruthy();
+    expect(screen.getByText(/Only @octo-owner can sign in/)).toBeTruthy();
+  });
+
+  it("starts Better Auth's GitHub sign-in and follows its redirect", async () => {
+    const calls = mockFetch({
+      ...status(),
+      // Same-document URL: jsdom can't leave the page, a hash change proves the redirect was followed.
+      "POST /api/auth/sign-in/social": () =>
+        json({ url: `${window.location.origin}/#github`, redirect: true }),
+    });
+    renderApp("/login");
+    await userEvent.setup().click(await continueButton());
+    expect(await screen.findByRole("button", { name: "Opening GitHub…" })).toHaveProperty("disabled", true);
+    expect(calls.find((c) => c.path === "/api/auth/sign-in/social")?.body).toEqual({
+      provider: "github",
+      callbackURL: "/",
+    });
+    expect(window.location.hash).toBe("#github");
+  });
+
+  it("shows the setup command when GitHub isn't configured", async () => {
+    mockFetch(status({ github: { configured: false } }));
+    renderApp("/login");
+    expect((await screen.findByText(GITHUB_SETUP_COMMAND)).tagName).toBe("CODE");
+    expect(screen.queryByRole("button", { name: "Continue with GitHub" })).toBeNull();
   });
 
   it.each([
-    [401, "That email and password don't match. Try again."],
+    ["not_owner", "This GitHub account isn't the owner of this NEXUS."],
+    ["access_denied", "GitHub sign-in was cancelled."],
+    ["state_mismatch", "GitHub sign-in didn't complete (state_mismatch). Try again."],
+  ])("explains a sign-in sent back with ?error=%s", async (code, message) => {
+    mockFetch(status());
+    renderApp(`/login?error=${code}`);
+    expect((await screen.findByRole("alert")).textContent).toBe(message);
+    expect(await continueButton()).toBeTruthy();
+  });
+
+  it("ignores an ?error= that isn't a plain code", async () => {
+    mockFetch(status());
+    renderApp(`/login?error=${encodeURIComponent("Call +1 555 0100 now")}`);
+    expect(await continueButton()).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it.each([
     [429, "Too many sign-in attempts. Wait a minute, then try again."],
     [502, "Can't reach the NEXUS API. Check that it is running on the home machine."],
-  ])("explains HTTP %i", async (status, message) => {
-    mockFetch({ "POST /api/auth/sign-in/email": () => json({ code: "X", message: "raw" }, status) });
+  ])("explains HTTP %i from sign-in", async (code, message) => {
+    mockFetch({ ...status(), "POST /api/auth/sign-in/social": () => json({ message: "raw" }, code) });
     renderApp("/login");
-    await submit();
+    await userEvent.setup().click(await continueButton());
     expect((await screen.findByRole("alert")).textContent).toBe(message);
+    expect((await continueButton()).hasAttribute("disabled")).toBe(false);
   });
 
-  it("explains a network failure", async () => {
+  it("says when the API is unreachable and retries on request", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
     renderApp("/login");
-    await submit();
     expect((await screen.findByRole("alert")).textContent).toMatch(/Can't reach the NEXUS API/);
+    mockFetch(status());
+    await userEvent.setup().click(screen.getByRole("button", { name: "Try again" }));
+    expect(await continueButton()).toBeTruthy();
   });
 
-  it("opens the board after signing in", async () => {
-    mockFetch({
-      "POST /api/auth/sign-in/email": () => json({ token: "t", user: ME }),
-      "GET /v1/me": () => json(ME),
-      "GET /v1/runners": () => json({ items: [] }),
-      "GET /v1/jobs": () => json({ items: [], nextCursor: null }),
-    });
+  it("says when the status check is rate limited", async () => {
+    mockFetch({ "GET /v1/auth/status": () => apiError(429, "RATE_LIMITED", "Too many requests") });
     renderApp("/login");
-    await submit();
-    expect(await screen.findByRole("heading", { name: "Systems" })).toBeTruthy();
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Too many sign-in attempts. Wait a minute, then try again.",
+    );
   });
 });

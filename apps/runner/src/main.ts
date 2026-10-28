@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { arch, hostname, platform, release } from "node:os";
 import { parseArgs } from "node:util";
 import { z } from "zod";
@@ -6,6 +7,7 @@ import { createApi } from "./api.ts";
 import { loadConfig, readToken, writeToken } from "./config.ts";
 import { errorMessage, log } from "./log.ts";
 import { startRunner } from "./runner.ts";
+import { removeLeftovers } from "./sandbox.ts";
 
 const USAGE = "usage: node src/main.ts pair --code <CODE> [--name <name>] | node src/main.ts start";
 
@@ -34,8 +36,32 @@ async function start(): Promise<void> {
   const token = await readToken(config.RUNNER_TOKEN_FILE).catch((err: NodeJS.ErrnoException) => {
     throw err.code === "ENOENT" ? new Error(`${config.RUNNER_TOKEN_FILE} not found; run "pair" first`) : err;
   });
-  const runner = startRunner(createApi({ baseUrl: config.NEXUS_API_URL, token }));
-  log("info", "runner started", { api: config.NEXUS_API_URL, version: pkg.version });
+  // Stable per runner install (one token file each), so cleanup never touches another runner's containers.
+  const runnerLabel = createHash("sha256").update(config.RUNNER_TOKEN_FILE).digest("hex").slice(0, 16);
+  if (config.RUNNER_SANDBOX === "none") {
+    log(
+      "warn",
+      "!!! RUNNER_SANDBOX=none: jobs run directly on this host WITHOUT any isolation. Dev/test only !!!",
+    );
+  } else {
+    // Containers left by a crashed run are killed before any new lease (their expired leases put those jobs in RECOVERY_REQUIRED).
+    await removeLeftovers(runnerLabel).then(
+      (removed) => log("info", "crash cleanup done", { removedContainers: removed }),
+      (err: unknown) =>
+        log("warn", "crash cleanup failed, jobs will fail until Docker is reachable", {
+          error: errorMessage(err),
+        }),
+    );
+  }
+  const runner = startRunner(createApi({ baseUrl: config.NEXUS_API_URL, token }), {
+    sandbox: config.RUNNER_SANDBOX,
+    runnerLabel,
+  });
+  log("info", "runner started", {
+    api: config.NEXUS_API_URL,
+    version: pkg.version,
+    sandbox: config.RUNNER_SANDBOX,
+  });
   // `once`: a second signal falls through to Node's default and exits immediately.
   const onSignal = (signal: NodeJS.Signals) => {
     log("info", "shutting down (send the signal again to force)", { signal });

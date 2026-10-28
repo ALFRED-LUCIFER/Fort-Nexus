@@ -5,6 +5,8 @@ import { z } from "zod";
 
 const LOOPBACK = ["127.0.0.1", "localhost", "[::1]"];
 
+const expandHome = (p: string) => resolve(p.startsWith("~/") ? join(homedir(), p.slice(2)) : p);
+
 const Env = z.object({
   NEXUS_API_URL: z
     .url({ protocol: /^https?$/ })
@@ -14,11 +16,11 @@ const Env = z.object({
       const { protocol, hostname } = new URL(u);
       return protocol === "https:" || LOOPBACK.includes(hostname);
     }, "NEXUS_API_URL must use https unless it points at loopback"),
-  RUNNER_TOKEN_FILE: z
-    .string()
-    .min(1)
-    .default("~/.nexus/runner-token")
-    .transform((p) => resolve(p.startsWith("~/") ? join(homedir(), p.slice(2)) : p)),
+  RUNNER_TOKEN_FILE: z.string().min(1).default("~/.nexus/runner-token").transform(expandHome),
+  // Bare mirrors (repos/<owner>/<name>.git) and per-job worktrees (work/<jobId>) live here.
+  RUNNER_DATA_DIR: z.string().min(1).default("~/.nexus").transform(expandHome),
+  // "none" runs jobs on the host without isolation: dev/test escape hatch only.
+  RUNNER_SANDBOX: z.enum(["docker", "none"]).default("docker"),
 });
 export type Config = z.infer<typeof Env>;
 

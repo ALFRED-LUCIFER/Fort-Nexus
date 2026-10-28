@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.ts";
 
@@ -14,6 +16,13 @@ describe("loadConfig", () => {
       TRUSTED_ORIGINS: "https://a.example/, https://b.example",
     });
     expect(prod.trustedOrigins).toEqual(["http://127.0.0.1:8787", "https://a.example", "https://b.example"]);
+  });
+
+  it("expands ~ in GITHUB_APP_FILE and defaults it to ~/.nexus/github-app.json", () => {
+    expect(loadConfig({ ...base, GITHUB_APP_FILE: "~/x/app.json" }).githubAppFile).toBe(
+      join(homedir(), "x", "app.json"),
+    );
+    expect(loadConfig(base).githubAppFile).toBe(join(homedir(), ".nexus", "github-app.json"));
   });
 
   it("fails fast on a short secret, non-loopback host or bad origin", () => {

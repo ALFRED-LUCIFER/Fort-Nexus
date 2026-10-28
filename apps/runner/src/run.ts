@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -16,6 +16,17 @@ import { ApiCallError, withRetry, type Lease, type RunnerApi } from "./api.ts";
 import { errorMessage, log as defaultLog, type Log } from "./log.ts";
 import { OutputBuffer, type Stream } from "./output.ts";
 import { PRESET_ARGV } from "./presets.ts";
+import {
+  SANDBOX_BUILD_COMMAND,
+  SANDBOX_IMAGE,
+  containerName,
+  detectRuntime,
+  dockerEnv,
+  dockerRunArgs,
+  imageExists,
+  removeContainer,
+  type SandboxMode,
+} from "./sandbox.ts";
 
 export type JobOptions = {
   timeoutMs?: number;
@@ -23,6 +34,11 @@ export type JobOptions = {
   flushMs?: number;
   retryForMs?: number;
   log?: Log;
+  /** "none" runs presets on the host without isolation: dev/test escape hatch only. */
+  sandbox?: SandboxMode;
+  image?: string;
+  /** Value of the `nexus.runner` container label, used for crash cleanup. */
+  runnerLabel?: string;
 };
 
 export type JobHandle = {
@@ -50,7 +66,6 @@ const within = (p: Promise<unknown>, ms: number) =>
     });
   });
 
-// shortcut: no container/worktree isolation yet (presets touch no repository), ENG-04 adds it before any repo code runs.
 // shortcut: no ExecutionAdapter interface yet, it arrives with the Claude Agent SDK adapter (ENG-05).
 export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): JobHandle {
   const {
@@ -59,6 +74,9 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
     flushMs = 250,
     retryForMs = RUNNER_LEASE_TTL_MS,
     log = defaultLog,
+    sandbox = "docker",
+    image = SANDBOX_IMAGE,
+    runnerLabel = "local",
   } = opts;
   const { jobId, fencingToken } = lease;
   const appendAbort = new AbortController();
@@ -70,6 +88,7 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
   let chain = Promise.resolve();
   let flushTimer: NodeJS.Timeout | undefined;
   let child: ChildProcess | undefined;
+  let container: string | undefined;
   let exited: Promise<void> = Promise.resolve();
   let terminating: Promise<boolean> | undefined;
   let settle: ((r: ExitResult) => void) | undefined;
@@ -137,10 +156,20 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
   };
 
   // SIGTERM, SIGKILL after the grace period, and only report success once the exit is observed.
+  // In Docker: stop/kill/remove the container and only succeed once Docker confirms it is gone.
   const terminate = (): Promise<boolean> =>
     (terminating ??= (async () => {
       const c = child;
       if (!c) return true;
+      if (container) {
+        // Twice: a stop racing `docker run` can find no container yet while the client is still creating it.
+        for (let i = 0; i < 2; i++)
+          if ((await removeContainer(container, killGraceMs)) && (await within(exited, 5_000))) return true;
+        c.kill("SIGKILL"); // never leave the docker client behind
+        log("error", "job container could not be confirmed gone", { jobId, container });
+        settle?.({ exitCode: null, signal: null, stuck: true });
+        return false;
+      }
       c.kill("SIGTERM");
       if (await within(exited, killGraceMs)) return true;
       log("warn", "child ignored SIGTERM, sending SIGKILL", { jobId, pid: c.pid });
@@ -160,10 +189,12 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
   const execute = (argv: readonly [string, ...string[]], cwd: string) =>
     new Promise<ExitResult>((resolve) => {
       settle = resolve;
-      const [cmd, ...args] = argv;
+      const [cmd, ...args] = container
+        ? ["docker", ...dockerRunArgs({ jobId, runnerLabel, workspace: cwd, argv, image })]
+        : argv;
       const c = spawn(cmd, args, {
         cwd,
-        env: { PATH: process.env.PATH ?? "" },
+        env: container ? dockerEnv() : { PATH: process.env.PATH ?? "" },
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -197,10 +228,41 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
     }
     const { preset } = parsed.data;
     const argv = PRESET_ARGV[preset];
+
+    let sandboxInfo: Record<string, unknown> = { runtime: "none" };
+    if (sandbox === "docker") {
+      const runtime = await detectRuntime().catch((err: unknown) => {
+        log("error", "docker is not reachable, not executing", { jobId, error: errorMessage(err) });
+      });
+      if (!runtime)
+        return finish(
+          "job.failed",
+          { reason: "sandbox_unavailable", message: "Docker is not reachable on the runner host" },
+          "FAILED",
+        );
+      // Never fall back to the host: no image, no run.
+      if (!(await imageExists(image)))
+        return finish(
+          "job.failed",
+          {
+            reason: "sandbox_image_missing",
+            image,
+            message: `Sandbox image ${image} is missing on the runner host. Build it with: ${SANDBOX_BUILD_COMMAND}`,
+          },
+          "FAILED",
+        );
+      container = containerName(jobId);
+      sandboxInfo = { runtime, image, container };
+    } else {
+      log("warn", "RUNNER_SANDBOX=none: running WITHOUT isolation on the host (dev/test only)", { jobId });
+    }
+
     const cwd = await mkdtemp(join(tmpdir(), "nexus-job-"));
+    // shortcut: read-only for the container user under rootful/rootless uid mapping, writable workspaces arrive with the worktree job (ENG-05).
+    if (container) await chmod(cwd, 0o755);
     let timer: NodeJS.Timeout | undefined;
     try {
-      event("workspace.created", { hostname: hostname(), pid: process.pid, cwd });
+      event("workspace.created", { hostname: hostname(), pid: process.pid, cwd, sandbox: sandboxInfo });
       await flush({ to: "RUNNING" });
       if (lost) return;
       if (stop) return stopped(false);
@@ -213,8 +275,15 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
         void terminate();
       }, timeoutMs);
       const result = await execute(argv, cwd);
+      // A stop in flight must be confirmed (process exited, container gone) before anything is reported.
+      const stopConfirmed = await (terminating ?? true);
       if (lost) return;
-      if (result.stuck) return finish("job.failed", { reason: "stop_failed", pid: child?.pid }, "FAILED");
+      if (result.stuck || !stopConfirmed)
+        return finish(
+          "job.failed",
+          { reason: "stop_failed", pid: child?.pid, ...(container ? { container } : {}) },
+          "FAILED",
+        );
 
       event("tool.completed", {
         exitCode: result.exitCode,
@@ -227,11 +296,19 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
       if (timedOut) return finish("job.failed", { reason: "timeout", timeoutMs }, "FAILED", "TIMED_OUT");
       if (result.exitCode === 0)
         return finish("job.completed", { exitCode: 0 }, "COMPLETED", "COMMAND_SUCCEEDED");
-      const reason = result.error ? "spawn_failed" : "command_failed";
+      // 125: `docker run` itself failed (daemon error, bad mount), not the command inside.
+      const reason = result.error
+        ? "spawn_failed"
+        : container && result.exitCode === 125
+          ? "sandbox_failed"
+          : "command_failed";
       return finish("job.failed", { reason, exitCode: result.exitCode }, "FAILED", "COMMAND_FAILED");
     } finally {
       clearTimeout(timer);
       clearTimeout(flushTimer);
+      // Safety net: --rm normally removed it already, this only confirms (one `docker inspect`).
+      if (container && child && !(await removeContainer(container, killGraceMs)))
+        log("error", "job container could not be confirmed gone", { jobId, container });
       await rm(cwd, { recursive: true, force: true });
     }
   };

@@ -28,7 +28,21 @@ export const BoardSearch = z.object({
 
 const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({ component: Outlet });
 
-const loginRoute = createRoute({ getParentRoute: () => rootRoute, path: "/login", component: Login });
+// Better Auth sends failed GitHub sign-ins back as `/login?error=<code>`; anything else is dropped.
+export const LoginSearch = z.object({
+  error: z
+    .string()
+    .regex(/^[a-z0-9_]{1,64}$/)
+    .optional()
+    .catch(undefined),
+});
+
+const loginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/login",
+  validateSearch: LoginSearch,
+  component: Login,
+});
 
 const boardRoute = createRoute({
   getParentRoute: () => rootRoute,

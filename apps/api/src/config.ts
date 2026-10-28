@@ -1,5 +1,8 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { z } from "zod";
 import { RUNNER_LEASE_POLL_MS } from "@nexus/contracts";
+import { defaultGithubAppFile } from "./github/app-config.ts";
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
 const origin = z.url({ protocol: /^https?$/ }).transform((u) => new URL(u).origin);
@@ -28,6 +31,12 @@ const Env = z.object({
     .pipe(z.array(origin)),
   BETTER_AUTH_SECRET: z.string().min(32, "BETTER_AUTH_SECRET must be at least 32 characters"),
   RUNNER_LEASE_POLL_MS: z.coerce.number().int().min(0).max(60_000).default(RUNNER_LEASE_POLL_MS),
+  // `~/` is expanded here: env files don't go through a shell.
+  GITHUB_APP_FILE: z
+    .string()
+    .min(1)
+    .transform((p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p))
+    .optional(),
 });
 
 export type Config = {
@@ -40,6 +49,7 @@ export type Config = {
   trustedOrigins: string[];
   authSecret: string;
   leasePollMs: number;
+  githubAppFile: string;
 };
 
 /** Parses env once at startup; throws with every problem listed so the process fails fast. */
@@ -58,5 +68,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     trustedOrigins: [...new Set([e.PUBLIC_ORIGIN, ...e.TRUSTED_ORIGINS, ...devOrigins])],
     authSecret: e.BETTER_AUTH_SECRET,
     leasePollMs: e.RUNNER_LEASE_POLL_MS,
+    githubAppFile: e.GITHUB_APP_FILE ?? defaultGithubAppFile(),
   };
 }

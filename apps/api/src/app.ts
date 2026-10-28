@@ -17,12 +17,14 @@ import {
   hasZodFastifySchemaValidationErrors,
   serializerCompiler,
   validatorCompiler,
+  type ZodTypeProvider,
 } from "fastify-type-provider-zod";
-import type { ApiError, ErrorCode } from "@nexus/contracts";
+import { AuthStatus, GITHUB_SETUP_COMMAND, type ApiError, type ErrorCode } from "@nexus/contracts";
 import { createAuth, type Auth } from "./auth.ts";
 import type { Config } from "./config.ts";
 import { createDb, runMigrations, type Db } from "./db/index.ts";
 import { HttpError } from "./errors.ts";
+import { loadGithubAppConfig } from "./github/app-config.ts";
 import { reapExpiredLeases } from "./jobs.ts";
 import { createHub, type Hub } from "./notify.ts";
 import { ownerRoutes } from "./routes/owner.ts";
@@ -56,6 +58,8 @@ function sendError(
 }
 
 export async function buildApp(config: Config) {
+  // Missing file = not set up yet (API runs, sign-in explains how); a malformed or world-readable one fails fast.
+  const github = loadGithubAppConfig(config.githubAppFile);
   const app = Fastify({
     logger:
       config.logLevel === "silent"
@@ -95,7 +99,7 @@ export async function buildApp(config: Config) {
     throw err;
   }
   const shutdown = new AbortController();
-  const auth = createAuth(config, db);
+  const auth = createAuth(config, db, github);
   const deps: Deps = { config, db, auth, hub, shutdown: shutdown.signal };
 
   app.addHook("onRequest", async (request, reply) => {
@@ -164,17 +168,31 @@ export async function buildApp(config: Config) {
     return { status: "ok" as const };
   });
 
+  app
+    .withTypeProvider<ZodTypeProvider>()
+    .get("/v1/auth/status", { schema: { response: { 200: AuthStatus } } }, async () => ({
+      github: github ? { configured: true, ownerLogin: github.ownerGithubLogin } : { configured: false },
+    }));
+
   // Better Auth owns /api/auth/*; the raw body is passed through untouched.
   await app.register(async (scope) => {
     scope.removeAllContentTypeParsers();
     scope.addContentTypeParser("*", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
     const handler: RouteHandlerMethod = async (request, reply) => {
+      if (!github && /^\/api\/auth\/(sign-in|callback)\//.test(request.url))
+        throw new HttpError(
+          503,
+          "INTERNAL",
+          `GitHub sign-in isn't set up. On the home machine run \`${GITHUB_SETUP_COMMAND}\`, then restart the API.`,
+        );
+      const headers = fromNodeHeaders(request.headers);
+      headers.set("x-request-id", request.id); // correlation id for auth audit records
       const body =
         request.body instanceof Buffer && request.body.length > 0 ? new Uint8Array(request.body) : undefined;
       const res = await auth.handler(
         new Request(new URL(request.url, config.publicOrigin), {
           method: request.method,
-          headers: fromNodeHeaders(request.headers),
+          headers,
           body,
         }),
       );

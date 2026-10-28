@@ -17,7 +17,8 @@ Errors always use `ApiError` (`{ error: { code, message, details? }, requestId }
 
 | Method | Path | Body / query | Response |
 |---|---|---|---|
-| * | `/api/auth/*` | Better Auth (email + password, sign-up disabled) | Better Auth |
+| * | `/api/auth/*` | Better Auth: Sign in with GitHub only (the NEXUS GitHub App's OAuth client; only the app's creator, see `docs/runbooks/github-setup.md`) | Better Auth |
+| GET | `/v1/auth/status` | — (no auth) | `AuthStatus` (`{ github: { configured, ownerLogin? } }`) |
 | GET | `/v1/health` | — (no auth) | `{ status: "ok" }` only |
 | GET | `/v1/me` | — | `{ id, email, name }` |
 | GET | `/v1/runners` | — | `{ items: Runner[] }` |
@@ -58,17 +59,17 @@ Job creation with no online runner is **accepted and stays `QUEUED`** ("held, no
 
 - `node src/main.ts pair --code <CODE> [--name home-studio]` → registers, writes token to `RUNNER_TOKEN_FILE` (default `~/.nexus/runner-token`, mode 0600).
 - `node src/main.ts start` → heartbeat every `RUNNER_HEARTBEAT_INTERVAL_MS`, long-poll lease (capacity 1), execute, append events.
-- Presets are a fixed allowlist mapped to argv arrays, spawned with `shell: false`, minimal env, fresh temp cwd, 60 s timeout. Never accept a command string from the API.
-  - `host-info` → `uname -a`; `node-version` → `process.execPath --version`; `git-version` → `git --version`.
+- Presets are a fixed allowlist mapped to argv arrays, run inside a fresh locked-down container per job (ENG-04: `--network none`, read-only root, non-root user, all capabilities dropped, resource limits, only the job workspace mounted; build the image with `pnpm --filter @nexus/runner sandbox:build`), 60 s timeout. Never accept a command string from the API. A missing image fails the job (`sandbox_image_missing`) instead of falling back to the host.
+  - `host-info` → `uname -a`; `node-version` → `node --version`; `git-version` → `git --version` (all in-container).
 - Event sequence per run: transition `RUNNING` + `workspace.created { hostname, pid, cwd }` → `agent.started { engine: "diagnostic", preset, argv }` → `process.output { stream, text }` batches (redacted, total capped at 64 KB) → `tool.completed { exitCode, durationMs }` → transition `VERIFYING` → `COMPLETED` (`COMMAND_SUCCEEDED`) with `job.completed`, or `FAILED` (`COMMAND_FAILED` / `TIMED_OUT`) with `job.failed`.
 - Cancel: SIGTERM, SIGKILL after 5 s, confirm exit, then `CANCELLED` + `job.cancelled { terminated: true }`.
 - `STALE_LEASE` → kill the child and drop the job (the server already moved on). If heartbeats fail longer than `RUNNER_LEASE_TTL_MS`, kill the child; the server marks it `RECOVERY_REQUIRED`.
-- shortcut: no container/worktree isolation yet — ENG-04 adds it before any repo code runs. Presets touch no repository.
+- `RUNNER_SANDBOX=none` exists only for dev/tests and is announced loudly. Git worktrees per run (`apps/runner/src/workspace.ts`) are ready for the issue-to-PR job (ENG-07).
 
 ## Web (apps/web)
 
-Vite SPA; dev server on `:5173` proxies `/v1` and `/api/auth` to the API; production build is served by the API from `apps/web/dist`. Login → board shell per `docs/design/NEXUS-v2.dc.html` (PRD Part D) with the Systems zone showing the runner and the Code zone showing runs; Execute → structured preview → queue → run drawer with live terminal.
+Vite SPA; dev server on `:5173` proxies `/v1` and `/api/auth` to the API; production build is served by the API from `apps/web/dist`. "Continue with GitHub" login → board shell per `docs/design/NEXUS-v2.dc.html` (PRD Part D) with the Systems zone showing the runner and the Code zone showing runs; Execute → structured preview → queue → run drawer with live terminal.
 
 ## Done when
 
-`pnpm typecheck && pnpm lint && pnpm test` pass, and the manual demo works: create owner → log in → pair runner → start runner → Execute `node-version` → watch live output in the browser → refresh mid-run (no duplicate run, events replay in order) → kill runner mid-run → job shows `RECOVERY_REQUIRED`.
+`pnpm typecheck && pnpm lint && pnpm test` pass, and the manual demo works: `github:setup` (create the GitHub App) → Continue with GitHub → pair runner → start runner → Execute `node-version` → watch live output in the browser → refresh mid-run (no duplicate run, events replay in order) → kill runner mid-run → job shows `RECOVERY_REQUIRED`.

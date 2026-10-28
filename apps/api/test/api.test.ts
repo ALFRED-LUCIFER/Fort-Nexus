@@ -1,15 +1,13 @@
 import { randomUUID } from "node:crypto";
-import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from "vitest";
+import type pg from "pg";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type { Job, LeaseResponse, RunEvent } from "@nexus/contracts";
-import { buildApp } from "../src/app.ts";
-import { createAuth, createOwner } from "../src/auth.ts";
-import { loadConfig, type Config } from "../src/config.ts";
+import type { Config } from "../src/config.ts";
 import { createDb, type Db } from "../src/db/index.ts";
 import { reapExpiredLeases } from "../src/jobs.ts";
+import { createTestApp, ownerSession } from "./helpers/owner-session.ts";
 
-const OWNER = { email: "owner@example.com", name: "Owner", password: "correct horse battery staple" };
 const EVIL = "https://evil.example";
 const NODE_VERSION = { jobType: "RUNNER_DIAGNOSTIC", preset: "node-version" } as const;
 
@@ -18,18 +16,7 @@ let config: Config;
 let db: Db;
 let sql: pg.Pool;
 let cookie: string;
-
-async function freshDatabaseUrl() {
-  const admin = inject("pgAdminUrl");
-  const name = `t_${randomUUID().replaceAll("-", "")}`;
-  const c = new pg.Client({ connectionString: admin });
-  await c.connect();
-  await c.query(`create database ${name}`);
-  await c.end();
-  const url = new URL(admin);
-  url.pathname = `/${name}`;
-  return url.toString();
-}
+let ownerLogin: string;
 
 type Opts = {
   headers?: Record<string, string>;
@@ -102,29 +89,11 @@ const parseSse = (body: string) =>
     });
 
 beforeAll(async () => {
-  const url = await freshDatabaseUrl();
-  config = loadConfig({
-    DATABASE_URL: url,
-    BETTER_AUTH_SECRET: "test-secret-0123456789abcdefghijklmnopqrstuvwxyz",
-    NODE_ENV: "test",
-    LOG_LEVEL: "silent",
-    RUNNER_LEASE_POLL_MS: "300",
-  });
-  app = await buildApp(config);
-  await app.ready();
-  ({ db, pool: sql } = createDb(url));
-  await createOwner(createAuth(config, db), db, OWNER);
-  const signIn = await app.inject({
-    method: "POST",
-    url: "/api/auth/sign-in/email",
-    headers: { origin: config.publicOrigin },
-    payload: { email: OWNER.email, password: OWNER.password },
-  });
-  expect(signIn.statusCode).toBe(200);
-  cookie = [signIn.headers["set-cookie"] ?? []]
-    .flat()
-    .map((c) => c.split(";")[0])
-    .join("; ");
+  const t = await createTestApp({ RUNNER_LEASE_POLL_MS: "300" });
+  ({ app, config } = t);
+  ownerLogin = t.githubApp!.ownerGithubLogin;
+  ({ db, pool: sql } = createDb(t.databaseUrl));
+  cookie = await ownerSession(t);
 });
 
 afterAll(async () => {
@@ -165,7 +134,7 @@ describe("access control", () => {
 
   it("returns the signed-in owner", async () => {
     const res = await owner("GET", "/v1/me");
-    expect(res.json()).toMatchObject({ email: OWNER.email, name: OWNER.name });
+    expect(res.json()).toMatchObject({ email: `${ownerLogin}@example.com`, name: "Owner" });
   });
 
   it("rejects cookie mutations from an untrusted or missing Origin (CSRF)", async () => {
@@ -178,23 +147,6 @@ describe("access control", () => {
       expect(res.statusCode).toBe(403);
       expect(res.json().error.code).toBe("FORBIDDEN");
     }
-  });
-
-  it("rejects sign-up (owner is created by the CLI only)", async () => {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/auth/sign-up/email",
-      headers: { origin: config.publicOrigin },
-      payload: { email: "intruder@example.com", password: "another long password", name: "x" },
-    });
-    expect(res.statusCode).toBeGreaterThanOrEqual(400);
-    expect((await sql.query(`select count(*)::int as n from "user"`)).rows[0].n).toBe(1);
-  });
-
-  it("refuses a second owner", async () => {
-    await expect(
-      createOwner(createAuth(config, db), db, { ...OWNER, email: "two@example.com" }),
-    ).rejects.toThrow(/already exists/);
   });
 });
 

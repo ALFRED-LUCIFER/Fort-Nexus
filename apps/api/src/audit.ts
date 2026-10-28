@@ -1,10 +1,10 @@
-import type { Tx } from "./db/index.ts";
+import type { Db, Tx } from "./db/index.ts";
 import { auditRecords } from "./db/schema.ts";
 
 export type AuditEntry = {
   actor: string;
   action: string;
-  resourceType: "job" | "runner";
+  resourceType: "job" | "runner" | "github_account";
   resourceId: string;
   correlationId: string;
   outcome?: "SUCCEEDED" | "DENIED";
@@ -12,5 +12,5 @@ export type AuditEntry = {
   metadata?: Record<string, unknown>;
 };
 
-export const audit = (tx: Tx, e: AuditEntry) =>
+export const audit = (tx: Db | Tx, e: AuditEntry) =>
   tx.insert(auditRecords).values({ ...e, outcome: e.outcome ?? "SUCCEEDED", metadata: e.metadata ?? {} });
