@@ -7,13 +7,15 @@ import type {
   PaymentFailuresResponse,
   SalesSummaryResponse,
 } from "@nexus/contracts";
-import { ME, json, mockFetch, renderApp } from "../test/helpers.tsx";
+import { BIZ_PROJECT_ID, IN_PROJECT, ME, json, mockFetch, renderApp } from "../test/helpers.tsx";
 
 const CID = "44444444-4444-4444-8444-444444444444";
 const NOW = new Date().toISOString();
+const IN_SHOP = `/?ws=business&project=${BIZ_PROJECT_ID}`;
 
 const connector = (over: Partial<Connector> = {}): Connector => ({
   id: CID,
+  projectId: BIZ_PROJECT_ID,
   name: "Acme shop",
   provider: "SUPABASE",
   environment: "PROD",
@@ -109,9 +111,13 @@ function business(
 describe("business zone", () => {
   it("shows today's KPIs labelled partial, and says no data (never 0) for an unavailable metric", async () => {
     const calls = business([connector()]);
-    renderApp("/");
+    renderApp(IN_SHOP);
     const zone = await screen.findByRole("region", { name: "Business" });
     const orders = await within(zone).findByRole("button", { name: /Paid orders today: 2, partial/ });
+    // Only this project's connectors are ever asked for.
+    const lists = calls.filter((c) => c.path === "/v1/business/connectors");
+    expect(lists.length).toBeGreaterThan(0);
+    expect(lists.every((c) => c.query.get("projectId") === BIZ_PROJECT_ID)).toBe(true);
     expect(orders.textContent).toContain("yesterday same time: 1");
     expect(within(zone).getByRole("button", { name: /Gross sales today: AED 125.44, partial/ })).toBeTruthy();
     const failed = within(zone).getByRole("button", { name: /Failed payments today: no data/ });
@@ -123,16 +129,34 @@ describe("business zone", () => {
     expect(Object.fromEntries(q)).toEqual({ connectorId: CID, day: "today", compare: "true" });
   });
 
-  it("invites the owner to connect a source when there is none", async () => {
-    business([]);
+  it("in All, invites the owner to pick a project; registering is disabled until then", async () => {
+    const calls = business([]);
     const user = userEvent.setup();
     renderApp("/");
     const zone = await screen.findByRole("region", { name: "Business" });
-    expect(await within(zone).findByText(/No business sources connected/)).toBeTruthy();
+    expect(
+      await within(zone).findByText(/No business sources connected. Pick a Business project/),
+    ).toBeTruthy();
     expect(within(zone).getByText("not connected")).toBeTruthy();
+    expect(calls.find((c) => c.path === "/v1/business/connectors")!.query.has("projectId")).toBe(false);
     await user.click(within(zone).getByRole("button", { name: "Connect a source" }));
     const drawer = await screen.findByRole("dialog");
     expect(within(drawer).getByRole("heading", { name: "Connect a business source" })).toBeTruthy();
+    const register = within(drawer).getByRole("button", { name: "Register" });
+    expect(register.hasAttribute("disabled")).toBe(true);
+    expect(register.getAttribute("aria-describedby")).toBe("biz-blocked");
+    expect(within(drawer).getByText(/^Pick a project first/)).toBeTruthy();
+  });
+
+  it("in a Dev project, says business sources live in Business projects and asks for none", async () => {
+    const calls = business([connector()]);
+    renderApp(`${IN_PROJECT}&drawer=business`);
+    const drawer = await screen.findByRole("dialog");
+    // The open drawer hides the board from the accessibility tree.
+    const zone = screen.getByRole("region", { name: "Business", hidden: true });
+    expect(within(zone).getByText(/^Business sources live in Business projects/)).toBeTruthy();
+    expect(within(drawer).getByText(/^Business sources live in Business projects/)).toBeTruthy();
+    expect(calls.some((c) => c.path.startsWith("/v1/business/"))).toBe(false);
   });
 });
 
@@ -175,7 +199,7 @@ describe("business drawer", () => {
       [`PUT /v1/business/connectors/${CID}/dictionary`]: (c) => json(c.body),
     });
     const user = userEvent.setup();
-    renderApp("/?drawer=business");
+    renderApp(`${IN_SHOP}&drawer=business`);
     const drawer = await screen.findByRole("dialog");
 
     const form = await within(drawer).findByRole("form", { name: "Register a read-only connector" });
@@ -191,6 +215,7 @@ describe("business drawer", () => {
       expect(calls.some((c) => c.method === "POST" && c.path === "/v1/business/connectors")).toBe(true),
     );
     expect(calls.find((c) => c.method === "POST" && c.path === "/v1/business/connectors")!.body).toEqual({
+      projectId: BIZ_PROJECT_ID,
       name: "Shop dev",
       provider: "POSTGRES",
       environment: "DEV",

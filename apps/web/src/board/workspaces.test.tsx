@@ -177,16 +177,20 @@ describe("workspace switch and project menu", () => {
     expect(await screen.findByRole("button", { name: /^Inbox, 0 pending approvals/ })).toBeTruthy();
   });
 
-  it("gives a Business project an honest P1 empty state and nothing to run", async () => {
-    board();
+  it("gives a Business project its own empty connector list and nothing to run", async () => {
+    const calls = board({
+      "GET /v1/business/connectors": (c) =>
+        json({ items: c.query.get("projectId") === BIZ_PROJECT_ID ? [] : [{ id: "not-this-project" }] }),
+    });
     const user = userEvent.setup();
     renderApp(`/?ws=business&project=${BIZ_PROJECT_ID}`);
     const biz = await screen.findByRole("region", { name: "Business" });
+    expect(await within(biz).findByText(/^No sources connected to Shop\./)).toBeTruthy();
     expect(
-      await within(biz).findByText(
-        "No sources connected to Shop. Read-only business connectors arrive in P1.",
-      ),
-    ).toBeTruthy();
+      calls
+        .filter((c) => c.path === "/v1/business/connectors")
+        .every((c) => c.query.get("projectId") === BIZ_PROJECT_ID),
+    ).toBe(true);
     await user.click(screen.getByRole("button", { name: "Preview" }));
     const preview = screen.getByRole("region", { name: "Execute preview" });
     expect(within(preview).getByRole("button", { name: /Queue/ }).hasAttribute("disabled")).toBe(true);

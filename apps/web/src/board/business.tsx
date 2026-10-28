@@ -16,6 +16,7 @@ import type { z } from "zod";
 import { ApiRequestError, api, keys } from "../lib/api.ts";
 import { ago, useNow } from "../lib/queries.ts";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
+import { PICK_PROJECT, useScope } from "./scope.tsx";
 import { EmptyZone } from "./zones.tsx";
 
 // Business: read-only metric tools over a registered connector (EPIC CON/DATA/BIZ). Every number shown comes from the
@@ -31,8 +32,26 @@ const primaryBtn =
   "self-start rounded-xl bg-teal px-4 py-2.5 text-[12.5px] font-medium text-onacc disabled:opacity-60";
 const labelCls = "flex flex-col gap-1 text-[11.5px] text-ink3";
 
-export const useConnectors = () =>
-  useQuery({ queryKey: keys.connectors, queryFn: api.connectors, refetchInterval: METRIC_POLL_MS });
+const IN_DEV = "Business sources live in Business projects. Switch to one to see its orders and payments.";
+
+/** The scope's connectors: one Business project, or All across them. Dev never asks: it holds no business sources. */
+export const useConnectors = () => {
+  const scope = useScope();
+  const projectId = scope.project?.id;
+  return useQuery({
+    queryKey: keys.connectorsOf(projectId),
+    queryFn: () => api.connectors(projectId),
+    enabled: scope.ready && scope.ws !== "dev",
+    refetchInterval: METRIC_POLL_MS,
+  });
+};
+
+/** Why connectors can't be changed here, or null: All is read-only, and an archived project keeps only its history. */
+function useWriteBlocked() {
+  const { project } = useScope();
+  if (!project) return PICK_PROJECT;
+  return project.archivedAt ? `${project.name} is archived: its connectors are read-only.` : null;
+}
 
 /** The connector the board reports on: the first enabled one with a metric dictionary. */
 export const primaryConnector = (list: readonly Connector[] | undefined) =>
@@ -189,11 +208,13 @@ function SourceLine({ p, now }: { p: MetricProvenance; now: number }) {
 // ---------------------------------------------------------------- zone
 
 export function BusinessZone({ onOpen }: { onOpen: () => void }) {
+  const scope = useScope();
   const connectors = useConnectors();
   const c = primaryConnector(connectors.data);
   const { sales, payments } = useMetrics(c?.id);
   const now = useNow(30_000);
 
+  if (scope.ws === "dev") return <EmptyZone>{IN_DEV}</EmptyZone>;
   if (!connectors.data)
     return <EmptyZone>{connectors.error ? connectors.error.message : "Loading…"}</EmptyZone>;
   if (!c)
@@ -202,7 +223,9 @@ export function BusinessZone({ onOpen }: { onOpen: () => void }) {
         <EmptyZone>
           {connectors.data.length
             ? "No enabled connector has a metric dictionary yet, so there are no numbers to show."
-            : "No business sources connected. Connect a read-only database to see orders and payments."}
+            : scope.project
+              ? `No sources connected to ${scope.project.name}. Connect a read-only database to see orders and payments.`
+              : "No business sources connected. Pick a Business project to connect one."}
         </EmptyZone>
         <button type="button" onClick={onOpen} className={primaryBtn}>
           {connectors.data.length ? "Define metrics" : "Connect a source"}
@@ -244,6 +267,7 @@ export function BusinessDrawer({ banner, onClose }: { banner?: ReactNode; onClos
 }
 
 function BusinessBody() {
+  const scope = useScope();
   const connectors = useConnectors();
   const [selectedId, setSelectedId] = useState<string>();
   const selected =
@@ -252,6 +276,13 @@ function BusinessBody() {
   const { sales, payments } = useMetrics(selected?.hasDictionary ? selected.id : undefined);
   const now = useNow(30_000);
 
+  if (scope.ws === "dev")
+    return (
+      <>
+        <DrawerHeader kicker="Business · read-only" title="Business" />
+        <p className="m-0 px-6 pt-5 text-[13.5px] text-ink2">{IN_DEV}</p>
+      </>
+    );
   if (!connectors.data)
     return (
       <>
@@ -431,11 +462,17 @@ function Connectors({
   onSelect: (id: string) => void;
 }) {
   const [editing, setEditing] = useState<string>();
+  const blocked = useWriteBlocked();
   return (
     <section aria-labelledby="biz-connectors" className="flex flex-none flex-col gap-3">
       <h3 id="biz-connectors" className="kicker m-0">
         Connectors · read-only
       </h3>
+      {blocked && (
+        <p id="biz-blocked" className="m-0 text-[13px] leading-snug text-ink2">
+          {blocked}
+        </p>
+      )}
       {items.length === 0 && (
         <p className="m-0 text-[13.5px] text-ink2">
           No connectors yet. Create a read-only role and a credential file on the home machine (
@@ -476,6 +513,7 @@ function ConnectorRow({
 }) {
   const queryClient = useQueryClient();
   const now = useNow(30_000);
+  const blocked = useWriteBlocked();
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["business"] });
   const test = useMutation({ mutationFn: () => api.testConnector(c.id), onSettled: refresh });
   const toggle = useMutation({
@@ -506,7 +544,8 @@ function ConnectorRow({
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
-          disabled={c.status === "DISABLED" || test.isPending}
+          disabled={c.status === "DISABLED" || test.isPending || !!blocked}
+          aria-describedby={blocked ? "biz-blocked" : undefined}
           onClick={() => test.mutate()}
           className={ghostBtn}
         >
@@ -522,7 +561,8 @@ function ConnectorRow({
         )}
         <button
           type="button"
-          disabled={toggle.isPending}
+          disabled={toggle.isPending || !!blocked}
+          aria-describedby={blocked ? "biz-blocked" : undefined}
           onClick={() => toggle.mutate()}
           className={ghostBtn}
         >
@@ -562,6 +602,8 @@ function TestResult({ result }: { result: ConnectionTestResult }) {
 
 function RegisterForm() {
   const queryClient = useQueryClient();
+  const { project } = useScope();
+  const blocked = useWriteBlocked();
   const blank = {
     name: "",
     provider: "POSTGRES",
@@ -582,6 +624,7 @@ function RegisterForm() {
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const parsed = CreateConnectorRequest.safeParse({
+      projectId: project?.id,
       name: form.name,
       provider: form.provider,
       environment: form.environment,
@@ -669,7 +712,12 @@ function RegisterForm() {
           {invalid ?? create.error!.message}
         </p>
       )}
-      <button type="submit" disabled={create.isPending} className={primaryBtn}>
+      <button
+        type="submit"
+        disabled={create.isPending || !!blocked}
+        aria-describedby={blocked ? "biz-blocked" : undefined}
+        className={primaryBtn}
+      >
         {create.isPending ? "Registering…" : "Register"}
       </button>
     </form>
@@ -726,6 +774,7 @@ function DictionaryForm({ connectorId }: { connectorId: string }) {
 
 function DictionaryFields({ connectorId, initial }: { connectorId: string; initial: DictForm }) {
   const queryClient = useQueryClient();
+  const blocked = useWriteBlocked();
   const [form, setForm] = useState(initial);
   const [invalid, setInvalid] = useState<string>();
   const save = useMutation({
@@ -834,7 +883,12 @@ function DictionaryFields({ connectorId, initial }: { connectorId: string; initi
           Saved. Run the connection test again; a production connector serves no numbers until it passes.
         </p>
       )}
-      <button type="submit" disabled={save.isPending} className={primaryBtn}>
+      <button
+        type="submit"
+        disabled={save.isPending || !!blocked}
+        aria-describedby={blocked ? "biz-blocked" : undefined}
+        className={primaryBtn}
+      >
         {save.isPending ? "Saving…" : "Save dictionary"}
       </button>
     </form>

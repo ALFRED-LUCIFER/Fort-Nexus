@@ -9,44 +9,61 @@ import {
   MetricDictionary,
   MetricQuery,
   PaymentFailuresResponse,
+  ProjectFilterQuery,
   SalesSummaryResponse,
   UpdateConnectorRequest,
 } from "@nexus/contracts";
 import type { Deps } from "../app.ts";
 import { HttpError } from "../errors.ts";
 import { ownerActor } from "../jobs.ts";
-import { projectScope } from "../scope.ts";
+import { resolveProject } from "../workspaces.ts";
 import {
   createConnector,
+  findOwnedConnector,
   getDictionary,
   listConnectors,
   putDictionary,
   testConnector,
   updateConnector,
   type BusinessScope,
+  type OwnerScope,
 } from "./connectors.ts";
 import { getPaymentFailures, getSalesSummary } from "./metrics.ts";
 
 const IdParams = z.object({ id: z.uuid() });
+// Matches no project: an unknown or foreign connector answers NO_CONNECTOR (and is audited) like a missing one.
+const NO_PROJECT = "00000000-0000-0000-0000-000000000000";
 
 /** Business connectors and metric tools (EPIC CON/DATA/BIZ). Registered inside the owner scope (session + Origin check). */
 export async function businessRoutes(app: FastifyInstance, { db, config }: Deps) {
-  const scope = (req: FastifyRequest): BusinessScope => {
+  const scope = (req: FastifyRequest): OwnerScope => {
     if (!req.owner) throw new HttpError(401, "UNAUTHENTICATED", "Sign in required");
     return {
-      ...projectScope(),
       db,
       connectorsDir: config.connectorsDir,
       actor: ownerActor(req.owner.id),
       correlationId: req.id,
+      ownerId: req.owner.id,
     };
+  };
+  // MetricQuery names only the connector, so the HTTP tools run in that connector's own project.
+  const metricScope = async (req: FastifyRequest, connectorId: string): Promise<BusinessScope> => {
+    const s = scope(req);
+    return { ...s, projectId: (await findOwnedConnector(s, connectorId))?.projectId ?? NO_PROJECT };
   };
 
   const r = app.withTypeProvider<ZodTypeProvider>();
 
-  r.get("/v1/business/connectors", { schema: { response: { 200: ConnectorList } } }, async (req) => ({
-    items: await listConnectors(scope(req)),
-  }));
+  r.get(
+    "/v1/business/connectors",
+    { schema: { querystring: ProjectFilterQuery, response: { 200: ConnectorList } } },
+    async (req) => {
+      const s = scope(req);
+      const { projectId } = req.query;
+      if (projectId) await resolveProject(db, s.ownerId, projectId, { mode: "BUSINESS" });
+      return { items: await listConnectors({ ...s, projectId }) };
+    },
+  );
 
   r.post(
     "/v1/business/connectors",
@@ -88,12 +105,12 @@ export async function businessRoutes(app: FastifyInstance, { db, config }: Deps)
   r.get(
     "/v1/business/metrics/sales-summary",
     { schema: { querystring: MetricQuery, response: { 200: SalesSummaryResponse } } },
-    async (req) => getSalesSummary(scope(req), req.query),
+    async (req) => getSalesSummary(await metricScope(req, req.query.connectorId), req.query),
   );
 
   r.get(
     "/v1/business/metrics/payment-failures",
     { schema: { querystring: MetricQuery, response: { 200: PaymentFailuresResponse } } },
-    async (req) => getPaymentFailures(scope(req), req.query),
+    async (req) => getPaymentFailures(await metricScope(req, req.query.connectorId), req.query),
   );
 }
