@@ -9,11 +9,14 @@ import {
   type ProposedAction,
   type SourceRef,
 } from "@nexus/contracts";
+import { listConnectors } from "../business/connectors.ts";
+import { getPaymentFailures, getSalesSummary } from "../business/metrics.ts";
 import type { Db } from "../db/index.ts";
 import { approvals, jobs, runEvents } from "../db/schema.ts";
 import { HttpError } from "../errors.ts";
 import type { GithubCatalog } from "../github/catalog.ts";
-import type { JobRow } from "../jobs.ts";
+import { ownerActor, type JobRow } from "../jobs.ts";
+import { projectScope } from "../scope.ts";
 
 // FR-CWV-07 / FR-CXR-04: every reply is built here from records NEXUS read itself, with sources and a basis.
 // The model's intent picks the tool; it never supplies a fact.
@@ -34,17 +37,14 @@ export type ToolContext = {
   github: GithubCatalog | null;
   ownerId: string;
   subjectJobId: string | null;
+  connectorsDir: string;
+  correlationId: string;
 };
 
-// Wiring point for modules A/B: the coordinator replaces these entries with calls to the research and business tools.
-const NOT_CONNECTED: Record<"BUSINESS_METRIC" | "RESEARCH_SEARCH", string> = {
-  BUSINESS_METRIC:
-    "Business metrics aren't connected in this build, so I can't report sales or payments yet.",
-  RESEARCH_SEARCH: "Research isn't connected in this build, so I can't search findings yet.",
-};
+const NOT_CONNECTED = "Research isn't connected in this build, so I can't search findings yet.";
 
 const CAPABILITIES =
-  "From Talk I can tell you how a run is going, list your recent runs, and propose starting a run for a GitHub issue.";
+  "From Talk I can tell you how a run is going, list your recent runs, propose starting a run for a GitHub issue, and report today's sales or failed payments.";
 const RECENT_RUNS = 5;
 const FOLLOW_UP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -83,8 +83,9 @@ export async function answer(intent: Intent, ctx: ToolContext): Promise<Reply> {
     case "START_ISSUE_RUN":
       return proposeIssueRun(intent, ctx);
     case "BUSINESS_METRIC":
+      return businessMetric(intent, ctx);
     case "RESEARCH_SEARCH":
-      return { intent, text: NOT_CONNECTED[intent.kind], basis: "NONE", sources: [] };
+      return { intent, text: NOT_CONNECTED, basis: "NONE", sources: [] };
     case "CLARIFY":
       return {
         intent,
@@ -290,4 +291,79 @@ async function proposeIssueRun(
     if (err instanceof HttpError) return none(err.message);
     throw err;
   }
+}
+
+type MetricResult =
+  | Awaited<ReturnType<typeof getSalesSummary>>["current"]
+  | Awaited<ReturnType<typeof getPaymentFailures>>["current"];
+
+// DATA-G02: an unavailable metric is said to be unavailable; only the gateway's own numbers are ever quoted.
+function metricLine(label: string, r: MetricResult): { text: string; source?: SourceRef } {
+  if (r.status === "UNAVAILABLE") return { text: `${label}: unavailable (${r.message}).` };
+  const p = r.provenance;
+  const window = `${p.from} to ${p.to} (${p.timezone}${p.partial ? ", partial: the day isn't over" : ""})`;
+  const figures =
+    "paidOrders" in r
+      ? `${r.paidOrders} paid orders, gross sales ${r.grossSales} ${r.currency}`
+      : `${r.failed} failed of ${r.attempts} payment attempts` +
+        (r.failureRate === null ? "" : ` (${(r.failureRate * 100).toFixed(1)}%)`) +
+        (r.byReason.length > 0
+          ? `; top reasons: ${r.byReason
+              .slice(0, 3)
+              .map((g) => `${g.reason} ${g.count}`)
+              .join(", ")}`
+          : "");
+  return {
+    text: `${label}, ${window}: ${figures}.`,
+    source: {
+      kind: "METRIC",
+      id: `${p.connectorId}:${p.dataset}:${p.from}`,
+      label: `${p.connectorName} · ${p.dataset} · ${words(p.environment)}`,
+      asOf: p.queriedAt,
+    },
+  };
+}
+
+async function businessMetric(
+  intent: Extract<Intent, { kind: "BUSINESS_METRIC" }>,
+  ctx: ToolContext,
+): Promise<Reply> {
+  const scope = {
+    ...projectScope(),
+    db: ctx.db,
+    connectorsDir: ctx.connectorsDir,
+    actor: ownerActor(ctx.ownerId),
+    correlationId: ctx.correlationId,
+  };
+  const usable = (await listConnectors(scope)).filter((c) => c.hasDictionary && c.status !== "DISABLED");
+  const none = (text: string): Reply => ({ intent, text, basis: "NONE", sources: [] });
+  if (usable.length === 0)
+    return none("No business source with a metric dictionary is connected, so I have no figures to report.");
+  // FR-CXR-07: never guess between sources.
+  if (usable.length > 1)
+    return none(
+      `Several business sources are connected (${usable.map((c) => c.name).join(", ")}). Open the Business drawer to pick one.`,
+    );
+  const query = { connectorId: usable[0]!.id, day: intent.day, compare: intent.compare };
+  let res: Awaited<ReturnType<typeof getSalesSummary>> | Awaited<ReturnType<typeof getPaymentFailures>>;
+  try {
+    res =
+      intent.metric === "SALES_SUMMARY"
+        ? await getSalesSummary(scope, query)
+        : await getPaymentFailures(scope, query);
+  } catch (err) {
+    if (err instanceof HttpError && err.statusCode === 400)
+      return none(`I can't report that day: ${err.message}`);
+    throw err;
+  }
+  const name = intent.metric === "SALES_SUMMARY" ? "Sales" : "Failed payments";
+  const lines = [metricLine(`${name} ${intent.day}`, res.current)];
+  if (res.previous) lines.push(metricLine("Previous day, same window", res.previous));
+  const sources = lines.flatMap((l) => (l.source ? [l.source] : []));
+  return {
+    intent,
+    text: lines.map((l) => l.text).join(" "),
+    basis: sources.length > 0 ? "OBSERVED" : "NONE",
+    sources,
+  };
 }

@@ -18,6 +18,7 @@ import type {
 import { businessConnectors } from "../src/business/schema.ts";
 import { readOnly } from "../src/business/gateway.ts";
 import { getPaymentFailures, getSalesSummary, type ToolScope } from "../src/business/metrics.ts";
+import { answer } from "../src/conversations/tools.ts";
 import { createDb } from "../src/db/index.ts";
 import { auditRecords } from "../src/db/schema.ts";
 import { projectScope } from "../src/scope.ts";
@@ -503,5 +504,43 @@ describe("read-only metric tools", () => {
     const res = await sales({ connectorId: c.id, day: "2026-10-27", compare: "true" });
     expect(res.current).toMatchObject({ status: "UNAVAILABLE", reason: "TIMEOUT" });
     expect(res.previous).toMatchObject({ status: "UNAVAILABLE", reason: "TIMEOUT" });
+  });
+});
+
+// Last in the file: it disables every other connector in the project.
+describe("Talk answers business questions from the gateway (FR-BIZ-07)", () => {
+  const ask = (compare = false) =>
+    answer(
+      { kind: "BUSINESS_METRIC", metric: "SALES_SUMMARY", day: "2026-10-27", compare },
+      {
+        db: appDb.db,
+        github: null,
+        ownerId: "owner",
+        subjectJobId: null,
+        connectorsDir: dir,
+        correlationId: randomUUID(),
+      },
+    );
+
+  it("quotes the gateway's figures with a METRIC source, and never picks between several sources", async () => {
+    const c = await connector();
+    expect(await ask()).toMatchObject({
+      basis: "NONE",
+      text: expect.stringMatching(/Several business sources/),
+    });
+
+    for (const other of await appDb.db.select().from(businessConnectors))
+      if (other.id !== c.id)
+        expect(
+          (await call("PATCH", `/v1/business/connectors/${other.id}`, { disabled: true })).statusCode,
+        ).toBe(200);
+
+    const r = await ask();
+    expect(r.basis).toBe("OBSERVED");
+    expect(r.text).toMatch(/3 paid orders, gross sales \d+\.\d{2} AED/);
+    expect(r.sources).toEqual([
+      expect.objectContaining({ kind: "METRIC", label: expect.stringContaining("shop.orders") }),
+    ]);
+    expectNoSecrets(JSON.stringify(r));
   });
 });

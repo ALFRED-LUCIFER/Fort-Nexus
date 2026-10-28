@@ -355,13 +355,15 @@ describe("source-aware claims (FR-CWV-07, FR-CXR-04)", () => {
     expect(r.assistantTurn.text).toMatch(/failed \(COMMAND_FAILED\)/);
     expect(r.assistantTurn.sources.map((s) => s.kind)).toEqual(["JOB", "RUN_EVENT"]);
 
-    const notConnected = await turn(
+    const noSource = await turn(
       thread.id,
       "sales today?",
       toolCall({ kind: "BUSINESS_METRIC", metric: "SALES_SUMMARY", day: "today", compare: false }),
     );
-    expect(notConnected.assistantTurn).toMatchObject({ basis: "NONE", sources: [] });
-    expect(notConnected.assistantTurn.text).toMatch(/aren't connected in this build/);
+    // DATA-G02: no connected source → says so, never a zero.
+    expect(noSource.assistantTurn).toMatchObject({ basis: "NONE", sources: [] });
+    expect(noSource.assistantTurn.text).toMatch(/No business source/);
+    expect(noSource.assistantTurn.text).not.toMatch(/\d/);
   });
 });
 

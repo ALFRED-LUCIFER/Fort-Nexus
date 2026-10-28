@@ -278,6 +278,8 @@ export async function postTurn(
           github: deps.github,
           ownerId: input.ownerId,
           subjectJobId: thread.subjectJobId,
+          connectorsDir: deps.config.connectorsDir,
+          correlationId: input.correlationId,
         });
 
   return db.transaction(async (tx) => {
