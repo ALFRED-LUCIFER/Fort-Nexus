@@ -83,6 +83,7 @@ const toRunDto = (r: RunRow): ResearchRun => ({
   finishedAt: iso(r.finishedAt),
   newFindings: r.newFindings,
   skippedSources: r.skippedSources,
+  error: r.error,
 });
 
 /** Findings with their sources, scored with their watchlist's current weights. */

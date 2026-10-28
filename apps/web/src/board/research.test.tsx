@@ -90,6 +90,7 @@ const run = (over: Partial<ResearchRun> = {}): ResearchRun => ({
   startedAt: NOW,
   finishedAt: NOW,
   newFindings: 2,
+  error: null,
   skippedSources: [
     {
       source: "https://blocked.example/feed.xml",

@@ -172,6 +172,8 @@ export const ResearchRun = z.object({
   finishedAt: z.iso.datetime({ offset: true }).nullable(),
   newFindings: z.int().nonnegative(),
   skippedSources: z.array(z.object({ source: z.string(), reason: SkipReason, detail: z.string().max(300) })),
+  // Why a run FAILED without finishing (restart, shutdown, internal error); fixed server text, never exception detail.
+  error: z.string().nullable(),
 });
 export type ResearchRun = z.infer<typeof ResearchRun>;
 

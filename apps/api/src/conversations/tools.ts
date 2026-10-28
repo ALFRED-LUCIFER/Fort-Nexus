@@ -14,6 +14,7 @@ import { getPaymentFailures, getSalesSummary } from "../business/metrics.ts";
 import type { Db } from "../db/index.ts";
 import { approvals, jobs, runEvents } from "../db/schema.ts";
 import { HttpError } from "../errors.ts";
+import { searchFindings } from "../research/service.ts";
 import type { GithubCatalog } from "../github/catalog.ts";
 import { ownerActor, type JobRow } from "../jobs.ts";
 import { projectScope } from "../scope.ts";
@@ -41,10 +42,8 @@ export type ToolContext = {
   correlationId: string;
 };
 
-const NOT_CONNECTED = "Research isn't connected in this build, so I can't search findings yet.";
-
 const CAPABILITIES =
-  "From Talk I can tell you how a run is going, list your recent runs, propose starting a run for a GitHub issue, and report today's sales or failed payments.";
+  "From Talk I can tell you how a run is going, list your recent runs, propose starting a run for a GitHub issue, and report today's sales or failed payments, and search research findings.";
 const RECENT_RUNS = 5;
 const FOLLOW_UP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -85,7 +84,7 @@ export async function answer(intent: Intent, ctx: ToolContext): Promise<Reply> {
     case "BUSINESS_METRIC":
       return businessMetric(intent, ctx);
     case "RESEARCH_SEARCH":
-      return { intent, text: NOT_CONNECTED, basis: "NONE", sources: [] };
+      return researchSearch(intent, ctx);
     case "CLARIFY":
       return {
         intent,
@@ -365,5 +364,41 @@ async function businessMetric(
     text: lines.map((l) => l.text).join(" "),
     basis: sources.length > 0 ? "OBSERVED" : "NONE",
     sources,
+  };
+}
+
+const RESEARCH_HITS = 5;
+
+// FR-RES-06: an UNVERIFIED finding is relayed as the publisher's claim, never as established fact (RES-G03).
+async function researchSearch(
+  intent: Extract<Intent, { kind: "RESEARCH_SEARCH" }>,
+  ctx: ToolContext,
+): Promise<Reply> {
+  const { items } = await searchFindings(ctx.db, projectScope(), {
+    q: intent.query.trim() || undefined,
+    limit: RESEARCH_HITS,
+  });
+  if (items.length === 0)
+    return { intent, text: `No research findings match "${intent.query}".`, basis: "NONE", sources: [] };
+  const lines = items.map((f) => {
+    const by = f.sources[0]!.publisher;
+    return f.label === "UNVERIFIED"
+      ? `${by} claims: "${f.title}" (unverified, score ${f.score}).`
+      : `"${f.title}" (${words(f.label)}, ${by}, score ${f.score}).`;
+  });
+  return {
+    intent,
+    text: `Newest matching findings (scores are triage aids): ${lines.join(" ")}`,
+    basis: "OBSERVED",
+    sources: items.map((f) => ({
+      kind: "FINDING",
+      id: f.id,
+      label: `${words(f.label)} · ${f.sources[0]!.publisher}`,
+      asOf: f.sources
+        .map((s) => s.fetchedAt)
+        .sort()
+        .at(-1)!,
+      url: f.canonicalUrl,
+    })),
   };
 }

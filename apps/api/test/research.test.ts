@@ -9,6 +9,7 @@ import type {
   Watchlist,
   WatchlistList,
 } from "@nexus/contracts";
+import { answer } from "../src/conversations/tools.ts";
 import { createDb } from "../src/db/index.ts";
 import { auditRecords } from "../src/db/schema.ts";
 import { P1_SCOPE } from "../src/scope.ts";
@@ -261,6 +262,8 @@ describe("runs", () => {
       error: "The API restarted during this run; it was not retried.",
     });
     expect(row!.finishedAt).not.toBeNull();
+    const brief = (await send("GET", `/v1/research/runs/${stale!.id}`)).json<ResearchBrief>();
+    expect(brief.run.error).toBe("The API restarted during this run; it was not retried.");
     const fails = await db.db.select().from(auditRecords).where(eq(auditRecords.resourceId, stale!.id));
     expect(fails.map((f) => [f.action, f.outcome])).toEqual([["research.run.fail", "FAILED"]]);
     expect(fetches).toEqual([]);
@@ -352,6 +355,27 @@ describe("pipeline", () => {
 
     const first = await finished((await runNow(w.id)).id);
     expect(first.findings.map((f) => [f.title, f.label])).toEqual([[claim, "UNVERIFIED"]]);
+
+    // Talk relays it as the publisher's claim, with the finding as its source.
+    const talk = await answer(
+      { kind: "RESEARCH_SEARCH", query: "trillion agent market" },
+      {
+        db: db.db,
+        github: null,
+        ownerId: "owner",
+        subjectJobId: null,
+        connectorsDir: "/nonexistent",
+        correlationId: "c",
+      },
+    );
+    expect(talk.text).toContain(`blog.example claims: "${claim}" (unverified`);
+    expect(talk.sources).toEqual([
+      expect.objectContaining({
+        kind: "FINDING",
+        id: first.findings[0]!.id,
+        url: "https://blog.example/market",
+      }),
+    ]);
 
     await send("PATCH", `/v1/research/watchlists/${w.id}`, {
       sources: [

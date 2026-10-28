@@ -549,7 +549,7 @@ function LatestBrief({ w }: { w: Watchlist }) {
             </p>
           ) : run.status === "FAILED" && run.skippedSources.length === 0 ? (
             <p className="m-0 text-[14px] text-coral">
-              This run failed before it finished and won&apos;t be retried. Run it again.
+              {run.error ?? "This run failed before it finished and won't be retried."} Run it again.
             </p>
           ) : brief.data!.findings.length === 0 ? (
             <p className="m-0 text-[14px] text-ink2">Nothing new in this run.</p>
