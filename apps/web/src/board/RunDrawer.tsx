@@ -3,9 +3,32 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isTerminal, type JobStatus, type RunEvent } from "@nexus/contracts";
 import { api, keys } from "../lib/api.ts";
-import { duration, jobTone, statusLabel, useRunners } from "../lib/queries.ts";
+import {
+  duration,
+  jobTone,
+  statusLabel,
+  useGithubStatus,
+  useJobApproval,
+  useRepositories,
+  useRunners,
+} from "../lib/queries.ts";
+import { ApprovalGate } from "./approval.tsx";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
-import { explain, liveStatus, runFacts, toLine, useRunEvents, type StreamState } from "./runEvents.ts";
+import {
+  agentFacts,
+  explain,
+  explainIssue,
+  issueStages,
+  liveStatus,
+  runFacts,
+  toLine,
+  useRunEvents,
+  type AgentFacts,
+  type ChangeType,
+  type Stage,
+  type StageState,
+  type StreamState,
+} from "./runEvents.ts";
 
 const POLL_MS = 5_000;
 
@@ -41,11 +64,24 @@ function RunBody({ jobId }: { jobId: string }) {
     if (terminal || stream === "ended") void queryClient.invalidateQueries({ queryKey: keys.jobs });
   }, [terminal, stream, queryClient]);
 
+  const issueReq = job.data?.request.jobType === "DEV_ISSUE_TO_PR" ? job.data.request : undefined;
+  const approval = useJobApproval(jobId, !!issueReq, terminal);
+  const github = useGithubStatus();
+  const repos = useRepositories(!!issueReq && github.data?.configured === true);
+  // Gate events mean the approval changed: fetch it now instead of waiting for the next poll.
+  const gateEvents = events.filter(
+    (e) => e.type.startsWith("approval.") || e.type === "external_action.completed",
+  ).length;
+  useEffect(() => {
+    if (gateEvents) void queryClient.invalidateQueries({ queryKey: keys.approvalsBy({ jobId }) });
+  }, [gateEvents, jobId, queryClient]);
+
   const cancel = useMutation({
     mutationFn: () => api.cancelJob(jobId),
     onSuccess: (j) => {
       queryClient.setQueryData(keys.job(jobId), j);
       void queryClient.invalidateQueries({ queryKey: keys.jobs });
+      void queryClient.invalidateQueries({ queryKey: keys.approvals });
     },
   });
 
@@ -64,7 +100,6 @@ function RunBody({ jobId }: { jobId: string }) {
   const runnerName =
     runner?.name ?? (j.runnerId ? undefined : runners.data?.find((r) => r.status !== "REVOKED")?.name);
   const facts = runFacts(events);
-  const preset = j.request.preset;
   const startedAt = events.find(
     (e) => e.type === "job.state.changed" && e.payload.to === "RUNNING",
   )?.occurredAt;
@@ -73,21 +108,44 @@ function RunBody({ jobId }: { jobId: string }) {
     facts.durationMs ??
     (startedAt && endedAt ? new Date(endedAt).getTime() - new Date(startedAt).getTime() : undefined);
 
+  const a = approval.data;
+  const agent = issueReq ? agentFacts(events) : undefined;
+  const repoName =
+    a?.action.repositoryFullName ?? repos.data?.items.find((r) => r.id === issueReq?.repositoryId)?.fullName;
+  const sandboxStat = facts.sandbox
+    ? [facts.sandbox.runtime === "none" ? "none · host" : facts.sandbox.runtime, facts.sandbox.image]
+        .filter(Boolean)
+        .join(" · ")
+    : "—";
+
   return (
     <>
-      <DrawerHeader
-        kicker={`Run · diagnostic · ${j.id.slice(0, 8)}`}
-        title={`${preset} on ${runner?.name ?? facts.hostname ?? "the home machine"}`}
-      />
+      {issueReq ? (
+        <DrawerHeader
+          kicker={`Run · issue → draft PR · ${j.id.slice(0, 8)}`}
+          title={`#${issueReq.issueNumber} on ${repoName ?? "its repository"}`}
+        />
+      ) : (
+        <DrawerHeader
+          kicker={`Run · diagnostic · ${j.id.slice(0, 8)}`}
+          title={`${j.request.jobType === "RUNNER_DIAGNOSTIC" ? j.request.preset : ""} on ${runner?.name ?? facts.hostname ?? "the home machine"}`}
+        />
+      )}
       <div className="nx-stagger flex min-h-0 flex-1 flex-col gap-[18px] overflow-auto px-6 pt-5 pb-6">
-        <StageBar status={status} events={events} />
+        {issueReq ? (
+          <Stages stages={issueStages(status, j.outcome, events, a)} />
+        ) : (
+          <StageBar status={status} events={events} />
+        )}
         <div
           className="flex flex-none items-start gap-2.5 rounded-2xl px-4 py-3.5"
           style={{ background: "oklch(0.60 0.08 195 / .09)" }}
         >
           <span className="flex-none font-serif text-[20px] leading-none text-teal italic">Explain</span>
           <p className="m-0 text-[13px] leading-[1.55] text-pretty text-ink2">
-            {explain(status, facts, runnerName, online)}
+            {agent
+              ? explainIssue(status, j.outcome, agent, a, runnerName, online)
+              : explain(status, facts, runnerName, online)}
           </p>
         </div>
         {facts.sandbox?.runtime === "none" && (
@@ -101,25 +159,72 @@ function RunBody({ jobId }: { jobId: string }) {
           </p>
         )}
         <Terminal events={events} stream={stream} status={status} runnerName={runner?.name ?? runnerName} />
-        <div className="grid flex-none grid-cols-2 gap-2.5 sm:grid-cols-5">
-          <Stat k="status" v={statusLabel(status)} />
-          <Stat k="runner" v={runner?.name ?? (j.runnerId ? j.runnerId.slice(0, 8) : "not claimed yet")} />
-          <Stat k="duration" v={dur === undefined ? "—" : duration(dur)} />
-          <Stat k="exit code" v={facts.exitCode === undefined ? "—" : String(facts.exitCode)} />
-          <Stat
-            k="sandbox"
-            v={
-              facts.sandbox
-                ? [
-                    facts.sandbox.runtime === "none" ? "none · host" : facts.sandbox.runtime,
-                    facts.sandbox.image,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")
-                : "—"
-            }
-          />
-        </div>
+        {agent?.secretLeak && (
+          <p
+            role="alert"
+            className="m-0 flex-none rounded-2xl px-4 py-3 text-[13px] leading-[1.5] text-ink"
+            style={{ background: "oklch(0.62 0.15 32 / .14)" }}
+          >
+            <strong className="font-medium">Secret found in the changes.</strong> The runner found a provider
+            key in a changed file, so this run will not be pushed.
+          </p>
+        )}
+        {issueReq && agent ? (
+          <>
+            <div className="grid flex-none gap-3.5 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+              <Changes
+                files={a?.action.files ?? agent.files}
+                total={a?.action.files.length ?? agent.fileCount}
+                stats={a?.action.stats}
+              />
+              <div className="flex min-w-0 flex-col gap-3">
+                {a && <ApprovalGate approval={a} jobCancelled={status === "CANCELLED"} />}
+                {approval.error && (
+                  <p role="alert" className="m-0 text-[12.5px] text-coral">
+                    Can&apos;t load the approval: {approval.error.message}
+                  </p>
+                )}
+                <div className="grid grid-cols-2 gap-2.5">
+                  <Stat k="status" v={statusLabel(status)} />
+                  <Stat k="elapsed" v={dur === undefined ? "—" : duration(dur)} />
+                  <Stat k="turns" v={`${agent.turns ?? "—"} / ${issueReq.budget.maxTurns}`} />
+                  <Stat
+                    k="cost (estimate)"
+                    v={`${agent.costUsd === undefined ? "—" : `$${agent.costUsd.toFixed(2)}`} / $${issueReq.budget.maxCostUsd}`}
+                  />
+                  <Stat k="tokens in / out" v={tokens(agent)} />
+                  <Stat k="branch" v={a?.action.headBranch ?? "named when changes are ready"} />
+                  <Stat
+                    k="runner"
+                    v={runner?.name ?? (j.runnerId ? j.runnerId.slice(0, 8) : "not claimed yet")}
+                  />
+                  <Stat k="sandbox" v={sandboxStat} />
+                </div>
+              </div>
+            </div>
+            {agent.report && (
+              <section
+                aria-labelledby="agent-report"
+                className="flex flex-none flex-col gap-2 rounded-[18px] border border-hair p-4"
+              >
+                <h3 id="agent-report" className="kicker m-0">
+                  Agent report (unverified)
+                </h3>
+                <p className="m-0 text-[13px] leading-[1.55] break-words whitespace-pre-wrap text-ink2">
+                  {agent.report}
+                </p>
+              </section>
+            )}
+          </>
+        ) : (
+          <div className="grid flex-none grid-cols-2 gap-2.5 sm:grid-cols-5">
+            <Stat k="status" v={statusLabel(status)} />
+            <Stat k="runner" v={runner?.name ?? (j.runnerId ? j.runnerId.slice(0, 8) : "not claimed yet")} />
+            <Stat k="duration" v={dur === undefined ? "—" : duration(dur)} />
+            <Stat k="exit code" v={facts.exitCode === undefined ? "—" : String(facts.exitCode)} />
+            <Stat k="sandbox" v={sandboxStat} />
+          </div>
+        )}
         {!terminal && status !== "RECOVERY_REQUIRED" && (
           <div className="flex flex-none flex-col items-end gap-2">
             <button
@@ -148,6 +253,116 @@ function Stat({ k, v }: { k: string; v: string }) {
       <span className="font-mono text-[10.5px] text-ink3">{k}</span>
       <span className="text-[13px] font-medium break-words">{v}</span>
     </div>
+  );
+}
+
+const tokens = (f: AgentFacts) =>
+  f.inputTokens === undefined ? "—" : `${kilo(f.inputTokens)} / ${kilo(f.outputTokens ?? 0)}`;
+const kilo = (n: number) => (n < 1000 ? String(n) : `${Math.round(n / 1000)}k`);
+
+const CHANGE_TONE: Record<ChangeType, string> = {
+  added: "var(--green)",
+  modified: "var(--amber)",
+  deleted: "var(--coral)",
+};
+
+/** Changed files: the approval's exact list once it exists, the runner's scan before that. */
+function Changes({
+  files,
+  total,
+  stats,
+}: {
+  files: readonly { path: string; change: ChangeType }[] | undefined;
+  total: number | undefined;
+  stats: { added: number; removed: number } | undefined;
+}) {
+  return (
+    <section
+      aria-labelledby="changes-title"
+      className="min-w-0 overflow-hidden rounded-[18px] border border-hair"
+    >
+      <h3
+        id="changes-title"
+        className="m-0 border-b border-hair px-4 py-3 text-[13px] leading-none font-medium text-ink"
+      >
+        Changed files
+        {stats && (
+          <span className="ml-1.5 font-mono text-[12px] font-normal">
+            · <span className="text-green">+{stats.added}</span>{" "}
+            <span className="text-coral">−{stats.removed}</span>
+          </span>
+        )}
+      </h3>
+      {!files?.length ? (
+        <p className="m-0 px-4 py-3 text-[12.5px] text-ink3">No changes reported yet.</p>
+      ) : (
+        <ul className="m-0 max-h-[260px] list-none overflow-auto p-0">
+          {files.map((f) => (
+            <li
+              key={f.path}
+              className="flex justify-between gap-2.5 border-b border-hair px-4 py-2 font-mono text-[11.5px] leading-[1.3]"
+            >
+              <span title={f.path} className="truncate text-ink2">
+                {f.path}
+              </span>
+              <span className="flex-none" style={{ color: CHANGE_TONE[f.change] }}>
+                {f.change}
+              </span>
+            </li>
+          ))}
+          {total !== undefined && total > files.length && (
+            <li className="px-4 py-2 font-mono text-[11.5px] text-ink3">
+              +{total - files.length} more not listed
+            </li>
+          )}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+const STAGE_TONE: Record<StageState, string> = {
+  done: "var(--green)",
+  active: "var(--teal)",
+  waiting: "var(--amber)",
+  failed: "var(--coral)",
+  skipped: "var(--hair)",
+  pending: "var(--hair)",
+};
+const STAGE_SR: Record<StageState, string> = {
+  done: "done",
+  active: "in progress",
+  waiting: "waiting for you",
+  failed: "stopped",
+  skipped: "skipped",
+  pending: "not started",
+};
+
+/** The design's six-stage bar for issue runs; states come from issueStages (event evidence only). */
+function Stages({ stages }: { stages: readonly Stage[] }) {
+  return (
+    <ol
+      aria-label="Run stages"
+      className="m-0 grid flex-none list-none grid-cols-3 gap-1.5 p-0 sm:grid-cols-6"
+    >
+      {stages.map((s) => (
+        <li
+          key={s.label}
+          data-state={s.state}
+          aria-current={s.state === "active" || s.state === "waiting" ? "step" : undefined}
+          className="flex min-w-0 flex-col gap-[7px]"
+        >
+          <span className="h-1 rounded-sm" style={{ background: STAGE_TONE[s.state] }} />
+          <span
+            className={`truncate text-[11.5px] font-medium ${s.state === "pending" || s.state === "skipped" ? "text-ink3" : "text-ink"}`}
+          >
+            {s.label}
+            <span className="sr-only">: {STAGE_SR[s.state]}</span>
+          </span>
+          <span className="font-mono text-[10.5px] text-ink3">{s.note}</span>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -275,12 +490,16 @@ function Terminal({
                   data-index={row.index}
                   data-seq={ln.seq}
                   ref={virtualizer.measureElement}
-                  className="absolute top-0 left-0 grid w-full grid-cols-[62px_74px_minmax(0,1fr)] gap-2.5 pb-1"
+                  data-alert={ln.alert ? "" : undefined}
+                  className={`absolute top-0 left-0 grid w-full grid-cols-[62px_74px_minmax(0,1fr)] gap-2.5 pb-1 ${ln.alert ? "rounded bg-[oklch(0.62_0.15_32/.22)]" : ""}`}
                   style={{ transform: `translateY(${row.start}px)` }}
                 >
                   <span className="text-[#5e5a52]">{ln.t}</span>
                   <span style={{ color: ln.tone }}>{ln.k}</span>
-                  <span className="break-words whitespace-pre-wrap text-[#d9d4ca]">{ln.m}</span>
+                  <span className="break-words whitespace-pre-wrap text-[#d9d4ca]">
+                    {ln.alert && <span className="sr-only">{ln.alert}</span>}
+                    {ln.m}
+                  </span>
                 </div>
               );
             })}

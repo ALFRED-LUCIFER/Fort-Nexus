@@ -25,13 +25,24 @@ import type { Config } from "./config.ts";
 import { createDb, runMigrations, type Db } from "./db/index.ts";
 import { HttpError } from "./errors.ts";
 import { loadGithubAppConfig } from "./github/app-config.ts";
+import { createGithubCatalog, type GithubCatalog } from "./github/catalog.ts";
+import { createExecutor, expireApprovals, type Executor } from "./issue-to-pr.ts";
 import { reapExpiredLeases } from "./jobs.ts";
 import { createHub, type Hub } from "./notify.ts";
 import { githubRoutes } from "./routes/github.ts";
 import { ownerRoutes } from "./routes/owner.ts";
 import { runnerRegisterRoute, runnerRoutes } from "./routes/runner.ts";
 
-export type Deps = { config: Config; db: Db; auth: Auth; hub: Hub; shutdown: AbortSignal };
+export type Deps = {
+  config: Config;
+  db: Db;
+  auth: Auth;
+  hub: Hub;
+  shutdown: AbortSignal;
+  /** null until the GitHub App is set up. */
+  github: GithubCatalog | null;
+  executor: Executor;
+};
 
 const REAPER_INTERVAL_MS = 5_000;
 const WEB_DIST = fileURLToPath(new URL("../../web/dist", import.meta.url));
@@ -101,7 +112,9 @@ export async function buildApp(config: Config) {
   }
   const shutdown = new AbortController();
   const auth = createAuth(config, db, github);
-  const deps: Deps = { config, db, auth, hub, shutdown: shutdown.signal };
+  const catalog = github ? createGithubCatalog(github, app.log) : null;
+  const executor = createExecutor(db, catalog, app.log);
+  const deps: Deps = { config, db, auth, hub, shutdown: shutdown.signal, github: catalog, executor };
 
   app.addHook("onRequest", async (request, reply) => {
     reply.header("x-request-id", request.id);
@@ -211,7 +224,7 @@ export async function buildApp(config: Config) {
   });
 
   // GitHub routes share the owner scope, so its session hook guards them too.
-  await app.register(async (scope) => ownerRoutes(scope, deps).then(() => githubRoutes(scope, github)));
+  await app.register(async (scope) => ownerRoutes(scope, deps).then(() => githubRoutes(scope, deps)));
   await app.register(async (scope) => runnerRegisterRoute(scope, deps));
   await app.register(async (scope) => runnerRoutes(scope, deps));
 
@@ -227,14 +240,24 @@ export async function buildApp(config: Config) {
 
   let reaper: NodeJS.Timeout | undefined;
   const reap = () =>
-    reapExpiredLeases(db)
-      .then((n) => {
+    Promise.all([
+      reapExpiredLeases(db).then((n) => {
         if (n > 0) app.log.warn({ count: n }, "expired leases moved to RECOVERY_REQUIRED");
-      })
-      .catch((err: unknown) => app.log.error({ err }, "lease reaper failed"));
+      }),
+      expireApprovals(db).then((n) => {
+        if (n > 0) app.log.info({ count: n }, "pending approvals expired");
+      }),
+    ]).catch((err: unknown) => app.log.error({ err }, "reaper failed"));
   app.addHook("onReady", async () => {
     await reap();
     reaper = setInterval(reap, REAPER_INTERVAL_MS);
+    // Approved pushes a crash interrupted; in the background so GitHub latency never blocks startup.
+    executor
+      .reconcile()
+      .then((n) => {
+        if (n > 0) app.log.warn({ count: n }, "reconciled interrupted approved pushes");
+      })
+      .catch((err: unknown) => app.log.error({ err }, "approval reconciliation failed"));
   });
   app.addHook("preClose", async () => {
     clearInterval(reaper);

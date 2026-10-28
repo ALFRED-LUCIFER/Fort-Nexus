@@ -24,13 +24,13 @@ const text = (max: number) =>
     .catch(undefined);
 
 // Deep-linkable board state: `/?ws=dev&drawer=run:<uuid>`, `drawer=repo:<repoId>` (with issue filters),
-// `drawer=issue:<repoId>:<number>`. Bad values fall back instead of erroring.
+// `drawer=issue:<repoId>:<number>`, `drawer=inbox`. Bad values fall back instead of erroring.
 export const BoardSearch = z.object({
   ws: Workspace.optional().catch(undefined),
   drawer: z
     .string()
     .regex(
-      /^(run:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|repo:[1-9]\d{0,19}|issue:[1-9]\d{0,19}:[1-9]\d{0,9})$/i,
+      /^(run:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|repo:[1-9]\d{0,19}|issue:[1-9]\d{0,19}:[1-9]\d{0,9}|inbox)$/i,
     )
     .optional()
     .catch(undefined),

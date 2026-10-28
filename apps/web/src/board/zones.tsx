@@ -143,11 +143,11 @@ export function CodeZone({
           Recent runs
         </h3>
         {jobs?.length ? (
-          <RunNodes jobs={jobs} runners={runners} onOpen={onOpen} />
+          <RunNodes jobs={jobs} runners={runners} repos={items} onOpen={onOpen} />
         ) : (
           <QueryState
             query={query}
-            empty="No runs yet. Use Execute in the command bar to run a diagnostic on your home runner."
+            empty="No runs yet. Start one from an issue in a repository, or run a diagnostic with Execute in the command bar."
           />
         )}
       </section>
@@ -158,10 +158,12 @@ export function CodeZone({
 function RunNodes({
   jobs,
   runners,
+  repos,
   onOpen,
 }: {
   jobs: JobList["items"];
   runners: readonly Runner[] | undefined;
+  repos: RepositoryList["items"];
   onOpen: (id: string) => void;
 }) {
   return (
@@ -182,13 +184,18 @@ function RunNodes({
                 : "var(--hair)",
         );
         const name = runners?.find((r) => r.id === j.runnerId)?.name;
+        const req = j.request;
         return (
           <li key={j.id}>
             <Node
               dot={tone}
               live={isActive(j.status)}
               kicker={j.status === "QUEUED" && !j.runnerId ? "Queued · held" : statusLabel(j.status)}
-              title={`Diagnostic · ${j.request.preset}`}
+              title={
+                req.jobType === "RUNNER_DIAGNOSTIC"
+                  ? `Diagnostic · ${req.preset}`
+                  : `#${req.issueNumber} → draft PR · ${repos.find((r) => r.id === req.repositoryId)?.fullName ?? "repository"}`
+              }
               meta={`${name ?? (j.runnerId ? "runner" : "not claimed")} · ${clock(j.createdAt)}`}
               segs={segs}
               onClick={() => onOpen(j.id)}

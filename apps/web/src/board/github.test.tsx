@@ -3,12 +3,24 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   GITHUB_SETUP_COMMAND,
+  IDEMPOTENCY_HEADER,
+  IdempotencyKey,
   type GithubStatus,
   type Issue,
   type IssueDetail,
   type Repository,
 } from "@nexus/contracts";
-import { FakeEventSource, ME, json, mockFetch, renderApp, runner } from "../test/helpers.tsx";
+import {
+  FakeEventSource,
+  JOB_ID,
+  ME,
+  apiError,
+  job,
+  json,
+  mockFetch,
+  renderApp,
+  runner,
+} from "../test/helpers.tsx";
 
 const SYNCED = new Date().toISOString();
 const INSTALL_URL = "https://github.com/apps/nexus-test/installations/new";
@@ -68,10 +80,13 @@ const detail = (over: Partial<IssueDetail> = {}): IssueDetail => ({
   ...over,
 });
 
+let runners = [runner()];
+const mockRunners = (r: ReturnType<typeof runner>[]) => (runners = r);
+
 function board(status: GithubStatus, extra: Parameters<typeof mockFetch>[0] = {}) {
   return mockFetch({
     "GET /v1/me": () => json(ME),
-    "GET /v1/runners": () => json({ items: [runner()] }),
+    "GET /v1/runners": () => json({ items: runners }),
     "GET /v1/jobs": () => json({ items: [], nextCursor: null }),
     "GET /v1/github/status": () => json(status),
     "GET /v1/repositories": () => json({ items: REPOS, syncedAt: SYNCED }),
@@ -82,6 +97,7 @@ function board(status: GithubStatus, extra: Parameters<typeof mockFetch>[0] = {}
 const codeZone = async () => screen.findByRole("region", { name: "Code" });
 
 beforeEach(() => {
+  runners = [runner()];
   FakeEventSource.instances = [];
   vi.stubGlobal("EventSource", FakeEventSource);
 });
@@ -184,7 +200,7 @@ describe("repo drawer issues", () => {
 });
 
 describe("issue drawer", () => {
-  it("shows the plain-text body, extracted criteria and ENG-07 buttons that do nothing yet", async () => {
+  it("shows the plain-text body and extracted criteria; Plan only waits for the plan step", async () => {
     const calls = board(installed, { "GET /v1/repositories/101/issues/42": () => json(detail()) });
     const user = userEvent.setup();
     renderApp("/?drawer=issue:101:42");
@@ -204,15 +220,97 @@ describe("issue drawer", () => {
     ).toEqual(["Rounds per currency minor unit", "No change for USD"]);
     expect(within(drawer).queryByText("Missing acceptance criteria")).toBeNull();
 
-    for (const name of ["Plan only", "Start run on test-host"]) {
-      const btn = within(drawer).getByRole("button", { name });
-      expect(btn.getAttribute("aria-disabled")).toBe("true");
-      expect(document.getElementById(btn.getAttribute("aria-describedby")!)?.textContent).toMatch(
-        /arrives with ENG-07/,
-      );
-      await user.click(btn);
-    }
+    const plan = within(drawer).getByRole("button", { name: "Plan only" });
+    expect(plan.getAttribute("aria-disabled")).toBe("true");
+    expect(document.getElementById(plan.getAttribute("aria-describedby")!)?.textContent).toBe(
+      "Plan only arrives with the plan step.",
+    );
+    await user.click(plan);
     expect(calls.filter((c) => c.method !== "GET")).toHaveLength(0);
+  });
+
+  it("previews the run, posts it with one Idempotency-Key reused on retry, and opens the run", async () => {
+    let attempts = 0;
+    const calls = board(installed, {
+      "GET /v1/repositories/101/issues/42": () => json(detail()),
+      "POST /v1/jobs": () =>
+        ++attempts === 1
+          ? apiError(503, "RUNNER_UNAVAILABLE", "Queue is busy, try again.")
+          : json({ jobId: JOB_ID, status: "QUEUED", streamUrl: `/v1/jobs/${JOB_ID}/events` }, 202),
+      [`GET /v1/jobs/${JOB_ID}`]: () => json(job()),
+      "GET /v1/approvals": () => json({ items: [] }),
+    });
+    const user = userEvent.setup();
+    const { router } = renderApp("/?drawer=issue:101:42");
+    const start = await screen.findByRole("button", { name: "Start run on test-host" });
+    expect(start.getAttribute("aria-expanded")).toBe("false");
+    await user.click(start);
+
+    const preview = screen.getByRole("region", { name: "Here’s exactly what will happen." });
+    expect(start.getAttribute("aria-expanded")).toBe("true");
+    const fact = (k: string) =>
+      within(preview).getByText(k, { selector: "dt" }).nextElementSibling!.textContent;
+    expect(fact("Repository")).toBe("acme/web");
+    expect(fact("Issue")).toBe("#42 Cart totals round wrong");
+    expect(fact("Work branch")).toBe("nexus/issue-42-…");
+    expect(fact("Runs on")).toMatch(/^test-host · online/);
+    expect(
+      within(preview).getByText("Runs at home in a sandbox. Push and PR always ask you first."),
+    ).toBeTruthy();
+    const base = within(preview).getByLabelText("Base branch");
+    expect((base as HTMLInputElement).value).toBe("main");
+    expect(document.activeElement).toBe(base);
+    expect(
+      ["Time limit (minutes)", "Agent turns", "Model cost cap (USD)"].map(
+        (l) => (within(preview).getByLabelText(l) as HTMLInputElement).value,
+      ),
+    ).toEqual(["45", "60", "5"]);
+
+    await user.clear(base);
+    await user.type(base, "develop");
+    await user.click(within(preview).getByRole("button", { name: "Confirm and start" }));
+    expect((await within(preview).findByRole("alert")).textContent).toBe("Queue is busy, try again.");
+    await user.click(within(preview).getByRole("button", { name: "Confirm and start" }));
+
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ drawer: `run:${JOB_ID}` }));
+    const posts = calls.filter((c) => c.method === "POST" && c.path === "/v1/jobs");
+    expect(posts).toHaveLength(2);
+    const key = posts[0]!.headers.get(IDEMPOTENCY_HEADER);
+    expect(IdempotencyKey.safeParse(key).success).toBe(true);
+    expect(posts[1]!.headers.get(IDEMPOTENCY_HEADER)).toBe(key);
+    expect(posts[1]!.body).toEqual({
+      jobType: "DEV_ISSUE_TO_PR",
+      repositoryId: "101",
+      issueNumber: 42,
+      baseBranch: "develop",
+      budget: { maxWallClockMinutes: 45, maxTurns: 60, maxCostUsd: 5 },
+    });
+  });
+
+  it("rejects a budget over the contract's caps before sending, and says queued runs are held", async () => {
+    const calls = board(installed, { "GET /v1/repositories/101/issues/42": () => json(detail()) });
+    mockRunners([runner({ status: "OFFLINE" })]);
+    const user = userEvent.setup();
+    renderApp("/?drawer=issue:101:42");
+    await user.click(await screen.findByRole("button", { name: "Start run on test-host" }));
+    const preview = screen.getByRole("region", { name: "Here’s exactly what will happen." });
+    expect(
+      within(preview).getByText(/test-host is offline\. The run will be queued and held, not lost/),
+    ).toBeTruthy();
+
+    const minutes = within(preview).getByLabelText("Time limit (minutes)");
+    await user.clear(minutes);
+    await user.type(minutes, "121");
+    const cost = within(preview).getByLabelText("Model cost cap (USD)");
+    await user.clear(cost);
+    await user.type(cost, "50.5");
+    expect(minutes.getAttribute("aria-invalid")).toBe("true");
+    expect(within(preview).getByText("Enter whole minutes from 5 to 120.")).toBeTruthy();
+    expect(within(preview).getByText("Enter an amount above $0 and at most $50.")).toBeTruthy();
+
+    await user.click(within(preview).getByRole("button", { name: "Confirm and start" }));
+    expect(document.activeElement).toBe(minutes);
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(0);
   });
 
   it("warns when the issue has no acceptance criteria", async () => {

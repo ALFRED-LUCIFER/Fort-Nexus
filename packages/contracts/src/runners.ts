@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CreateJobRequest } from "./jobs.ts";
+import { IssueToPrTask } from "./issue-to-pr.ts";
 
 export const RUNNER_HEARTBEAT_INTERVAL_MS = 5_000;
 export const RUNNER_STALE_AFTER_MS = 15_000;
@@ -64,5 +65,7 @@ export const LeaseResponse = z.object({
   request: CreateJobRequest,
   fencingToken: z.int().positive(),
   leaseExpiresAt: z.iso.datetime(),
+  // Present exactly when request.jobType is DEV_ISSUE_TO_PR.
+  task: IssueToPrTask.optional(),
 });
 export type LeaseResponse = z.infer<typeof LeaseResponse>;

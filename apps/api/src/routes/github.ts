@@ -12,8 +12,8 @@ import {
   RepositoryQuery,
 } from "@nexus/contracts";
 import { HttpError } from "../errors.ts";
-import type { GithubAppConfig } from "../github/app-config.ts";
-import { createGithubCatalog } from "../github/catalog.ts";
+import type { Deps } from "../app.ts";
+import type { GithubCatalog } from "../github/catalog.ts";
 
 const RepoParams = z.object({ repoId: RepoId });
 const IssueParams = RepoParams.extend({
@@ -24,19 +24,21 @@ const IssueParams = RepoParams.extend({
     .max(2 ** 31 - 1),
 });
 
+/** The catalog, or 409 explaining how to set GitHub up. */
+export const requireGithub = (catalog: GithubCatalog | null) => {
+  if (!catalog)
+    throw new HttpError(
+      409,
+      "CONFLICT",
+      `GitHub isn't set up. On the home machine run \`${GITHUB_SETUP_COMMAND}\`, then restart the API.`,
+      { setupCommand: GITHUB_SETUP_COMMAND },
+    );
+  return catalog;
+};
+
 /** Read-only GitHub catalog (EPIC GH). Registered inside the owner scope: every route needs the owner session. */
-export async function githubRoutes(app: FastifyInstance, github: GithubAppConfig | null) {
-  const catalog = github ? createGithubCatalog(github, app.log) : null;
-  const need = () => {
-    if (!catalog)
-      throw new HttpError(
-        409,
-        "CONFLICT",
-        `GitHub isn't set up. On the home machine run \`${GITHUB_SETUP_COMMAND}\`, then restart the API.`,
-        { setupCommand: GITHUB_SETUP_COMMAND },
-      );
-    return catalog;
-  };
+export async function githubRoutes(app: FastifyInstance, { github: catalog }: Deps) {
+  const need = () => requireGithub(catalog);
 
   const r = app.withTypeProvider<ZodTypeProvider>();
 

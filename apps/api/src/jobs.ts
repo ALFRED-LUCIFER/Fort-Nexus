@@ -7,6 +7,7 @@ import {
   type AppendEventsRequest,
   type AppendEventsResponse,
   type CreateJobRequest,
+  type IssueSnapshot,
   type Job,
   type JobList,
   type JobStatus,
@@ -17,7 +18,7 @@ import {
 } from "@nexus/contracts";
 import { audit } from "./audit.ts";
 import type { Db, Tx } from "./db/index.ts";
-import { jobs, runEventBatches, runEvents, runners } from "./db/schema.ts";
+import { approvals, jobs, runEventBatches, runEvents, runners } from "./db/schema.ts";
 import { HttpError, invalidTransition, notFound } from "./errors.ts";
 
 export const JOB_EVENTS_CHANNEL = "nexus_job_events";
@@ -29,9 +30,9 @@ const SERVER_ONLY_EVENTS = new Set<RunEventType>([
   "job.recovery_required",
 ]);
 
-type JobRow = typeof jobs.$inferSelect;
+export type JobRow = typeof jobs.$inferSelect;
 type RunnerRow = typeof runners.$inferSelect;
-type NewEvent = {
+export type NewEvent = {
   type: RunEventType;
   stage?: RunStage | null;
   payload?: Record<string, unknown>;
@@ -66,13 +67,23 @@ export const toRunEventDto = (e: typeof runEvents.$inferSelect): RunEvent => ({
   payload: e.payload,
 });
 
-const stateChanged = (from: JobStatus, to: JobStatus, extra: Record<string, unknown> = {}): NewEvent => ({
+export const stateChanged = (
+  from: JobStatus,
+  to: JobStatus,
+  extra: Record<string, unknown> = {},
+): NewEvent => ({
   type: "job.state.changed",
   payload: { from, to, ...extra },
 });
 
 /** Appends events after `afterSeq` and NOTIFYs listeners (delivered on commit). Returns the new last sequence. */
-async function writeEvents(tx: Tx, jobId: string, afterSeq: number, actor: string, events: NewEvent[]) {
+export async function writeEvents(
+  tx: Tx,
+  jobId: string,
+  afterSeq: number,
+  actor: string,
+  events: NewEvent[],
+) {
   if (events.length === 0) return afterSeq;
   await tx.insert(runEvents).values(
     events.map((e, i) => ({
@@ -90,7 +101,7 @@ async function writeEvents(tx: Tx, jobId: string, afterSeq: number, actor: strin
 }
 
 // Stable key order so semantically equal bodies hash equally.
-const canonical = (v: unknown): string =>
+export const canonical = (v: unknown): string =>
   Array.isArray(v)
     ? `[${v.map(canonical).join(",")}]`
     : v && typeof v === "object"
@@ -101,12 +112,75 @@ const canonical = (v: unknown): string =>
       : JSON.stringify(v);
 export const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
+/** Server-driven transition of a locked job row: `events`, then its job.state.changed, in one write. */
+export async function moveJob(
+  tx: Tx,
+  job: JobRow,
+  to: JobStatus,
+  actor: string,
+  events: NewEvent[],
+  set: Partial<Pick<JobRow, "outcome" | "leaseExpiresAt">> = {},
+): Promise<JobRow> {
+  if (!canTransition(job.status, to)) throw invalidTransition(job.status, to);
+  const seq = await writeEvents(tx, job.id, job.lastEventSequence, actor, [
+    ...events,
+    stateChanged(job.status, to, set.outcome ? { outcome: set.outcome } : {}),
+  ]);
+  const [moved] = await tx
+    .update(jobs)
+    .set({
+      status: to,
+      stateVersion: job.stateVersion + 1,
+      lastEventSequence: seq,
+      updatedAt: new Date(),
+      ...set,
+    })
+    .where(eq(jobs.id, job.id))
+    .returning();
+  return moved!;
+}
+
+/** The API itself fails a job it was driving (e.g. no GitHub token at lease time). No-op once terminal. */
+export async function failJob(
+  db: Db,
+  input: { jobId: string; actor: string; reason: string; message: string },
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [job] = await tx.select().from(jobs).where(eq(jobs.id, input.jobId)).for("update");
+    if (!job || !canTransition(job.status, "FAILED")) return;
+    await moveJob(
+      tx,
+      job,
+      "FAILED",
+      input.actor,
+      [{ type: "job.failed", payload: { reason: input.reason, message: input.message } }],
+      { leaseExpiresAt: null },
+    );
+    await audit(tx, {
+      actor: input.actor,
+      action: "job.fail",
+      resourceType: "job",
+      resourceId: job.id,
+      correlationId: job.id,
+      outcome: "FAILED",
+      metadata: { from: job.status, reason: input.reason },
+    });
+  });
+}
+
 // ── Owner operations ──
 // shortcut: jobs are scoped by owner only; workspaceId/projectId scope (Part B #5) arrives with workspaces (FR-WKS-01).
 
 export async function createJob(
   db: Db,
-  input: { ownerId: string; idempotencyKey: string; body: CreateJobRequest; correlationId: string },
+  input: {
+    ownerId: string;
+    idempotencyKey: string;
+    body: CreateJobRequest;
+    correlationId: string;
+    /** DEV_ISSUE_TO_PR: validates against GitHub and pins the issue. Runs only for a new key, outside the tx. */
+    pinIssue: (body: Extract<CreateJobRequest, { jobType: "DEV_ISSUE_TO_PR" }>) => Promise<IssueSnapshot>;
+  },
 ): Promise<JobRow> {
   const requestHash = sha256(canonical(input.body));
   const byKey = and(eq(jobs.initiatorId, input.ownerId), eq(jobs.idempotencyKey, input.idempotencyKey));
@@ -120,10 +194,12 @@ export async function createJob(
     return existing;
   };
 
-  return db.transaction(async (tx) => {
-    const [existing] = await tx.select().from(jobs).where(byKey);
-    if (existing) return replay(existing);
+  const [existing] = await db.select().from(jobs).where(byKey);
+  if (existing) return replay(existing);
+  const body = input.body;
+  const snapshot = body.jobType === "DEV_ISSUE_TO_PR" ? await input.pinIssue(body) : null;
 
+  return db.transaction(async (tx) => {
     const target = input.body.runnerId;
     if (target) {
       const [r] = await tx
@@ -139,10 +215,12 @@ export async function createJob(
       .insert(jobs)
       .values({
         initiatorId: input.ownerId,
-        jobType: input.body.jobType,
+        jobType: body.jobType,
         status: "QUEUED",
-        riskTier: "R0", // RUNNER_DIAGNOSTIC: read-only fixed argv on the runner
-        request: input.body,
+        // RUNNER_DIAGNOSTIC: read-only fixed argv. DEV_ISSUE_TO_PR: sandboxed edits; the push is a separate R2 approval.
+        riskTier: snapshot ? "R1" : "R0",
+        request: body,
+        issueSnapshot: snapshot,
         requestHash,
         idempotencyKey: input.idempotencyKey,
         targetRunnerId: target ?? null,
@@ -159,7 +237,17 @@ export async function createJob(
     }
     const actor = ownerActor(input.ownerId);
     await writeEvents(tx, job.id, 0, actor, [
-      { type: "job.created", payload: { jobType: job.jobType, request: job.request } },
+      {
+        type: "job.created",
+        payload: {
+          jobType: job.jobType,
+          request: job.request,
+          // FR-DEV-01: missing acceptance criteria are recorded, not blocking.
+          ...(snapshot
+            ? { issue: snapshot, missingAcceptanceCriteria: snapshot.acceptanceCriteria.length === 0 }
+            : {}),
+        },
+      },
       stateChanged("DRAFT", "VALIDATING"),
       stateChanged("VALIDATING", "QUEUED"),
     ]);
@@ -169,7 +257,18 @@ export async function createJob(
       resourceType: "job",
       resourceId: job.id,
       correlationId: input.correlationId,
-      metadata: { jobType: job.jobType, preset: input.body.preset, targetRunnerId: target ?? null },
+      metadata: {
+        jobType: job.jobType,
+        targetRunnerId: target ?? null,
+        ...(body.jobType === "RUNNER_DIAGNOSTIC"
+          ? { preset: body.preset }
+          : {
+              repositoryId: body.repositoryId,
+              issueNumber: body.issueNumber,
+              baseBranch: snapshot!.baseBranch,
+              baseSha: snapshot!.baseSha,
+            }),
+      },
     });
     return job;
   });
@@ -236,6 +335,16 @@ export async function cancelJob(
       return updated!;
     }
     if (!canTransition(job.status, "CANCELLED")) throw invalidTransition(job.status, "CANCELLED");
+    if (job.status === "AWAITING_APPROVAL") {
+      // An approved push is already running on GitHub's side; a pending one is withdrawn with the job.
+      const open = await tx.select().from(approvals).where(eq(approvals.jobId, job.id)).for("update");
+      if (open.some((a) => a.status === "APPROVED"))
+        throw new HttpError(409, "CONFLICT", "The approved push is in progress and can't be cancelled");
+      await tx
+        .update(approvals)
+        .set({ status: "DENIED", decidedAt: now, decidedBy: actor, error: "Run cancelled" })
+        .where(and(eq(approvals.jobId, job.id), eq(approvals.status, "PENDING")));
+    }
     const seq = await writeEvents(tx, job.id, job.lastEventSequence, actor, [
       stateChanged(job.status, "CANCELLED"),
       { type: "job.cancelled", payload: { terminated: false, reason: "CANCELLED_BEFORE_START" } },

@@ -4,19 +4,27 @@ import { z } from "zod";
 import {
   AppendEventsRequest,
   AppendEventsResponse,
+  CHANGESET_MAX_BYTES,
   HeartbeatRequest,
   HeartbeatResponse,
   LeaseResponse,
   RunnerRegisterRequest,
   RunnerRegisterResponse,
+  UploadChangesetRequest,
+  UploadChangesetResponse,
+  type IssueToPrTask,
 } from "@nexus/contracts";
 import type { Deps } from "../app.ts";
 import { HttpError } from "../errors.ts";
-import { appendRunnerEvents, heartbeat, tryLease } from "../jobs.ts";
+import { uploadChangeset, workBranch } from "../issue-to-pr.ts";
+import { appendRunnerEvents, failJob, heartbeat, runnerActor, tryLease } from "../jobs.ts";
 import { ANY_JOB } from "../notify.ts";
 import { authenticateRunner, registerRunner, type RunnerRow } from "../runners.ts";
 
 const RECHECK_MS = 5_000;
+// Base64 of CHANGESET_MAX_BYTES plus room for 300 paths and JSON; the decoded size is checked exactly.
+const CHANGESET_BODY_LIMIT = Math.ceil(CHANGESET_MAX_BYTES / 3) * 4 + 2 * 1024 * 1024;
+const JobParams = z.object({ id: z.uuid() });
 
 const runnerOf = (req: FastifyRequest) => {
   if (!req.runner) throw new HttpError(401, "UNAUTHENTICATED", "Runner token required");
@@ -74,11 +82,32 @@ export async function runnerRoutes(app: FastifyInstance, deps: Deps) {
       );
       if (!job) return reply.code(204).send(null);
       req.log.info({ correlationId: job.id, fencingToken: job.fencingToken }, "job leased");
+      let task: IssueToPrTask | undefined;
+      if (job.issueSnapshot) {
+        const snapshot = job.issueSnapshot;
+        try {
+          if (!deps.github) throw new HttpError(409, "CONFLICT", "GitHub isn't set up on this NEXUS.");
+          const git = await deps.github.readToken(snapshot.repositoryId);
+          task = { kind: "issue_to_pr", snapshot, workBranch: workBranch(snapshot.issueNumber, job.id), git };
+        } catch (err) {
+          // The runner can't fetch without it: fail the job (the owner re-runs) rather than wedge the queue.
+          if (!(err instanceof HttpError)) req.log.error({ err, correlationId: job.id }, "read token failed");
+          await failJob(db, {
+            jobId: job.id,
+            actor: runnerActor(runnerOf(req).id),
+            reason: "GITHUB_TOKEN_UNAVAILABLE",
+            message:
+              err instanceof HttpError ? err.message : "Couldn't get a GitHub token for the repository.",
+          });
+          return reply.code(204).send(null);
+        }
+      }
       return {
         jobId: job.id,
         request: job.request,
         fencingToken: job.fencingToken,
         leaseExpiresAt: job.leaseExpiresAt!.toISOString(),
+        ...(task ? { task } : {}),
       };
     },
   );
@@ -87,7 +116,7 @@ export async function runnerRoutes(app: FastifyInstance, deps: Deps) {
     "/v1/runner/jobs/:id/events",
     {
       schema: {
-        params: z.object({ id: z.uuid() }),
+        params: JobParams,
         body: AppendEventsRequest,
         response: { 200: AppendEventsResponse },
       },
@@ -96,6 +125,18 @@ export async function runnerRoutes(app: FastifyInstance, deps: Deps) {
       // Runner calls are correlated by job id (spec); later log lines and errors carry it.
       req.log = req.log.child({ correlationId: req.params.id });
       return appendRunnerEvents(db, runnerOf(req), req.params.id, req.body);
+    },
+  );
+
+  r.post(
+    "/v1/runner/jobs/:id/changeset",
+    {
+      bodyLimit: CHANGESET_BODY_LIMIT,
+      schema: { params: JobParams, body: UploadChangesetRequest, response: { 200: UploadChangesetResponse } },
+    },
+    async (req) => {
+      req.log = req.log.child({ correlationId: req.params.id });
+      return uploadChangeset(db, runnerOf(req), req.params.id, req.body);
     },
   );
 

@@ -3,30 +3,45 @@ import { existsSync } from "node:fs";
 import { lstat, mkdir, readdir, realpath, rm } from "node:fs/promises";
 import { devNull } from "node:os";
 import { join, sep } from "node:path";
+import { redact } from "./output.ts";
 
 // Git worktree manager (FR-RUN-03, DEC-08): one bare mirror per repo, one worktree per job.
 // Layout under the data dir: repos/<owner>/<name>.git (bare mirrors), work/<jobId> (worktrees).
 
 const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const REPO_PART = /^(?!\.{1,2}$)[\w.-]{1,100}$/; // GitHub owner/repo charset; never "." or ".."
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 const PROTECTED = new Set(["main", "master", "trunk", "develop", "production", "gh-pages", "head"]);
 
 export type Worktree = { path: string; branch: string; baseSha: string };
 
 // Host-side git on mirrors we own: no user/system config (hooks, filters, credential helpers), no prompts.
-const GIT_ENV = {
+export const GIT_ENV = {
   PATH: process.env.PATH ?? "",
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: devNull,
   GIT_TERMINAL_PROMPT: "0",
 };
 
-export const git = (args: string[]) =>
+export type GitOptions = {
+  /** Extra env on top of GIT_ENV (e.g. GIT_CONFIG_* or GIT_INDEX_FILE). */
+  env?: Readonly<Record<string, string>>;
+  timeoutMs?: number;
+  /** Exact values masked in the error message. */
+  secrets?: readonly string[];
+};
+
+export const git = (args: string[], opts: GitOptions = {}) =>
   new Promise<string>((resolve, reject) =>
-    execFile("git", args, { env: GIT_ENV, timeout: 120_000 }, (err, stdout, stderr) =>
-      err
-        ? reject(new Error(`git ${args.join(" ")}: ${stderr.trim() || err.message}`))
-        : resolve(stdout.trim()),
+    execFile(
+      "git",
+      args,
+      { env: { ...GIT_ENV, ...opts.env }, timeout: opts.timeoutMs ?? 120_000 },
+      (err, stdout, stderr) => {
+        if (!err) return resolve(stdout.trim());
+        const msg = `git ${args.join(" ")}: ${stderr.trim() || err.message}`;
+        reject(new Error(redact((opts.secrets ?? []).reduce((t, s) => t.replaceAll(s, "[REDACTED]"), msg))));
+      },
     ),
   );
 
@@ -118,6 +133,64 @@ export function createWorkspaces(dataDir: string) {
     });
   }
 
+  /**
+   * Fetches `branch` from `cloneUrl` into the bare mirror repos/<owner>/<name>.git (created on first use) and
+   * reports whether `sha` is now present. The token goes in as an env-only http.extraHeader: never in argv,
+   * never in the mirror's config, masked in errors.
+   */
+  async function fetchMirror(opts: {
+    fullName: string;
+    cloneUrl: string;
+    token: string;
+    branch: string;
+    sha: string;
+  }): Promise<{ mirror: string; hasSha: boolean }> {
+    const { token, branch, sha } = opts;
+    const [owner = "", name = "", ...rest] = opts.fullName.split("/");
+    if (rest.length) throw new Error("invalid repository owner/name");
+    const url = new URL(opts.cloneUrl);
+    // Plain http would send the token in clear text: loopback only (tests).
+    const secure = url.protocol === "https:" || (url.protocol === "http:" && LOOPBACK.has(url.hostname));
+    if (!secure || url.username || url.password)
+      throw new Error("cloneUrl must be https without credentials");
+    if (branch.startsWith("-")) throw new Error("invalid base branch");
+    await git(["check-ref-format", `refs/heads/${branch}`]);
+    if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error("invalid base sha");
+    const { repos } = await roots();
+    const path = mirrorPath(owner, name);
+    await mkdir(path, { recursive: true, mode: 0o700 });
+    const mirror = await resolveInside(repos, path, "mirror");
+
+    return withMirrorLock(mirror, async () => {
+      if (!existsSync(join(mirror, "HEAD"))) await git(["init", "--quiet", "--bare", mirror]);
+      const header = `Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
+      await git(
+        [
+          "-C",
+          mirror,
+          "fetch",
+          "--quiet",
+          "--no-tags",
+          "--no-write-fetch-head",
+          "--end-of-options",
+          url.href,
+          `+refs/heads/${branch}:refs/remotes/origin/${branch}`,
+        ],
+        {
+          env: { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "http.extraHeader", GIT_CONFIG_VALUE_0: header },
+          // shortcut: one 10 min cap for first clones too, make it configurable if large repos hit it.
+          timeoutMs: 600_000,
+          secrets: [token, header.slice("Authorization: Basic ".length)],
+        },
+      );
+      const hasSha = await git(["-C", mirror, "cat-file", "-e", `${sha}^{commit}`]).then(
+        () => true,
+        () => false,
+      );
+      return { mirror, hasSha };
+    });
+  }
+
   /** Deletes work/<jobId> and its registration in the owning mirror. The branch stays in the mirror. */
   async function removeWorktree(jobId: string): Promise<void> {
     assertJobId(jobId);
@@ -148,5 +221,5 @@ export function createWorkspaces(dataDir: string) {
     return removed;
   }
 
-  return { mirrorPath, prepareWorktree, removeWorktree, pruneStale };
+  return { mirrorPath, fetchMirror, prepareWorktree, removeWorktree, pruneStale };
 }

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RepoId } from "./github.ts";
 
 // PRD §10.2 — early exits (REJECTED, BLOCKED_NEEDS_INFO, EXPIRED) are states; PR_CREATED etc. are outcomes.
 export const JobStatus = z.enum([
@@ -32,11 +33,12 @@ export const TERMINAL_JOB_STATUSES: readonly JobStatus[] = [
 export const JOB_TRANSITIONS: Readonly<Record<JobStatus, readonly JobStatus[]>> = {
   DRAFT: ["VALIDATING"],
   VALIDATING: ["REJECTED", "AWAITING_APPROVAL", "QUEUED", "BLOCKED_NEEDS_INFO"],
-  AWAITING_APPROVAL: ["QUEUED", "REJECTED", "EXPIRED", "RUNNING", "CANCELLED"],
+  // COMPLETED/FAILED: the server itself executes an approved action (e.g. push + draft PR) after the runner is done.
+  AWAITING_APPROVAL: ["QUEUED", "REJECTED", "EXPIRED", "RUNNING", "CANCELLED", "COMPLETED", "FAILED"],
   QUEUED: ["PREPARING", "CANCELLED"],
   PREPARING: ["RUNNING", "BLOCKED", "CANCELLED", "RECOVERY_REQUIRED", "FAILED"],
   RUNNING: ["VERIFYING", "AWAITING_APPROVAL", "RECOVERY_REQUIRED", "CANCELLED", "FAILED"],
-  VERIFYING: ["COMPLETED", "FAILED", "RECOVERY_REQUIRED", "CANCELLED"],
+  VERIFYING: ["COMPLETED", "FAILED", "RECOVERY_REQUIRED", "CANCELLED", "AWAITING_APPROVAL"],
   BLOCKED: ["QUEUED", "CANCELLED"],
   BLOCKED_NEEDS_INFO: ["VALIDATING", "CANCELLED"],
   RECOVERY_REQUIRED: ["QUEUED", "FAILED"],
@@ -51,8 +53,7 @@ export const canTransition = (from: JobStatus, to: JobStatus): boolean => JOB_TR
 export const isTerminal = (s: JobStatus): boolean => TERMINAL_JOB_STATUSES.includes(s);
 
 // Typed job types only — never shell text (PRD §13 "Never implement").
-// shortcut: P0 spike ships RUNNER_DIAGNOSTIC only; DEV_ISSUE_TO_PR etc. arrive with their adapters (ENG-05..07).
-export const JobType = z.enum(["RUNNER_DIAGNOSTIC"]);
+export const JobType = z.enum(["RUNNER_DIAGNOSTIC", "DEV_ISSUE_TO_PR"]);
 export type JobType = z.infer<typeof JobType>;
 
 export const RiskTier = z.enum(["R0", "R1", "R2", "R3"]);
@@ -70,6 +71,21 @@ export const CreateJobRequest = z.discriminatedUnion("jobType", [
     preset: DiagnosticPreset,
     runnerId: z.uuid().optional(),
   }),
+  z.strictObject({
+    jobType: z.literal("DEV_ISSUE_TO_PR"),
+    repositoryId: RepoId,
+    issueNumber: z.int().positive(),
+    // Defaults to the repository's default branch; never the work branch (that is always nexus/…).
+    baseBranch: z.string().min(1).max(255).optional(),
+    runnerId: z.uuid().optional(),
+    budget: z
+      .strictObject({
+        maxWallClockMinutes: z.int().min(5).max(120).default(45),
+        maxTurns: z.int().min(1).max(200).default(60),
+        maxCostUsd: z.number().positive().max(50).default(5),
+      })
+      .prefault({}),
+  }),
 ]);
 export type CreateJobRequest = z.infer<typeof CreateJobRequest>;
 
@@ -80,6 +96,8 @@ export const JobOutcome = z.enum([
   "PR_CREATED",
   "FAILED_TESTS",
   "COMPLETED_NO_CHANGES",
+  "APPROVAL_DENIED",
+  "BUDGET_EXCEEDED",
 ]);
 export type JobOutcome = z.infer<typeof JobOutcome>;
 

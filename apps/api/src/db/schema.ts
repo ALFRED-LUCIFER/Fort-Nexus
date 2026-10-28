@@ -12,13 +12,19 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import type {
+  Approval,
+  ApprovalStatus,
+  ChangesetFile,
   CreateJobRequest,
+  IssueSnapshot,
   JobOutcome,
   JobStatus,
   JobType,
   RiskTier,
   RunEventType,
+  PushDraftPrAction,
   RunStage,
+  UploadChangesetRequest,
 } from "@nexus/contracts";
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, mode: "date" });
@@ -142,6 +148,8 @@ export const jobs = pgTable(
     leaseExpiresAt: ts("lease_expires_at"),
     cancelRequestedAt: ts("cancel_requested_at"),
     outcome: text("outcome").$type<JobOutcome>(),
+    // DEV_ISSUE_TO_PR: the issue and base commit pinned at creation (FR-GH-09).
+    issueSnapshot: jsonb("issue_snapshot").$type<IssueSnapshot>(),
     stateVersion: integer("state_version").notNull().default(0),
     lastEventSequence: integer("last_event_sequence").notNull().default(0),
     createdAt: ts("created_at").notNull().defaultNow(),
@@ -208,3 +216,64 @@ export const auditRecords = pgTable(
   },
   (t) => [index("audit_resource_idx").on(t.resourceType, t.resourceId)],
 );
+
+// ENG-07: what the runner proposed for an issue job, exactly as uploaded. Append-only (trigger in its migration).
+export const changesets = pgTable("changesets", {
+  jobId: uuid("job_id")
+    .primaryKey()
+    .references(() => jobs.id),
+  runnerId: uuid("runner_id")
+    .notNull()
+    .references(() => runners.id),
+  fencingToken: integer("fencing_token").notNull(),
+  baseSha: text("base_sha").notNull(),
+  sha256: text("sha256").notNull(),
+  files: jsonb("files").$type<ChangesetFile[]>().notNull(),
+  stats: jsonb("stats").$type<UploadChangesetRequest["stats"]>().notNull(),
+  agentSummary: text("agent_summary").notNull(),
+  createdAt: ts("created_at").notNull().defaultNow(),
+});
+
+// Owner approvals of exact actions (FR-INB-02). action/action_hash are immutable (trigger in its migration).
+export const approvals = pgTable(
+  "approvals",
+  {
+    id: id(),
+    jobId: uuid("job_id")
+      .notNull()
+      .references(() => jobs.id),
+    riskTier: text("risk_tier").$type<Approval["riskTier"]>().notNull(),
+    status: text("status").$type<ApprovalStatus>().notNull(),
+    action: jsonb("action").$type<PushDraftPrAction>().notNull(),
+    actionHash: text("action_hash").notNull(),
+    createdAt: ts("created_at").notNull().defaultNow(),
+    expiresAt: ts("expires_at").notNull(),
+    decidedAt: ts("decided_at"),
+    decidedBy: text("decided_by"),
+    result: jsonb("result").$type<NonNullable<Approval["result"]>>(),
+    error: text("error"),
+  },
+  (t) => [index("approvals_job_idx").on(t.jobId), index("approvals_status_idx").on(t.status, t.expiresAt)],
+);
+
+// External write ledger (PRD §18.4): one row per idempotent action key, written before the provider is called.
+export const externalActions = pgTable("external_actions", {
+  id: id(),
+  idempotencyKey: text("idempotency_key").notNull().unique(),
+  jobId: uuid("job_id")
+    .notNull()
+    .references(() => jobs.id),
+  approvalId: uuid("approval_id")
+    .notNull()
+    .references(() => approvals.id),
+  provider: text("provider").notNull(),
+  operation: text("operation").notNull(),
+  status: text("status").$type<"PENDING" | "SUCCEEDED" | "FAILED">().notNull(),
+  // Recorded before the branch ref is created, so a retry can tell its own ref from someone else's.
+  commitSha: text("commit_sha"),
+  externalId: text("external_id"),
+  result: jsonb("result").$type<NonNullable<Approval["result"]>>(),
+  error: text("error"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+});

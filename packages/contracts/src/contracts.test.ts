@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ChangesetFile,
   CreateJobRequest,
   JOB_TRANSITIONS,
   JobStatus,
@@ -49,5 +50,37 @@ describe("runnerStatus", () => {
     expect(runnerStatus(ago(120_000), false, now)).toBe("OFFLINE");
     expect(runnerStatus(null, false, now)).toBe("OFFLINE");
     expect(runnerStatus(ago(1_000), true, now)).toBe("REVOKED");
+  });
+});
+
+describe("DEV_ISSUE_TO_PR", () => {
+  it("applies budget defaults and caps", () => {
+    const r = CreateJobRequest.parse({ jobType: "DEV_ISSUE_TO_PR", repositoryId: "123", issueNumber: 42 });
+    expect(r).toMatchObject({ budget: { maxWallClockMinutes: 45, maxTurns: 60, maxCostUsd: 5 } });
+    expect(
+      CreateJobRequest.safeParse({
+        jobType: "DEV_ISSUE_TO_PR",
+        repositoryId: "123",
+        issueNumber: 42,
+        budget: { maxCostUsd: 500 },
+      }).success,
+    ).toBe(false);
+    expect(
+      CreateJobRequest.safeParse({ jobType: "RUNNER_DIAGNOSTIC", preset: "host-info", repositoryId: "1" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("rejects changeset paths that escape the repo or touch .git", () => {
+    const file = (path: string) => ({ change: "added", path, mode: "100644", contentBase64: "aGk=" });
+    for (const bad of ["../x", "/etc/passwd", "a/../../b", ".git/config", "a//b", "a\\b", "./a"])
+      expect(ChangesetFile.safeParse(file(bad)).success, bad).toBe(false);
+    for (const ok of ["src/a.ts", ".github/workflows/ci.yml", "a/.gitignore"])
+      expect(ChangesetFile.safeParse(file(ok)).success, ok).toBe(true);
+  });
+
+  it("lets the server finish an approved action", () => {
+    expect(canTransition("VERIFYING", "AWAITING_APPROVAL")).toBe(true);
+    expect(canTransition("AWAITING_APPROVAL", "COMPLETED")).toBe(true);
   });
 });

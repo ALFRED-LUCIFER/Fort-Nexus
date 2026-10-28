@@ -3,12 +3,18 @@ import type { FastifyBaseLogger } from "fastify";
 import {
   ISSUE_MAX_PAGE,
   ISSUE_PAGE_SIZE,
+  WORK_BRANCH_PREFIX,
+  type Approval,
+  type ChangesetFile,
   type GithubInstallation,
   type GithubStatus,
   type Issue,
   type IssueDetail,
   type IssueList,
   type IssueListQuery,
+  type IssueSnapshot,
+  type IssueToPrTask,
+  type PushDraftPrAction,
   type Repository,
   type RepositoryList,
 } from "@nexus/contracts";
@@ -70,8 +76,16 @@ const toIssue = (i: GhIssue): Issue => ({
 
 const iso = (s: string | null | undefined) => (s ? new Date(s).toISOString() : null);
 
+// Permissions the app's installation must grant before NEXUS accepts an issue → draft PR job (FR-DEV-01).
+const ISSUE_TO_PR_PERMISSIONS = ["contents", "pull_requests"] as const;
+const COMMIT_AUTHOR = { name: "NEXUS", email: "nexus@noreply.invalid" }; // .invalid: never a real account
+
+type ChangesetMode = Extract<ChangesetFile, { mode: string }>["mode"];
+export type PushResult = NonNullable<Approval["result"]> & { adopted: boolean };
+
 /**
- * Read-only view of what the NEXUS GitHub App can reach: its installations, their repositories and issues.
+ * What the NEXUS GitHub App can reach: its installations, their repositories and issues, plus the two
+ * scoped operations of ENG-07 (a read token for the runner, and the approved push + draft PR).
  * Every repository call uses a short-lived token of the installation that owns the repository; installation
  * tokens stay inside Octokit (cached until shortly before expiry) and never reach responses or logs.
  */
@@ -219,6 +233,29 @@ export function createGithubCatalog(config: GithubAppConfig, log: FastifyBaseLog
   const lostAccess = (r: Repository) =>
     `NEXUS can't access ${r.fullName} anymore. Check that the NEXUS app is still installed on it.`;
 
+  /** A fresh installation token for one repository with exactly `permissions`, and an Octokit using it. */
+  async function scopedToken(repo: Repository, permissions: Record<string, "read" | "write">) {
+    const { token, expiresAt } = (await github(
+      () =>
+        app.octokit.auth({
+          type: "installation",
+          installationId: repo.installationId,
+          repositoryIds: [Number(repo.id)],
+          permissions,
+          refresh: true, // never a cached token: the runner gets the full lifetime, and scopes can't mix
+        }),
+      lostAccess(repo),
+    )) as { token: string; expiresAt: string };
+    // The app's own Octokit class with plain token auth (no app-level auth hook).
+    const Octokit = app.octokit.constructor as new (o: { auth: string }) => typeof app.octokit;
+    return { token, expiresAt, octokit: new Octokit({ auth: token }) };
+  }
+
+  // github() maps GitHub's 422 (Unprocessable) to a 400.
+  const rejected = (e: unknown) => e instanceof HttpError && e.statusCode === 400;
+  const validation = (field: string, message: string) =>
+    new HttpError(400, "VALIDATION_FAILED", message, { field });
+
   return {
     async status(): Promise<GithubStatus> {
       const { value, syncedAt } = await installations();
@@ -333,6 +370,202 @@ export function createGithubCatalog(config: GithubAppConfig, log: FastifyBaseLog
         };
       });
       return { ...value, syncedAt };
+    },
+
+    /**
+     * FR-DEV-01 qualification: the repository is in an installation that grants contents + pull_requests write,
+     * the issue exists and is not a PR, and the base branch exists. Returns the snapshot to pin on the job.
+     * shortcut: issue and installation data may be up to 60 s old (catalog cache); webhooks refresh it with FR-GH-10.
+     */
+    async issueSnapshot(repoId: string, number: number, baseBranch?: string): Promise<IssueSnapshot> {
+      const repo = (await repositories()).value.find((r) => r.id === repoId);
+      if (!repo) throw validation("repositoryId", "This repository isn't in any NEXUS app installation.");
+      const inst = (await installations()).value.find((i) => i.id === repo.installationId);
+      const missing = ISSUE_TO_PR_PERMISSIONS.filter((p) => inst?.permissions[p] !== "write");
+      if (!inst || inst.suspended || missing.length > 0)
+        throw new HttpError(
+          403,
+          "FORBIDDEN",
+          `The NEXUS app needs ${missing.map((p) => `${p}: write`).join(" and ") || "an active installation"} on ${repo.fullName} to open draft PRs.`,
+          { missingPermissions: missing, installUrl },
+        );
+      const branch = baseBranch ?? repo.defaultBranch;
+      if (branch.startsWith(WORK_BRANCH_PREFIX))
+        throw validation(
+          "baseBranch",
+          `The base branch can't be a NEXUS work branch (${WORK_BRANCH_PREFIX}…).`,
+        );
+
+      const detail = await this.issue(repoId, number).catch((e: unknown) => {
+        if (e instanceof HttpError && e.statusCode === 404) throw validation("issueNumber", e.message);
+        throw e;
+      });
+      const { octokit } = await repository(repoId);
+      const head = await github(
+        () =>
+          octokit.request("GET /repos/{owner}/{repo}/branches/{branch}", {
+            owner: repo.owner,
+            repo: repo.name,
+            branch,
+          }),
+        lostAccess(repo),
+        `Branch ${branch} not found in ${repo.fullName}.`,
+      ).catch((e: unknown) => {
+        if (e instanceof HttpError && e.statusCode === 404) throw validation("baseBranch", e.message);
+        throw e;
+      });
+      return {
+        repositoryId: repo.id,
+        fullName: repo.fullName,
+        issueNumber: number,
+        title: detail.issue.title,
+        body: detail.body.slice(0, 65_536),
+        acceptanceCriteria: detail.acceptanceCriteria,
+        htmlUrl: detail.issue.htmlUrl,
+        issueUpdatedAt: detail.issue.updatedAt,
+        baseBranch: branch,
+        baseSha: head.data.commit.sha,
+      };
+    },
+
+    /** The runner's git credentials: one repository, contents:read only, never cached (FR-SEC-06). */
+    async readToken(repoId: string): Promise<IssueToPrTask["git"]> {
+      const { repo } = await repository(repoId);
+      const { token, expiresAt } = await scopedToken(repo, { contents: "read" });
+      return { cloneUrl: `${repo.htmlUrl}.git`, token, expiresAt: new Date(expiresAt).toISOString() };
+    },
+
+    /**
+     * Executes an approved PushDraftPrAction: blobs → tree on the base commit's tree → commit (parent baseSha)
+     * → new ref → draft PR. Duplicate-safe (DEV-G08): an existing head ref is adopted only when it points at
+     * the commit this action recorded (`knownCommit`), an existing PR for the head branch is adopted, and a ref
+     * NEXUS didn't create is never moved. `recordCommit` must persist the commit before the ref is created.
+     */
+    async pushDraftPr(
+      action: PushDraftPrAction,
+      files: ChangesetFile[],
+      knownCommit: string | null,
+      recordCommit: (sha: string) => Promise<void>,
+    ): Promise<PushResult> {
+      const { repo } = await repository(action.repositoryId);
+      const { octokit } = await scopedToken(repo, { contents: "write", pull_requests: "write" });
+      const at = { owner: repo.owner, repo: repo.name };
+      const call = <T>(fn: () => Promise<T>, missing?: string) => github(fn, lostAccess(repo), missing);
+      const headRef = `heads/${action.headBranch}`;
+      const refSha = async () =>
+        call(
+          () => octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", { ...at, ref: headRef }),
+          "no ref",
+        ).then(
+          (r) => r.data.object.sha,
+          (e: unknown) => {
+            if (e instanceof HttpError && e.statusCode === 404) return null;
+            throw e;
+          },
+        );
+      const notOurs = () =>
+        new HttpError(
+          409,
+          "CONFLICT",
+          `Branch ${action.headBranch} already exists on ${repo.fullName} and wasn't created by this run; NEXUS never moves a branch it didn't create.`,
+        );
+
+      let commit = knownCommit;
+      const existing = await refSha();
+      let adopted = existing !== null;
+      if (existing !== null && existing !== commit) throw notOurs();
+      if (existing === null) {
+        if (!commit) {
+          const base = await call(() =>
+            octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
+              ...at,
+              commit_sha: action.baseSha,
+            }),
+          );
+          const tree: { path: string; mode: ChangesetMode; type: "blob"; sha: string | null }[] = [];
+          for (const f of [...files].sort((a, b) => (a.path < b.path ? -1 : 1))) {
+            if (f.change === "deleted") {
+              tree.push({ path: f.path, mode: "100644", type: "blob", sha: null });
+              continue;
+            }
+            const blob = await call(() =>
+              octokit.request("POST /repos/{owner}/{repo}/git/blobs", {
+                ...at,
+                content: f.contentBase64,
+                encoding: "base64",
+              }),
+            );
+            tree.push({ path: f.path, mode: f.mode, type: "blob", sha: blob.data.sha });
+          }
+          const newTree = await call(() =>
+            octokit.request("POST /repos/{owner}/{repo}/git/trees", {
+              ...at,
+              base_tree: base.data.tree.sha,
+              tree,
+            }),
+          );
+          const created = await call(() =>
+            octokit.request("POST /repos/{owner}/{repo}/git/commits", {
+              ...at,
+              message: `${action.title}\n\nRefs #${action.issueNumber}`,
+              tree: newTree.data.sha,
+              parents: [action.baseSha],
+              author: COMMIT_AUTHOR,
+              committer: COMMIT_AUTHOR,
+            }),
+          );
+          commit = created.data.sha;
+          await recordCommit(commit);
+        }
+        const sha = commit;
+        await call(() =>
+          octokit.request("POST /repos/{owner}/{repo}/git/refs", { ...at, ref: `refs/${headRef}`, sha }),
+        ).catch(async (e: unknown) => {
+          // 422 "Reference already exists": lost a race. Adopt it only if it is our commit.
+          if (!rejected(e)) throw e;
+          const now = await refSha();
+          if (now === null) throw e;
+          if (now !== sha) throw notOurs();
+          adopted = true;
+        });
+      }
+
+      type Pr = { number: number; html_url: string; head: { sha: string } };
+      const findPr = async (): Promise<Pr | undefined> =>
+        (
+          await call(() =>
+            octokit.request("GET /repos/{owner}/{repo}/pulls", {
+              ...at,
+              head: `${repo.owner}:${action.headBranch}`,
+              base: action.baseBranch,
+              state: "all",
+              per_page: 1,
+            }),
+          )
+        ).data[0];
+      let pr = await findPr();
+      if (pr) adopted = true;
+      else
+        pr = await call<{ data: Pr }>(() =>
+          octokit.request("POST /repos/{owner}/{repo}/pulls", {
+            ...at,
+            title: action.title,
+            body: action.body,
+            head: action.headBranch,
+            base: action.baseBranch,
+            draft: true,
+          }),
+        ).then(
+          (r) => r.data,
+          async (e: unknown): Promise<Pr> => {
+            // 422 "A pull request already exists": adopt it.
+            const raced = rejected(e) ? await findPr() : undefined;
+            if (!raced) throw e;
+            adopted = true;
+            return raced;
+          },
+        );
+      return { pullRequestNumber: pr.number, pullRequestUrl: pr.html_url, headSha: pr.head.sha, adopted };
     },
   };
 }

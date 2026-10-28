@@ -4,3 +4,4 @@ export * from "./runners.ts";
 export * from "./errors.ts";
 export * from "./auth.ts";
 export * from "./github.ts";
+export * from "./issue-to-pr.ts";

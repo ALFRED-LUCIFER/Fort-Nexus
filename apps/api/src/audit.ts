@@ -4,10 +4,10 @@ import { auditRecords } from "./db/schema.ts";
 export type AuditEntry = {
   actor: string;
   action: string;
-  resourceType: "job" | "runner" | "github_account";
+  resourceType: "job" | "runner" | "github_account" | "approval";
   resourceId: string;
   correlationId: string;
-  outcome?: "SUCCEEDED" | "DENIED";
+  outcome?: "SUCCEEDED" | "DENIED" | "FAILED";
   /** Must never contain secrets (tokens, codes, passwords); callers pass ids and enums only. */
   metadata?: Record<string, unknown>;
 };

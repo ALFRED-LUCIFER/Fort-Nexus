@@ -1,20 +1,26 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
-import { hostname, tmpdir } from "node:os";
+import { homedir, hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CreateJobRequest,
   DIAGNOSTIC_TIMEOUT_MS,
+  IssueToPrTask,
   RUNNER_LEASE_TTL_MS,
+  type DiagnosticPreset,
   type JobOutcome,
   type RunEventType,
   type RunnerEventInput,
   type RunnerTransition,
 } from "@nexus/contracts";
+import type { z } from "zod";
 import { ApiCallError, withRetry, type Lease, type RunnerApi } from "./api.ts";
+import { ChangesetError, buildChangeset } from "./changeset.ts";
+import { runClaudeTask, worktreeGitDir } from "./claude.ts";
+import { issuePrompt } from "./issue-prompt.ts";
 import { errorMessage, log as defaultLog, type Log } from "./log.ts";
-import { OutputBuffer, type Stream } from "./output.ts";
+import { OutputBuffer, redact, type Stream } from "./output.ts";
 import { PRESET_ARGV } from "./presets.ts";
 import {
   SANDBOX_BUILD_COMMAND,
@@ -27,6 +33,7 @@ import {
   removeContainer,
   type SandboxMode,
 } from "./sandbox.ts";
+import { createWorkspaces, git, withMirrorLock } from "./workspace.ts";
 
 export type JobOptions = {
   timeoutMs?: number;
@@ -39,12 +46,18 @@ export type JobOptions = {
   image?: string;
   /** Value of the `nexus.runner` container label, used for crash cleanup. */
   runnerLabel?: string;
+  /** Bare mirrors and worktrees for coding jobs (RUNNER_DATA_DIR). */
+  dataDir?: string;
+  /** Provider config for the Claude engine (default ~/.nexus/ai.json). */
+  aiConfigFile?: string;
 };
+
+type IssueRequest = Extract<CreateJobRequest, { jobType: "DEV_ISSUE_TO_PR" }>;
 
 export type JobHandle = {
   jobId: string;
   done: Promise<void>;
-  /** Owner cancel: terminate the child, confirm exit, report CANCELLED. */
+  /** Owner cancel: terminate the child (or the Claude container), confirm exit, report CANCELLED. */
   cancel(): void;
   /** Runner shutdown: terminate the child, report FAILED { reason: "runner_shutdown" }. */
   shutdown(): void;
@@ -66,7 +79,8 @@ const within = (p: Promise<unknown>, ms: number) =>
     });
   });
 
-// shortcut: no ExecutionAdapter interface yet: the Claude engine (claude.ts) is not dispatched by job type until ENG-07, add it then.
+// One leased job: diagnostics run a preset argv, DEV_ISSUE_TO_PR runs the Claude engine and uploads a changeset.
+// Both share the event batching, transitions and the cancel/shutdown/lost-lease handling below.
 export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): JobHandle {
   const {
     timeoutMs = DIAGNOSTIC_TIMEOUT_MS,
@@ -77,9 +91,13 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
     sandbox = "docker",
     image = SANDBOX_IMAGE,
     runnerLabel = "local",
+    dataDir = join(homedir(), ".nexus"),
+    aiConfigFile,
   } = opts;
   const { jobId, fencingToken } = lease;
   const appendAbort = new AbortController();
+  // Aborted on cancel, shutdown and a lost lease: stops the Claude container (claude.ts confirms it is gone).
+  const stopAbort = new AbortController();
   const output = new OutputBuffer();
   const pending: RunnerEventInput[] = [];
   let phase: "preparing" | "running" | "finishing" = "preparing";
@@ -107,6 +125,7 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
     lost = true;
     log("warn", "dropping job", { jobId, reason, ...(err ? { error: errorMessage(err) } : {}) });
     appendAbort.abort();
+    stopAbort.abort();
     if (phase === "running") void terminate();
   };
 
@@ -143,6 +162,13 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
       }
     });
     return chain;
+  };
+
+  // Agent events go out in batches as they arrive, like process output.
+  const queue = (type: RunEventType, payload: Record<string, unknown>) => {
+    event(type, payload);
+    if (pending.length >= MAX_EVENTS_PER_APPEND) void flush();
+    else flushTimer ??= setTimeout(() => void flush(), flushMs);
   };
 
   const finish = async (
@@ -219,14 +245,26 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
       ? finish("job.cancelled", { terminated }, "CANCELLED")
       : finish("job.failed", { reason: "runner_shutdown" }, "FAILED");
 
+  // Paths and codes only: the task carries the read token, so input values never go into events.
+  const invalid = (error: z.ZodError, field: "request" | "task") => {
+    log("warn", `leased job has an invalid ${field}, not executing`, { jobId });
+    const issues = error.issues.map((i) => ({
+      path: [...(field === "task" ? ["task"] : []), ...i.path.map(String)].join("."),
+      code: i.code,
+    }));
+    return finish("job.failed", { reason: "invalid_request", issues }, "FAILED");
+  };
+
   const run = async (): Promise<void> => {
     const parsed = CreateJobRequest.safeParse(lease.request);
-    if (!parsed.success) {
-      log("warn", "leased job has an invalid request, not executing", { jobId });
-      const issues = parsed.error.issues.map((i) => ({ path: i.path.map(String).join("."), code: i.code }));
-      return finish("job.failed", { reason: "invalid_request", issues }, "FAILED");
-    }
-    const { preset } = parsed.data;
+    if (!parsed.success) return invalid(parsed.error, "request");
+    if (parsed.data.jobType === "RUNNER_DIAGNOSTIC") return runDiagnostic(parsed.data.preset);
+    const task = IssueToPrTask.safeParse(lease.task);
+    if (!task.success) return invalid(task.error, "task");
+    return runIssueToPr(parsed.data, task.data);
+  };
+
+  const runDiagnostic = async (preset: DiagnosticPreset): Promise<void> => {
     const argv = PRESET_ARGV[preset];
 
     let sandboxInfo: Record<string, unknown> = { runtime: "none" };
@@ -313,6 +351,163 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
     }
   };
 
+  // ENG-07 spec step 3: fetch → worktree → Claude → changeset → upload (the API then awaits the owner's approval).
+  const runIssueToPr = async (request: IssueRequest, task: IssueToPrTask): Promise<void> => {
+    const { snapshot, workBranch } = task;
+    const { baseBranch, baseSha } = snapshot;
+    // The coding engine never runs on the host, whatever RUNNER_SANDBOX says.
+    if (sandbox !== "docker")
+      return finish(
+        "job.failed",
+        {
+          reason: "sandbox_required",
+          message: "Coding jobs only run in the Docker sandbox (RUNNER_SANDBOX=docker)",
+        },
+        "FAILED",
+      );
+    const workspaces = createWorkspaces(dataDir);
+    let mirror: string | undefined;
+    // A re-leased job id may find its worktree and branch from an earlier attempt: remove both, before and after.
+    const cleanup = async () => {
+      try {
+        await workspaces.removeWorktree(jobId);
+        const m = mirror;
+        if (m) await withMirrorLock(m, () => git(["-C", m, "update-ref", "-d", `refs/heads/${workBranch}`]));
+      } catch (err) {
+        log("error", "worktree cleanup failed", { jobId, error: errorMessage(err) });
+      }
+    };
+    try {
+      try {
+        const fetched = await workspaces.fetchMirror({
+          fullName: snapshot.fullName,
+          cloneUrl: task.git.cloneUrl,
+          token: task.git.token,
+          branch: baseBranch,
+          sha: baseSha,
+        });
+        mirror = fetched.mirror;
+        if (!fetched.hasSha)
+          return finish("job.failed", { reason: "base_sha_missing", baseBranch, baseSha }, "FAILED");
+      } catch (err) {
+        // fetchMirror already masks the token; redact() is the generic second pass.
+        return finish("job.failed", { reason: "fetch_failed", message: redact(errorMessage(err)) }, "FAILED");
+      }
+      // shortcut: a cancel waits for an in-flight fetch (≤ 10 min), pass an AbortSignal to git if that bites.
+      if (stop) return stopped(false);
+      let worktreePath: string;
+      let gitDir: string;
+      try {
+        await cleanup();
+        ({ path: worktreePath } = await workspaces.prepareWorktree({
+          jobId,
+          mirrorPath: mirror,
+          baseRef: baseSha,
+          branch: workBranch,
+        }));
+        // Resolved before the run: afterwards the worktree's .git file is agent-controlled.
+        gitDir = await worktreeGitDir(worktreePath);
+      } catch (err) {
+        return finish(
+          "job.failed",
+          { reason: "workspace_failed", message: redact(errorMessage(err)) },
+          "FAILED",
+        );
+      }
+
+      event("workspace.created", {
+        hostname: hostname(),
+        pid: process.pid,
+        cwd: worktreePath,
+        repository: snapshot.fullName,
+        issueNumber: snapshot.issueNumber,
+        baseBranch,
+        baseSha,
+        workBranch,
+      });
+      await flush({ to: "RUNNING" });
+      if (lost) return;
+      if (stop) return stopped(false);
+
+      phase = "running";
+      let agentSummary = "";
+      const result = await runClaudeTask({
+        jobId,
+        worktreePath,
+        prompt: issuePrompt(snapshot),
+        budget: {
+          maxWallClockMs: request.budget.maxWallClockMinutes * 60_000,
+          maxTurns: request.budget.maxTurns,
+          maxCostUsd: request.budget.maxCostUsd,
+        },
+        onEvent: (type, payload) => {
+          if (type === "agent.message" && payload.kind === "summary" && typeof payload.text === "string")
+            agentSummary = payload.text;
+          queue(type, payload);
+        },
+        signal: stopAbort.signal,
+        runnerLabel,
+        image,
+        killGraceMs,
+        log,
+        ...(aiConfigFile ? { aiConfigFile } : {}),
+      });
+      phase = "finishing";
+      if (lost) return;
+      // Never report a stop (or anything else) while the container may still be writing to the worktree.
+      if (result.reason === "stop_failed")
+        return finish("job.failed", { reason: "stop_failed", ...result.details }, "FAILED");
+      if (stop || result.status === "STOPPED") return stopped(true);
+      if (result.status === "FAILED")
+        return finish(
+          "job.failed",
+          { reason: result.reason, ...result.details },
+          "FAILED",
+          result.outcome ?? (result.reason === "budget_exceeded" ? "BUDGET_EXCEEDED" : undefined),
+        );
+
+      await flush({ to: "VERIFYING" });
+      if (lost) return;
+      let changeset;
+      try {
+        changeset = await buildChangeset(worktreePath, gitDir, baseSha);
+      } catch (err) {
+        return err instanceof ChangesetError
+          ? finish("job.failed", { reason: err.reason, ...err.details }, "FAILED")
+          : finish(
+              "job.failed",
+              { reason: "changeset_failed", message: redact(errorMessage(err)) },
+              "FAILED",
+            );
+      }
+      if (changeset.files.length === 0)
+        return finish("job.completed", { changes: 0 }, "COMPLETED", "COMPLETED_NO_CHANGES");
+
+      try {
+        await withRetry(
+          () =>
+            api.uploadChangeset(
+              jobId,
+              { fencingToken, baseSha, ...changeset, agentSummary: agentSummary.slice(0, 4_000) },
+              appendAbort.signal,
+            ),
+          { forMs: retryForMs, signal: appendAbort.signal },
+        );
+      } catch (err) {
+        if (err instanceof ApiCallError && err.code === "STALE_LEASE") return abandon("stale_lease", err);
+        if (lost) return;
+        log("error", "changeset upload failed", { jobId, error: errorMessage(err) });
+        const code = err instanceof ApiCallError ? err.code : "ERROR";
+        return finish("job.failed", { reason: "changeset_upload_failed", code }, "FAILED");
+      }
+      // The API moved the job to AWAITING_APPROVAL and released the lease: nothing more to append.
+      log("info", "changeset uploaded, awaiting approval", { jobId, files: changeset.files.length });
+    } finally {
+      clearTimeout(flushTimer);
+      await cleanup();
+    }
+  };
+
   const done = run().catch(async (err: unknown) => {
     log("error", "job crashed", { jobId, error: errorMessage(err) });
     if (phase === "running") await terminate();
@@ -322,6 +517,7 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
   const requestStop = (kind: "cancel" | "shutdown") => {
     if (stop || lost || phase === "finishing") return;
     stop = kind;
+    stopAbort.abort();
     if (phase === "running") void terminate();
   };
 

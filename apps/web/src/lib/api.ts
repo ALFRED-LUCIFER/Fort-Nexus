@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
   ApiError,
+  Approval,
+  ApprovalList,
   CreateJobResponse,
   GithubStatus,
   IDEMPOTENCY_HEADER,
@@ -12,6 +14,8 @@ import {
   PairingCodeResponse,
   RepositoryList,
   RunnerList,
+  type ApprovalDecisionRequest,
+  type ApprovalStatus,
   type CreateJobRequest,
   type JobStatus,
 } from "@nexus/contracts";
@@ -96,7 +100,14 @@ export const api = {
   },
   issue: (repoId: string, number: number) =>
     request(`/v1/repositories/${encodeURIComponent(repoId)}/issues/${number}`, IssueDetail),
+  approvals: (q: ApprovalQuery) =>
+    request(`/v1/approvals?${new URLSearchParams(q)}`, ApprovalList).then((l) => l.items),
+  // Answers only after the push finished: EXECUTED with result, or FAILED with error.
+  decide: (id: string, body: ApprovalDecisionRequest) =>
+    request(`/v1/approvals/${encodeURIComponent(id)}/decision`, Approval, post({}, body)),
 };
+
+export type ApprovalQuery = { status: ApprovalStatus } | { jobId: string };
 
 export const keys = {
   me: ["me"] as const,
@@ -107,4 +118,6 @@ export const keys = {
   repositories: ["github", "repositories"] as const,
   issues: (repoId: string, f: IssueFilters) => ["github", "issues", repoId, f] as const,
   issue: (repoId: string, number: number) => ["github", "issue", repoId, number] as const,
+  approvals: ["approvals"] as const,
+  approvalsBy: (q: ApprovalQuery) => ["approvals", q] as const,
 };

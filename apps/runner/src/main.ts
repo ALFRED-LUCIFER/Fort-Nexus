@@ -56,6 +56,7 @@ async function start(): Promise<void> {
   const runner = startRunner(createApi({ baseUrl: config.NEXUS_API_URL, token }), {
     sandbox: config.RUNNER_SANDBOX,
     runnerLabel,
+    dataDir: config.RUNNER_DATA_DIR,
   });
   log("info", "runner started", {
     api: config.NEXUS_API_URL,

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { JobStatus, Runner, RunnerStatus } from "@nexus/contracts";
+import type { Approval, JobStatus, Runner, RunnerStatus } from "@nexus/contracts";
 import { api, keys } from "./api.ts";
 
 const POLL_MS = 5_000;
@@ -40,6 +40,32 @@ export const useQueuedJobs = () =>
     queryFn: () => api.jobs({ limit: QUEUED_PAGE, status: "QUEUED" }),
     refetchInterval: POLL_MS,
     select: (l) => (l.nextCursor ? `${l.items.length}+` : String(l.items.length)),
+  });
+
+/** Pending approvals for the Inbox button and drawer (FR-INB-01). */
+export const usePendingApprovals = () =>
+  useQuery({
+    queryKey: keys.approvalsBy({ status: "PENDING" }),
+    queryFn: () => api.approvals({ status: "PENDING" }),
+    refetchInterval: POLL_MS,
+  });
+
+const SETTLED: readonly Approval["status"][] = ["DENIED", "EXPIRED", "EXECUTED", "FAILED"];
+
+const newest = (items: readonly Approval[]) =>
+  items.toSorted((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
+
+/** The newest approval of a job; polls until it is settled (or the job ended without one). */
+export const useJobApproval = (jobId: string, enabled: boolean, jobEnded: boolean) =>
+  useQuery({
+    queryKey: keys.approvalsBy({ jobId }),
+    queryFn: () => api.approvals({ jobId }),
+    enabled,
+    select: newest,
+    refetchInterval: (q) => {
+      const a = q.state.data && newest(q.state.data);
+      return (a ? SETTLED.includes(a.status) : jobEnded) ? false : POLL_MS;
+    },
   });
 
 /** Re-renders every `ms` so relative times ("3s ago") stay honest between polls. */
@@ -85,14 +111,28 @@ export const statusLabel = (s: JobStatus) => (s.charAt(0) + s.slice(1).toLowerCa
 
 export const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour12: false });
 
+const span = (s: number) =>
+  s < 60
+    ? `${s}s`
+    : s < 3600
+      ? `${Math.floor(s / 60)}m`
+      : s < 86_400
+        ? `${Math.floor(s / 3600)}h`
+        : `${Math.floor(s / 86_400)}d`;
+
 export function ago(iso: string | null, now: number): string {
   if (!iso) return "never";
-  const s = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86_400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86_400)}d ago`;
+  return `${span(Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000)))} ago`;
 }
+
+/** "in 3h" for a future time, "passed" once it is gone (the server still decides). */
+export function until(iso: string, now: number): string {
+  const s = Math.round((new Date(iso).getTime() - now) / 1000);
+  return s <= 0 ? "passed" : `in ${span(s)}`;
+}
+
+/** `7f3a91c2…4c91`: enough to compare by eye with what GitHub and the audit log show. */
+export const shortHash = (h: string) => `${h.slice(0, 8)}…${h.slice(-4)}`;
 
 export function duration(ms: number): string {
   if (ms < 1000) return `${ms} ms`;

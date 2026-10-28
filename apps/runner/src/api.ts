@@ -10,12 +10,17 @@ import {
   RUNNER_LEASE_POLL_MS,
   RunnerRegisterRequest,
   RunnerRegisterResponse,
+  UploadChangesetRequest,
+  UploadChangesetResponse,
 } from "@nexus/contracts";
 
 const REQUEST_TIMEOUT_MS = 10_000;
+const UPLOAD_TIMEOUT_MS = 120_000; // up to CHANGESET_MAX_BYTES as base64
 
-// `request` is re-validated by the job, so a lease with an unknown request can still be reported FAILED.
-const LeaseEnvelope = LeaseResponse.extend({ request: z.unknown() });
+// The server moves the job to AWAITING_APPROVAL and releases the lease; the runner only needs to know it landed.
+
+// `request` and `task` are re-validated by the job, so a lease with a bad one can still be reported FAILED.
+const LeaseEnvelope = LeaseResponse.extend({ request: z.unknown(), task: z.unknown().optional() });
 export type Lease = z.infer<typeof LeaseEnvelope>;
 
 export class ApiCallError extends Error {
@@ -105,6 +110,14 @@ export function createApi(opts: { baseUrl: string; token?: string; fetch?: typeo
         AppendEventsRequest.parse(req),
         AppendEventsResponse,
         signal,
+      ),
+    uploadChangeset: (jobId: string, req: UploadChangesetRequest, signal?: AbortSignal) =>
+      post(
+        `/v1/runner/jobs/${encodeURIComponent(jobId)}/changeset`,
+        UploadChangesetRequest.parse(req),
+        UploadChangesetResponse,
+        signal,
+        UPLOAD_TIMEOUT_MS,
       ),
   };
 }

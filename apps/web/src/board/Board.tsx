@@ -9,6 +9,7 @@ import {
   clock,
   preferredRunner,
   useGithubStatus,
+  usePendingApprovals,
   useQueuedJobs,
   useRecentJobs,
   useRepositories,
@@ -17,6 +18,7 @@ import {
 import { CommandBar } from "./CommandBar.tsx";
 import { P1Button } from "./P1Button.tsx";
 import { IssueDrawer, RepoDrawer } from "./github.tsx";
+import { InboxDrawer } from "./Inbox.tsx";
 import { RunDrawer } from "./RunDrawer.tsx";
 import { CodeZone, EmptyZone, SystemsZone, type ZoneProps } from "./zones.tsx";
 
@@ -46,6 +48,8 @@ export function Board() {
   const runner = preferredRunner(runners.data);
   const github = useGithubStatus();
   const repos = useRepositories(github.data?.configured === true && github.data.installations.length > 0);
+  const approvals = usePendingApprovals();
+  const pending = approvals.data?.length;
 
   const openRun = (id: string) => void navigate({ search: { ws: search.ws, drawer: `run:${id}` } });
   const openRepo = (id: string) => void navigate({ search: { ws: search.ws, drawer: `repo:${id}` } });
@@ -327,9 +331,26 @@ export function Board() {
           >
             Brief
           </P1Button>
-          <P1Button why="The inbox and approvals arrive in P1." className={pillBtn}>
+          <button
+            type="button"
+            aria-label={
+              pending === undefined
+                ? "Inbox"
+                : `Inbox, ${pending} pending ${pending === 1 ? "approval" : "approvals"}`
+            }
+            onClick={() => void navigate({ search: { ws: search.ws, drawer: "inbox" } })}
+            className={`${pillBtn} flex items-center gap-1.5`}
+          >
             Inbox
-          </P1Button>
+            {!!pending && (
+              <span
+                aria-hidden="true"
+                className="min-w-[18px] rounded-full bg-amber px-1.5 py-[3px] text-center font-mono text-[10.5px] leading-none text-onacc"
+              >
+                {pending}
+              </span>
+            )}
+          </button>
           <button
             type="button"
             aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
@@ -440,6 +461,7 @@ export function Board() {
       {drawerKind === "repo" && drawerId && (
         <RepoDrawer repoId={drawerId} banner={offlineBanner} onClose={closeDrawer} />
       )}
+      {drawerKind === "inbox" && <InboxDrawer banner={offlineBanner} onClose={closeDrawer} />}
       {drawerKind === "issue" && drawerId && drawerNumber && (
         <IssueDrawer
           repoId={drawerId}

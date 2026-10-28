@@ -1,5 +1,14 @@
 import { useEffect, useState } from "react";
-import { JobStatus, RunEvent, SSE_RUN_EVENT, SandboxInfo, type Job } from "@nexus/contracts";
+import {
+  JobStatus,
+  RunEvent,
+  SSE_RUN_EVENT,
+  SandboxInfo,
+  isTerminal,
+  type Approval,
+  type Job,
+  type JobOutcome,
+} from "@nexus/contracts";
 import { clock, duration } from "../lib/queries.ts";
 
 export type StreamState = "connecting" | "live" | "reconnecting" | "ended";
@@ -141,12 +150,196 @@ export function explain(
   }
 }
 
+export type ChangeType = "added" | "modified" | "deleted";
+
+/** What the agent run reported: its own summary (an estimate, untrusted) and the runner's changed-file scan. */
+export interface AgentFacts {
+  turns?: number;
+  costUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  report?: string;
+  files?: { path: string; change: ChangeType }[];
+  fileCount?: number;
+  secretLeak?: boolean;
+  failReason?: string;
+  failBudget?: string;
+}
+
+// git name-status letters from the runner's artifact scan; "?" = untracked, i.e. a new file.
+const CHANGE: Record<string, ChangeType> = { A: "added", "?": "added", D: "deleted" };
+
+export function agentFacts(events: readonly RunEvent[]): AgentFacts {
+  const summary = events.findLast((e) => e.type === "agent.message" && e.payload.kind === "summary")?.payload;
+  const usage = summary?.usage as Record<string, unknown> | undefined;
+  const art = find(events, "artifact.created")?.payload;
+  const failed = find(events, "job.failed")?.payload;
+  const files = Array.isArray(art?.files)
+    ? art.files.flatMap((f: unknown) => {
+        const { path, status } = (f ?? {}) as Record<string, unknown>;
+        return typeof path === "string" ? [{ path, change: CHANGE[str(status) ?? ""] ?? "modified" }] : [];
+      })
+    : undefined;
+  return {
+    turns: num(summary?.turns),
+    costUsd: num(summary?.estimatedCostUsd),
+    inputTokens: num(usage?.inputTokens),
+    outputTokens: num(usage?.outputTokens),
+    report: str(summary?.text),
+    files,
+    fileCount: num(art?.fileCount),
+    secretLeak: art?.secretLeak === true,
+    failReason: str(failed?.reason),
+    failBudget: str(failed?.budget),
+  };
+}
+
+export type StageState = "pending" | "active" | "waiting" | "done" | "failed" | "skipped";
+export interface Stage {
+  label: string;
+  state: StageState;
+  /** Time it finished, or a word saying why it has none. */
+  note: string;
+}
+
+const ENDED_BADLY: Partial<Record<JobStatus, string>> = {
+  FAILED: "failed",
+  CANCELLED: "cancelled",
+  RECOVERY_REQUIRED: "needs review",
+  REJECTED: "rejected",
+  EXPIRED: "expired",
+};
+
+/**
+ * The design's six stages for an issue → draft PR run. A stage is done only when the event that proves it
+ * exists; NEXUS has no plan step yet and doesn't verify tests itself, so those never turn green on their own.
+ */
+export function issueStages(
+  status: JobStatus,
+  outcome: JobOutcome | null,
+  events: readonly RunEvent[],
+  approval: Approval | null | undefined,
+): Stage[] {
+  const at = (pred: (e: RunEvent) => boolean) => events.find(pred)?.occurredAt;
+  const state = (to: JobStatus) => at((e) => e.type === "job.state.changed" && e.payload.to === to);
+  const bad = ENDED_BADLY[status];
+  const noChanges = outcome === "COMPLETED_NO_CHANGES";
+  const decided = events.findLast((e) => e.type === "approval.decided");
+  const decision = str(decided?.payload.decision);
+  const approvedAt =
+    decided && (decision === "approve" || ["APPROVED", "EXECUTED", "FAILED"].includes(approval?.status ?? ""))
+      ? decided.occurredAt
+      : undefined;
+  const denied = decision === "deny" || approval?.status === "DENIED" || outcome === "APPROVAL_DENIED";
+  const expired = approval?.status === "EXPIRED" || status === "EXPIRED";
+
+  // [started, finished] evidence per stage, in order.
+  const created = at((e) => e.type === "job.created");
+  const implStart = at((e) => e.type === "agent.started") ?? state("RUNNING");
+  const implDone = state("VERIFYING") ?? at((e) => e.type === "artifact.created");
+  const tested = at((e) => e.type === "test.completed");
+  const gate = at((e) => e.type === "approval.requested");
+  const published = at((e) => e.type === "external_action.completed");
+
+  const stage = (label: string, started: unknown, done: string | undefined, why?: StageState, word = "") => {
+    if (done) return { label, state: "done" as const, note: clock(done) };
+    if (why) return { label, state: why, note: word };
+    if (started && bad) return { label, state: "failed" as const, note: bad };
+    // Ended fine but this stage's event never arrived: say so rather than guess.
+    if (started)
+      return isTerminal(status)
+        ? { label, state: "pending" as const, note: "not reported" }
+        : { label, state: "active" as const, note: "now" };
+    return { label, state: "pending" as const, note: "—" };
+  };
+
+  return [
+    status === "REJECTED"
+      ? { label: "Qualify", state: "failed", note: "rejected" }
+      : stage("Qualify", true, created),
+    implStart ? { label: "Plan", state: "skipped", note: "no plan step" } : stage("Plan", false, undefined),
+    stage("Implement", implStart, implDone),
+    tested
+      ? stage("Test", true, tested)
+      : implDone
+        ? { label: "Test", state: "skipped", note: "not verified" }
+        : stage("Test", false, undefined),
+    noChanges
+      ? { label: "Review", state: "skipped", note: "no changes" }
+      : denied
+        ? { label: "Review", state: "failed", note: "denied" }
+        : expired
+          ? { label: "Review", state: "failed", note: "expired" }
+          : gate && !approvedAt && !bad
+            ? { label: "Review", state: "waiting", note: "waiting on you" }
+            : stage("Review", gate, approvedAt),
+    approval?.status === "FAILED"
+      ? { label: "Draft PR", state: "failed", note: "failed" }
+      : noChanges
+        ? { label: "Draft PR", state: "skipped", note: "nothing to push" }
+        : stage("Draft PR", approvedAt, published),
+  ];
+}
+
+/** Plain-language summary of an issue run, from recorded events and the approval only. */
+export function explainIssue(
+  status: JobStatus,
+  outcome: JobOutcome | null,
+  f: AgentFacts,
+  approval: Approval | null | undefined,
+  runnerName: string | undefined,
+  runnerOnline: boolean,
+): string {
+  const files = approval?.action.files.length ?? f.fileCount;
+  const n = (k: number | undefined) => (k === undefined ? "Some" : String(k));
+  if (approval?.status === "EXECUTED" && approval.result)
+    return `You approved the push. Draft PR #${approval.result.pullRequestNumber} is open on GitHub for your review. NEXUS never merges.`;
+  if (approval?.status === "APPROVED")
+    return "You approved the push. The API is pushing the branch and opening the draft PR now.";
+  if (approval?.status === "FAILED")
+    return `You approved the push, but GitHub refused it: ${approval.error ?? "no reason given"}. Nothing was merged.`;
+  switch (status) {
+    case "QUEUED":
+      return runnerOnline
+        ? `Queued. ${runnerName ?? "The runner"} will pick it up within seconds.`
+        : `Queued and held, not lost. It starts when ${runnerName ?? "a paired runner"} comes online.`;
+    case "PREPARING":
+      return `${runnerName ?? "The runner"} claimed the job and is fetching the repository into a fresh worktree.`;
+    case "RUNNING":
+      return "The agent is working on the issue in a sandbox at home. It can't reach GitHub; whatever it changes waits for your approval.";
+    case "VERIFYING":
+      return "The agent finished. The runner is collecting the changed files.";
+    case "AWAITING_APPROVAL":
+      return `${n(files)} ${files === 1 ? "file" : "files"} changed. Nothing has been pushed. Check the exact action below, then approve or deny the push.`;
+    case "COMPLETED":
+      if (outcome === "COMPLETED_NO_CHANGES")
+        return "The agent made no changes, so there is nothing to push.";
+      if (outcome === "APPROVAL_DENIED") return "You denied the push. Nothing was pushed to GitHub.";
+      return "The run completed.";
+    case "CANCELLED":
+      return "Cancelled at your request. Nothing was pushed.";
+    case "EXPIRED":
+      return "The approval expired without a decision. Nothing was pushed. Start a new run to try again.";
+    case "FAILED":
+      if (f.failReason === "budget_exceeded" || outcome === "BUDGET_EXCEEDED" || outcome === "TIMED_OUT") {
+        const which = outcome === "TIMED_OUT" ? "wall_clock" : (f.failBudget ?? "");
+        const word = { wall_clock: "time ", cost: "cost ", turns: "turn " }[which] ?? "";
+        return `The agent hit its ${word}budget and was stopped. Nothing was pushed.`;
+      }
+      return `The run failed${f.failReason ? ` (${f.failReason.replaceAll("_", " ")})` : ""}. Nothing was pushed.`;
+    default:
+      return explain(status, {}, runnerName, runnerOnline);
+  }
+}
+
 export interface TermLine {
   seq: number;
   t: string;
   k: string;
   m: string;
   tone: string;
+  /** Rows the owner must not miss (blocked egress). */
+  alert?: string;
 }
 
 const MUTED = "#78746b";
@@ -154,6 +347,7 @@ const TEAL = "oklch(0.78 0.09 195)";
 const GREEN = "oklch(0.78 0.10 155)";
 const CORAL = "oklch(0.74 0.14 32)";
 const VIOLET = "oklch(0.76 0.08 290)";
+const AMBER = "oklch(0.82 0.12 70)";
 
 export function toLine(e: RunEvent): TermLine {
   const p = e.payload;
@@ -172,10 +366,55 @@ export function toLine(e: RunEvent): TermLine {
     case "workspace.created":
       return line("host", `${str(p.hostname) ?? "?"} · pid ${num(p.pid) ?? "?"} · ${str(p.cwd) ?? ""}`);
     case "agent.started":
-      return line("exec", `$ ${runFacts([e]).argv ?? str(p.preset) ?? ""}`, VIOLET);
+      return p.engine === "claude-agent-sdk"
+        ? line("agent", `started · ${str(p.model) ?? "model ?"}`, VIOLET)
+        : line("exec", `$ ${runFacts([e]).argv ?? str(p.preset) ?? ""}`, VIOLET);
+    case "agent.message":
+      if (p.kind === "summary") {
+        const f = agentFacts([e]);
+        return line(
+          "summary",
+          `${f.turns ?? "?"} turns · ${f.inputTokens ?? "?"} in / ${f.outputTokens ?? "?"} out tokens · $${f.costUsd?.toFixed(2) ?? "?"} (estimate)`,
+          VIOLET,
+        );
+      }
+      if (p.kind === "error") return line("agent", `error · ${str(p.error) ?? "unknown"}`, CORAL);
+      if (p.kind === "api_retry") return line("retry", `model API retry ${num(p.attempt) ?? ""}`.trim());
+      return line("agent", str(p.text) ?? "", "#d9d4ca");
+    case "tool.requested":
+      return line("tool", `${str(p.tool) ?? "?"} ${str(p.summary) ?? ""}`.trim(), TEAL);
+    case "tool.denied":
+      return {
+        ...line(
+          "denied",
+          `${p.kind === "egress" ? "network blocked → " : ""}${str(p.target) ?? str(p.tool) ?? "?"}`,
+          CORAL,
+        ),
+        alert: "Blocked: ",
+      };
+    case "artifact.created":
+      return line(
+        "diff",
+        `${num(p.fileCount) ?? "?"} files changed${p.secretLeak === true ? " · SECRET FOUND — will not be pushed" : ""}`,
+        p.secretLeak === true ? CORAL : GREEN,
+      );
+    case "approval.requested":
+      return line("gate", "waiting for you: push branch + open draft PR", AMBER);
+    case "approval.decided":
+      return line("gate", `${str(p.decision) ?? "decided"} by owner`, AMBER);
+    case "external_action.completed":
+      return line(
+        "github",
+        `draft PR ${num(p.pullRequestNumber) ? `#${num(p.pullRequestNumber)} ` : ""}opened`,
+        GREEN,
+      );
     case "process.output":
       return line(str(p.stream) ?? "out", str(p.text) ?? "", p.stream === "stderr" ? CORAL : "#d9d4ca");
     case "tool.completed":
+      if (p.toolUseId !== undefined)
+        return p.isError === true
+          ? line("tool", `${str(p.tool) ?? "?"} failed · ${str(p.error) ?? ""}`, CORAL)
+          : line("tool", `${str(p.tool) ?? "?"} done`);
       return line(
         "exit",
         `code ${num(p.exitCode) ?? "?"} · ${duration(num(p.durationMs) ?? 0)}`,

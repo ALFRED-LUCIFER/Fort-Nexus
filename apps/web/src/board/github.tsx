@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { getRouteApi } from "@tanstack/react-router";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import {
@@ -19,9 +19,9 @@ import {
 } from "../lib/queries.ts";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { P1Button } from "./P1Button.tsx";
+import { StartRunPreview } from "./StartRun.tsx";
 
 const route = getRouteApi("/");
-const ENG07 = "arrives with ENG-07";
 
 const field =
   "min-w-0 rounded-xl border border-hair bg-card px-3 py-2 text-[13px] text-ink placeholder:text-ink3";
@@ -381,6 +381,8 @@ function IssueBody({ repoId, number }: { repoId: string; number: number }) {
   const repos = useRepositories(status.data?.configured === true);
   const runner = preferredRunner(useRunners().data);
   const repo = repos.data?.items.find((r) => r.id === repoId);
+  const [previewing, setPreviewing] = useState(false);
+  const startRef = useRef<HTMLButtonElement>(null);
   const back = (
     <button
       type="button"
@@ -501,23 +503,39 @@ function IssueBody({ repoId, number }: { repoId: string; number: number }) {
 
         <div className="flex flex-none flex-wrap items-center justify-between gap-2">
           <span className="text-[12px] text-ink3">
-            Runs at home in an isolated container. Push + PR always ask you first.
+            Runs at home in a sandbox. Push and PR always ask you first.
           </span>
           <div className="flex gap-2">
             <P1Button
-              why={`Plan only ${ENG07}.`}
+              why="Plan only arrives with the plan step."
               className="rounded-[14px] border border-hair px-4 py-3 text-[13px] font-medium text-ink"
             >
               Plan only
             </P1Button>
-            <P1Button
-              why={`Starting a run from an issue ${ENG07}.`}
+            <button
+              ref={startRef}
+              type="button"
+              aria-expanded={previewing}
+              aria-controls={previewing ? "run-preview" : undefined}
+              onClick={() => setPreviewing(true)}
               className="rounded-[14px] bg-teal px-[18px] py-3 text-[13px] font-medium text-onacc"
             >
               Start run on {runner?.name ?? "home runner"}
-            </P1Button>
+            </button>
           </div>
         </div>
+        {previewing && (
+          <StartRunPreview
+            repoId={repoId}
+            repo={repo}
+            detail={d}
+            runner={runner}
+            onCancel={() => {
+              setPreviewing(false);
+              startRef.current?.focus();
+            }}
+          />
+        )}
       </div>
     </>
   );
