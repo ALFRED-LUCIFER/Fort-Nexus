@@ -1,7 +1,7 @@
 import { and, eq, inArray, isNotNull, isNull, lt } from "drizzle-orm";
 import { z } from "zod";
 import { IncidentTriage } from "@nexus/contracts";
-import { resolveAgentProfile } from "../agent-profile-adapter.ts";
+import { resolveAgentProfile } from "../agents/service.ts";
 import { callTool, loadAi, urlsIn } from "../ai.ts";
 import { audit } from "../audit.ts";
 import type { Db } from "../db/index.ts";

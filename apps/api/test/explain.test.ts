@@ -26,15 +26,15 @@ import { createTestApp, ownerSession, type TestApp } from "./helpers/owner-sessi
 // The provider is stubbed at fetch level; the Anthropic SDK and the API are real.
 
 // The agent profile comes from the wave-3 adapter; tests narrow its tools or set its model through this override.
-// At merge (agent A's resolveAgentProfile) switch the mock path, or set profiles with PUT /v1/agents/:agent/profile.
 const profile = vi.hoisted(() => ({
   tools: null as AgentTool[] | null,
   model: null as string | null,
   calls: [] as unknown[][],
 }));
-vi.mock("../src/agent-profile-adapter.ts", async (importOriginal) => {
-  const real = await importOriginal<typeof import("../src/agent-profile-adapter.ts")>();
+vi.mock("../src/agents/service.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../src/agents/service.ts")>();
   return {
+    ...real,
     resolveAgentProfile: async (...args: Parameters<typeof real.resolveAgentProfile>) => {
       profile.calls.push(args.slice(2));
       const p = await real.resolveAgentProfile(...args);

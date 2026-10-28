@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { index, pgTable, text, timestamp, uniqueIndex, uuid, jsonb } from "drizzle-orm/pg-core";
 import type { Basis, Intent, ProposalStatus, ProposedAction, SourceRef } from "@nexus/contracts";
+import { agentProfileVersions } from "../agents/schema.ts";
 import { jobs, user } from "../db/schema.ts";
 
 // EPIC CWV/CXR text Talk. Every row carries workspace_id + project_id (Part B rule 5).
@@ -25,6 +26,8 @@ export const conversationThreads = pgTable(
     title: text("title").notNull(),
     // Set only from a verified source (a job row read or created by NEXUS), never by the model.
     subjectJobId: uuid("subject_job_id").references(() => jobs.id),
+    // FR-WKS-05: the Chief of Staff profile version pinned at creation; null = the built-in default.
+    profileVersionId: uuid("profile_version_id").references(() => agentProfileVersions.id),
     createdAt: ts("created_at").notNull().defaultNow(),
     updatedAt: ts("updated_at").notNull().defaultNow(),
   },

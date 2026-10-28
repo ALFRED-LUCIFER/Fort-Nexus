@@ -650,3 +650,59 @@ describe("project scope (FR-CXR-01, NFR-CNV-05)", () => {
     expect(started.rowCount).toBe(0);
   });
 });
+
+describe("profile pinning (FR-WKS-05)", () => {
+  const routedModel = () => fake.modelRequests.at(-1)!.model;
+  const setChiefModel = async (projectId: string, model: string) => {
+    const res = await call("PUT", "/v1/agents/CHIEF_OF_STAFF/profile", {
+      level: { kind: "PROJECT", projectId },
+      settings: {
+        model,
+        engine: "MESSAGES_API",
+        autonomy: "ACT_WITH_APPROVAL",
+        tools: ["jobs.read"],
+        maxCostUsdPerTask: 1,
+        maxTurns: 10,
+        responseDetail: "STANDARD",
+      },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    return res.json() as { id: string };
+  };
+
+  it("a thread keeps the Chief of Staff version it started with, even after a newer one is saved", async () => {
+    const c = await newProject("DEV");
+    const unpinned = await newThread({ projectId: c.id });
+    expect(unpinned.profileVersionId).toBeNull(); // built-in default: ai.json's model
+    await turn(unpinned.id, "List my runs", toolCall({ kind: "LIST_RUNS" }));
+    expect(routedModel()).toBe(MODEL);
+
+    const v1 = await setChiefModel(c.id, "claude-pinned-1");
+    const pinned = await newThread({ projectId: c.id });
+    expect(pinned.profileVersionId).toBe(v1.id);
+    await turn(pinned.id, "List my runs", toolCall({ kind: "LIST_RUNS" }));
+    expect(routedModel()).toBe("claude-pinned-1");
+
+    const v2 = await setChiefModel(c.id, "claude-pinned-2");
+    await turn(pinned.id, "List my runs again", toolCall({ kind: "LIST_RUNS" }));
+    expect(routedModel()).toBe("claude-pinned-1");
+    await turn(unpinned.id, "List my runs again", toolCall({ kind: "LIST_RUNS" }));
+    expect(routedModel()).toBe(MODEL);
+    expect(
+      ((await call("GET", `/v1/conversations/${pinned.id}`)).json() as ThreadDetail).thread.profileVersionId,
+    ).toBe(v1.id);
+    expect((await newThread({ projectId: c.id })).profileVersionId).toBe(v2.id);
+
+    // Another project of the workspace doesn't pick up c's project version.
+    const other = await newProject("DEV");
+    expect((await newThread({ projectId: other.id })).profileVersionId).toBeNull();
+    const audit = await sql.query<{ metadata: { model: string; profileVersionId: string } }>(
+      `select metadata from audit_records where action = 'conversation.turn' and resource_id = $1`,
+      [pinned.id],
+    );
+    expect(audit.rows.map((r) => [r.metadata.profileVersionId, r.metadata.model])).toEqual([
+      [v1.id, "claude-pinned-1"],
+      [v1.id, "claude-pinned-1"],
+    ]);
+  });
+});

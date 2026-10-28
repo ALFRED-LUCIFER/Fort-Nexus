@@ -1,6 +1,9 @@
 import { z } from "zod";
 import {
   ActionProposal,
+  AgentList,
+  AgentProfileVersion,
+  AgentProfileVersionList,
   ApiError,
   Approval,
   ApprovalList,
@@ -51,6 +54,7 @@ import {
   Watchlist,
   WatchlistList,
   WorkspaceList,
+  type AgentKey,
   type ApprovalDecisionRequest,
   type ApprovalStatus,
   type CreateAutomationClientRequest,
@@ -63,6 +67,7 @@ import {
   type FindingSearchQuery,
   type JobStatus,
   type ProposalDecisionRequest,
+  type SetAgentProfileRequest,
   type UpdateAutomationClientRequest,
   type UpdateConnectorRequest,
   type UpdateMonitoredAppRequest,
@@ -310,6 +315,16 @@ export const api = {
     request(`/v1/incidents/${encodeURIComponent(id)}/status`, Incident, post({}, { status })),
   triageIncident: (id: string) =>
     request(`/v1/incidents/${encodeURIComponent(id)}/triage`, IncidentTriage, post()),
+  // Profiles resolve per project, so these need one.
+  agents: (projectId: string) =>
+    request(`/v1/agents?${new URLSearchParams({ projectId })}`, AgentList).then((l) => l.items),
+  agentVersions: (agent: AgentKey, projectId: string) =>
+    request(
+      `/v1/agents/${agent}/versions?${new URLSearchParams({ projectId })}`,
+      AgentProfileVersionList,
+    ).then((l) => l.items),
+  setAgentProfile: (agent: AgentKey, body: SetAgentProfileRequest) =>
+    request(`/v1/agents/${agent}/profile`, AgentProfileVersion, post({}, body, "PUT")),
 };
 
 export type FindingFilters = Partial<Omit<FindingSearchQuery, "cursor">>;
@@ -354,4 +369,8 @@ export const keys = {
   monitoring: ["monitoring"] as const,
   monitoredApps: (projectId: string | undefined) => ["monitoring", "apps", projectId ?? "all"] as const,
   incident: (id: string) => ["monitoring", "incident", id] as const,
+  agents: ["agents"] as const,
+  agentsOf: (projectId: string | undefined) => ["agents", "list", projectId ?? "none"] as const,
+  agentVersions: (agent: AgentKey, projectId: string | undefined) =>
+    ["agents", "versions", agent, projectId ?? "none"] as const,
 };

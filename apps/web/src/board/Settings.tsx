@@ -4,6 +4,7 @@ import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { SetDailyBudgetRequest, type OwnerSession, type Runner, type SystemControls } from "@nexus/contracts";
 import { api, keys } from "../lib/api.ts";
 import { RUNNER_TONE, ago, until, useNow, useRunners, useSystem } from "../lib/queries.ts";
+import { AgentProfilesSettings } from "./agents.tsx";
 import { AutomationsSettings } from "./AutomationsSettings.tsx";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { WorkspacesSettings } from "./WorkspacesSettings.tsx";
@@ -28,9 +29,8 @@ const TABS = [
 ] as const;
 type Tab = (typeof TABS)[number][0];
 
-const LATER: Record<Exclude<Tab, "sec" | "limits" | "ws" | "auto">, string> = {
+const LATER: Record<Exclude<Tab, "sec" | "limits" | "ws" | "auto" | "profiles">, string> = {
   conn: "Managing connections here arrives in P1. Today the only connection is the NEXUS GitHub App, set up on the home machine.",
-  profiles: "Agent profiles arrive in P1 with agents.",
   remote:
     "Remote access is configured on the home machine (Tailscale Serve, see the runbook). Managing it here arrives in P1.",
   backup: "Backups run on the home machine (see the backup runbook). Viewing them here arrives in P1.",
@@ -78,6 +78,8 @@ export function SettingsDrawer({ banner, onClose }: { banner?: ReactNode; onClos
           <WorkspacesSettings />
         ) : tab === "auto" ? (
           <AutomationsSettings />
+        ) : tab === "profiles" ? (
+          <AgentProfilesSettings />
         ) : (
           <p className="m-0 flex-none text-[14px] leading-[1.55] text-pretty text-ink2">{LATER[tab]}</p>
         )}

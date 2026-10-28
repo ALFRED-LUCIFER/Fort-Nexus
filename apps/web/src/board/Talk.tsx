@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ActionProposal, Basis, SourceRef, Turn } from "@nexus/contracts";
 import { ApiRequestError, api, keys } from "../lib/api.ts";
 import { ago, clock, shortHash, until, useNow } from "../lib/queries.ts";
+import { PinnedProfile } from "./agents.tsx";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { PICK_PROJECT, useScope, type Scope } from "./scope.tsx";
 
@@ -164,6 +165,8 @@ function ThreadView({ id }: { id: string }) {
             <button type="button" onClick={() => open("talk")} className="text-teal underline">
               All conversations
             </button>
+            <span aria-hidden="true">·</span>
+            <PinnedProfile projectId={t.projectId} versionId={t.profileVersionId} />
             {t.subjectJobId && (
               <>
                 <span aria-hidden="true">·</span>
