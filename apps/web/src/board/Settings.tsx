@@ -4,6 +4,7 @@ import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { SetDailyBudgetRequest, type OwnerSession, type Runner, type SystemControls } from "@nexus/contracts";
 import { api, keys } from "../lib/api.ts";
 import { RUNNER_TONE, ago, until, useNow, useRunners, useSystem } from "../lib/queries.ts";
+import { AutomationsSettings } from "./AutomationsSettings.tsx";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { WorkspacesSettings } from "./WorkspacesSettings.tsx";
 
@@ -13,6 +14,7 @@ const route = getRouteApi("/");
 const TABS = [
   ["conn", "Connections"],
   ["ws", "Workspaces"],
+  ["auto", "Automations"],
   ["profiles", "Agent profiles"],
   ["sec", "Security & devices"],
   ["remote", "Remote access"],
@@ -26,7 +28,7 @@ const TABS = [
 ] as const;
 type Tab = (typeof TABS)[number][0];
 
-const LATER: Record<Exclude<Tab, "sec" | "limits" | "ws">, string> = {
+const LATER: Record<Exclude<Tab, "sec" | "limits" | "ws" | "auto">, string> = {
   conn: "Managing connections here arrives in P1. Today the only connection is the NEXUS GitHub App, set up on the home machine.",
   profiles: "Agent profiles arrive in P1 with agents.",
   remote:
@@ -74,6 +76,8 @@ export function SettingsDrawer({ banner, onClose }: { banner?: ReactNode; onClos
           <Limits />
         ) : tab === "ws" ? (
           <WorkspacesSettings />
+        ) : tab === "auto" ? (
+          <AutomationsSettings />
         ) : (
           <p className="m-0 flex-none text-[14px] leading-[1.55] text-pretty text-ink2">{LATER[tab]}</p>
         )}

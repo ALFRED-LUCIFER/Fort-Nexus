@@ -84,7 +84,8 @@ export type TriggerResponse = z.infer<typeof TriggerResponse>;
 export const AutomationRun = z.object({
   id: z.uuid(),
   clientId: z.uuid(),
-  action: AutomationAction,
+  // null when an authenticated request failed schema validation (AUTO-G03): its action is unknown.
+  action: AutomationAction.nullable(),
   status: z.enum(["ACCEPTED", "REJECTED"]),
   reason: z.string().nullable(),
   result: TriggerResponse.shape.result.nullable(),
