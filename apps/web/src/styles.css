@@ -155,13 +155,6 @@ body {
   }
 }
 
-@keyframes nx-drawer-in {
-  from {
-    transform: translateX(48px);
-    opacity: 0;
-  }
-}
-
 @keyframes nx-rise {
   from {
     transform: translateY(10px);
@@ -171,12 +164,6 @@ body {
 
 .nx-pulse {
   animation: nxp 1.6s infinite;
-}
-
-/* Spring easing from the design's motion() helper. */
-.nx-drawer {
-  animation: nx-drawer-in 620ms
-    linear(0, 0.22 8%, 0.6 18%, 0.92 30%, 1.04 42%, 1.06 50%, 1.02 64%, 0.995 80%, 1) both;
 }
 
 .nx-stagger > * {

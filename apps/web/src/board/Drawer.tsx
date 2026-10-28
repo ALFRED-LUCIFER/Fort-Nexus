@@ -1,5 +1,10 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import { AnimatePresence, m } from "motion/react";
+
+// The design's drawer spring: 620 ms, slight overshoot. Opacity fades without bouncing.
+const ENTER = { type: "spring", duration: 0.62, bounce: 0.3, opacity: { duration: 0.3 } } as const;
+const EXIT = { duration: 0.18, ease: "easeIn" } as const;
 
 /** The right-hand drawer every board node opens (design: 26px glass panel, staggered content). */
 export function Drawer({
@@ -11,22 +16,43 @@ export function Drawer({
   onClose: () => void;
   children: ReactNode;
 }) {
+  // Esc / close button / outside click play the exit first; the owner unmounts us once it ends.
+  const [open, setOpen] = useState(true);
+  // Drawers open by URL, not a Dialog.Trigger, so Radix has nothing to refocus; return focus to the opener.
+  const [opener] = useState(() => document.activeElement);
   return (
-    <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
-      <Dialog.Portal>
-        <Dialog.Content
-          aria-describedby={undefined}
-          className="nx-drawer fixed top-20 right-4 bottom-4 z-10 flex w-[min(760px,calc(100%-32px))] flex-col overflow-hidden rounded-[26px] border border-line bg-glass2 outline-none"
-          style={{
-            backdropFilter: "blur(30px) saturate(1.5)",
-            WebkitBackdropFilter: "blur(30px) saturate(1.5)",
-            boxShadow: "0 30px 90px -30px rgba(40,30,10,.4)",
-          }}
-        >
-          {banner && <div className="flex-none px-6 pt-4">{banner}</div>}
-          {children}
-        </Dialog.Content>
-      </Dialog.Portal>
+    <Dialog.Root open={open} onOpenChange={setOpen}>
+      <AnimatePresence onExitComplete={onClose}>
+        {open && (
+          <Dialog.Portal key="drawer" forceMount>
+            <Dialog.Content
+              asChild
+              forceMount
+              aria-describedby={undefined}
+              onCloseAutoFocus={(e) => {
+                e.preventDefault();
+                if (opener instanceof HTMLElement) opener.focus();
+              }}
+            >
+              <m.div
+                initial={{ opacity: 0, x: 48 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 48, transition: EXIT }}
+                transition={ENTER}
+                className="fixed top-20 right-4 bottom-4 z-10 flex w-[min(760px,calc(100%-32px))] flex-col overflow-hidden rounded-[26px] border border-line bg-glass2 outline-none"
+                style={{
+                  backdropFilter: "blur(30px) saturate(1.5)",
+                  WebkitBackdropFilter: "blur(30px) saturate(1.5)",
+                  boxShadow: "0 30px 90px -30px rgba(40,30,10,.4)",
+                }}
+              >
+                {banner && <div className="flex-none px-6 pt-4">{banner}</div>}
+                {children}
+              </m.div>
+            </Dialog.Content>
+          </Dialog.Portal>
+        )}
+      </AnimatePresence>
     </Dialog.Root>
   );
 }
