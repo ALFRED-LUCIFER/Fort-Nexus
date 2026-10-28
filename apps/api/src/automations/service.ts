@@ -22,7 +22,7 @@ import { canonical, createJob, ownerActor, sha256 } from "../jobs.ts";
 import { requireGithub } from "../routes/github.ts";
 import { assertNotStopped } from "../system.ts";
 import { ownerWorkspaceIds, resolveProject } from "../workspaces.ts";
-import { createManualRun, getWatchlist } from "./research-adapter.ts";
+import { createManualRun, getWatchlist } from "../research/service.ts";
 import { automationClients, automationRuns } from "./schema.ts";
 
 type ClientRow = typeof automationClients.$inferSelect;
