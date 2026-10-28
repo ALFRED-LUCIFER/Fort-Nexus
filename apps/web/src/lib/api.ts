@@ -3,6 +3,9 @@ import {
   ApiError,
   Approval,
   ApprovalList,
+  ConnectionTestResult,
+  Connector,
+  ConnectorList,
   CreateJobResponse,
   GithubStatus,
   IDEMPOTENCY_HEADER,
@@ -11,13 +14,18 @@ import {
   Job,
   JobList,
   Me,
+  MetricDictionary,
   PairingCodeResponse,
+  PaymentFailuresResponse,
   RepositoryList,
   RunnerList,
+  SalesSummaryResponse,
   type ApprovalDecisionRequest,
   type ApprovalStatus,
+  type CreateConnectorRequest,
   type CreateJobRequest,
   type JobStatus,
+  type UpdateConnectorRequest,
 } from "@nexus/contracts";
 
 export type { Me } from "@nexus/contracts";
@@ -78,6 +86,16 @@ const post = (headers: Record<string, string> = {}, body?: unknown): RequestInit
   body: body === undefined ? undefined : JSON.stringify(body),
 });
 
+// The board always shows today against the same clock window yesterday (BIZ-G01).
+const metricQuery = (connectorId: string) =>
+  new URLSearchParams({ connectorId, day: "today", compare: "true" });
+
+const send = (method: "PATCH" | "PUT", body: unknown): RequestInit => ({
+  method,
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify(body),
+});
+
 export const api = {
   me: () => request("/v1/me", Me),
   runners: () => request("/v1/runners", RunnerList).then((r) => r.items),
@@ -105,6 +123,25 @@ export const api = {
   // Answers only after the push finished: EXECUTED with result, or FAILED with error.
   decide: (id: string, body: ApprovalDecisionRequest) =>
     request(`/v1/approvals/${encodeURIComponent(id)}/decision`, Approval, post({}, body)),
+  connectors: () => request("/v1/business/connectors", ConnectorList).then((l) => l.items),
+  createConnector: (body: CreateConnectorRequest) =>
+    request("/v1/business/connectors", Connector, post({}, body)),
+  updateConnector: (id: string, body: UpdateConnectorRequest) =>
+    request(`/v1/business/connectors/${encodeURIComponent(id)}`, Connector, send("PATCH", body)),
+  testConnector: (id: string) =>
+    request(`/v1/business/connectors/${encodeURIComponent(id)}/test`, ConnectionTestResult, post()),
+  dictionary: (id: string) =>
+    request(`/v1/business/connectors/${encodeURIComponent(id)}/dictionary`, MetricDictionary),
+  putDictionary: (id: string, body: MetricDictionary) =>
+    request(
+      `/v1/business/connectors/${encodeURIComponent(id)}/dictionary`,
+      MetricDictionary,
+      send("PUT", body),
+    ),
+  salesSummary: (connectorId: string) =>
+    request(`/v1/business/metrics/sales-summary?${metricQuery(connectorId)}`, SalesSummaryResponse),
+  paymentFailures: (connectorId: string) =>
+    request(`/v1/business/metrics/payment-failures?${metricQuery(connectorId)}`, PaymentFailuresResponse),
 };
 
 export type ApprovalQuery = { status: ApprovalStatus } | { jobId: string };
@@ -120,4 +157,8 @@ export const keys = {
   issue: (repoId: string, number: number) => ["github", "issue", repoId, number] as const,
   approvals: ["approvals"] as const,
   approvalsBy: (q: ApprovalQuery) => ["approvals", q] as const,
+  connectors: ["business", "connectors"] as const,
+  dictionary: (id: string) => ["business", "dictionary", id] as const,
+  metric: (name: "sales" | "payments", connectorId: string) =>
+    ["business", "metric", name, connectorId] as const,
 };

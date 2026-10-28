@@ -21,6 +21,7 @@ import {
 } from "fastify-type-provider-zod";
 import { AuthStatus, GITHUB_SETUP_COMMAND, type ApiError, type ErrorCode } from "@nexus/contracts";
 import { createAuth, type Auth } from "./auth.ts";
+import { businessRoutes } from "./business/routes.ts";
 import type { Config } from "./config.ts";
 import { createDb, runMigrations, type Db } from "./db/index.ts";
 import { HttpError } from "./errors.ts";
@@ -224,7 +225,11 @@ export async function buildApp(config: Config) {
   });
 
   // GitHub routes share the owner scope, so its session hook guards them too.
-  await app.register(async (scope) => ownerRoutes(scope, deps).then(() => githubRoutes(scope, deps)));
+  await app.register(async (scope) =>
+    ownerRoutes(scope, deps)
+      .then(() => githubRoutes(scope, deps))
+      .then(() => businessRoutes(scope, deps)),
+  );
   await app.register(async (scope) => runnerRegisterRoute(scope, deps));
   await app.register(async (scope) => runnerRoutes(scope, deps));
 

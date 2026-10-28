@@ -18,6 +18,7 @@ import {
 } from "../lib/queries.ts";
 import { CommandBar } from "./CommandBar.tsx";
 import { P1Button } from "./P1Button.tsx";
+import { BusinessDrawer, BusinessZone, bizSub, useConnectors } from "./business.tsx";
 import { IssueDrawer, RepoDrawer } from "./github.tsx";
 import { InboxDrawer } from "./Inbox.tsx";
 import { RunDrawer } from "./RunDrawer.tsx";
@@ -50,6 +51,7 @@ export function Board() {
   const github = useGithubStatus();
   const repos = useRepositories(github.data?.configured === true && github.data.installations.length > 0);
   const approvals = usePendingApprovals();
+  const connectors = useConnectors();
   const pending = approvals.data?.length;
 
   const openRun = (id: string) => void navigate({ search: { ws: search.ws, drawer: `run:${id}` } });
@@ -174,13 +176,13 @@ export function Board() {
       id: "biz",
       ws: "business",
       label: "Business",
-      sub: "not connected",
+      sub: bizSub(connectors.data),
       x: 880,
       y: 480,
       w: 540,
       h: 640,
       tint: "oklch(0.85 0.07 70 / .18)",
-      body: <EmptyZone>No business sources connected. Read-only connectors arrive in P1.</EmptyZone>,
+      body: <BusinessZone onOpen={() => void navigate({ search: { ws: search.ws, drawer: "business" } })} />,
     },
     {
       id: "sys",
@@ -463,6 +465,7 @@ export function Board() {
         <RepoDrawer repoId={drawerId} banner={offlineBanner} onClose={closeDrawer} />
       )}
       {drawerKind === "inbox" && <InboxDrawer banner={offlineBanner} onClose={closeDrawer} />}
+      {drawerKind === "business" && <BusinessDrawer banner={offlineBanner} onClose={closeDrawer} />}
       {drawerKind === "issue" && drawerId && drawerNumber && (
         <IssueDrawer
           repoId={drawerId}
