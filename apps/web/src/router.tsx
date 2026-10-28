@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { QueryCache, QueryClient } from "@tanstack/react-query";
+import { LazyMotion, MotionConfig } from "motion/react";
 import {
   Outlet,
   createRootRouteWithContext,
@@ -42,7 +43,20 @@ export const BoardSearch = z.object({
 });
 export type BoardSearch = z.infer<typeof BoardSearch>;
 
-const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({ component: Outlet });
+const motionFeatures = () => import("./lib/motionFeatures.ts").then((mod) => mod.default);
+
+// Every page animates through `m` (strict); transforms are skipped for prefers-reduced-motion.
+function Root() {
+  return (
+    <MotionConfig reducedMotion="user">
+      <LazyMotion features={motionFeatures} strict>
+        <Outlet />
+      </LazyMotion>
+    </MotionConfig>
+  );
+}
+
+const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({ component: Root });
 
 // Better Auth sends failed GitHub sign-ins back as `/login?error=<code>`; anything else is dropped.
 export const LoginSearch = z.object({

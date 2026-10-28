@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { getRouteApi } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
+import { m } from "motion/react";
 import type { Runner } from "@nexus/contracts";
 import { authClient } from "../lib/auth.ts";
 import { currentTheme, toggleTheme } from "../lib/theme.ts";
@@ -493,12 +494,18 @@ function sysSub(runners: readonly Runner[] | undefined) {
   return `${active.length} ${active.length === 1 ? "runner" : "runners"} · ${on} online`;
 }
 
+// Zones move by transform, not `layout`: layout measures screen px, which the zoomed board scale would skew.
+const ZONE_MOVE = { duration: 0.7, ease: [0.2, 0.8, 0.2, 1] } as const;
+
 function Zone({ id, label, sub, x, y, w, h, tint, dim, children }: ZoneProps) {
   return (
-    <section
+    <m.section
       aria-labelledby={`zone-${id}`}
-      className="absolute rounded-[32px] border border-hair transition-opacity duration-700"
-      style={{ left: x, top: y, width: w, height: h, background: tint, opacity: dim ? 0.35 : 1 }}
+      className="absolute top-0 left-0 rounded-[32px] border border-hair"
+      style={{ width: w, height: h, background: tint }}
+      initial={false}
+      animate={{ x, y, opacity: dim ? 0.35 : 1 }}
+      transition={ZONE_MOVE}
     >
       <div className="absolute top-[22px] left-7 flex items-baseline gap-3 whitespace-nowrap">
         <h2 id={`zone-${id}`} className="m-0 font-serif text-[48px] leading-none font-normal">
@@ -507,6 +514,6 @@ function Zone({ id, label, sub, x, y, w, h, tint, dim, children }: ZoneProps) {
         <span className="font-mono text-[12px] text-ink3">{sub}</span>
       </div>
       <div className="absolute inset-x-10 top-[90px] bottom-8 overflow-hidden">{children}</div>
-    </section>
+    </m.section>
   );
 }

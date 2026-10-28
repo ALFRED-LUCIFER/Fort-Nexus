@@ -139,6 +139,30 @@ describe("board", () => {
     expect(await screen.findByText("node apps/runner/src/main.ts pair --code ABC123")).toBeTruthy();
   });
 
+  it("slides a drawer in, keeps focus inside it and closes it on Esc after the exit animation", async () => {
+    board([runner()], [], { "GET /v1/approvals": () => json({ items: [] }) });
+    const user = userEvent.setup();
+    const { router } = renderApp("/");
+    const inbox = await screen.findByRole("button", { name: /^Inbox/ });
+    await user.click(inbox);
+
+    const drawer = await screen.findByRole("dialog", { name: "What needs you" });
+    expect(drawer.style.transform).toMatch(/translateX/);
+    await waitFor(() => expect(drawer.contains(document.activeElement)).toBe(true));
+    for (const shift of [true, true, false, false, false]) {
+      await user.tab({ shift });
+      expect(drawer.contains(document.activeElement)).toBe(true);
+    }
+
+    await user.keyboard("{Escape}");
+    // The URL (and the drawer) clear only once the exit animation has played.
+    expect(router.state.location.search).toEqual({ drawer: "inbox" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(router.state.location.search).toEqual({});
+    expect(document.body.style.pointerEvents).not.toBe("none");
+    expect(document.activeElement).toBe(inbox);
+  });
+
   it("keeps workspace scope in the URL", async () => {
     board([runner()]);
     const user = userEvent.setup();
