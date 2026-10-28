@@ -54,6 +54,7 @@ classification: "Product specification; illustrative examples are not connected 
 | Styling | **Tailwind CSS 4** with the NEXUS v2 design tokens as CSS variables (light + dark), `oklch` colors | Tokens map 1:1 from the design (Part D); theme switch is a `data-theme` swap. |
 | Accessible primitives | **Radix UI primitives** (dialog, popover, tabs, menu, toast) wrapped in `packages/ui` | WCAG 2.2 AA target (NFR-15, NFR-CNV-09) without hand-rolling focus traps. |
 | Fonts | **Onest**, **Instrument Serif**, **JetBrains Mono** self-hosted via `@fontsource` | Private app should not call Google Fonts from the office network. |
+| Motion (P1) | **Motion** (`motion`, formerly Framer Motion) via `motion/react` | Layout animations for the board (Domains ↔ Agents regrouping, zone/node reflow), shared-element drawer transitions, spring physics matching the design; always honours `prefers-reduced-motion` (`MotionConfig reducedMotion="user"`). CSS stays for simple keyframes. |
 | Big lists / logs | **@tanstack/react-virtual** | Virtualized redacted terminal log (FR-OBS-02). |
 | PWA / push | **vite-plugin-pwa** (service worker) + **Web Push (VAPID)** via `web-push` | Mobile approvals and redacted deep-link push (FR-NTF-07, FR-VOICE-03). |
 | API server | **Fastify 5** + `fastify-type-provider-zod` + `@fastify/helmet`, `rate-limit`, `cookie`, `csrf-protection` | Fast, schema-first, mature security plugins, native streaming for **SSE** with `Last-Event-ID` replay (FR-RUN-05, GATE-04). |
