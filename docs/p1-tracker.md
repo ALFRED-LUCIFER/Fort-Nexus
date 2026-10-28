@@ -21,11 +21,25 @@ Coordinator: one combined migration `0003_p1_wave1.sql` (conversation triggers h
 
 Checks on the merged tree: typecheck, lint, prettier, tests (api 126, web 69, runner 136+1 skipped, contracts 13), web build.
 
+## Wave 2 — in progress (spec: `docs/specs/p1-wave-2.md`)
+
+`main` (MVP waves 5 + 6) merged into `p1` at `58007e0` (merge, not rebase: one conflict resolution, no force-push). P1 migration is now `0006_p1_wave1` after main's 0003–0005.
+
+| Agent | Scope | Status |
+|---|---|---|
+| S1 — Research scope | real projects, decoy tests, pinned `searchFindings` / `getWatchlist` / `createManualRun` | running |
+| S2 — Business scope | Business-mode projects, pinned `BusinessScope`, main's Business empty-state test | running |
+| S3 — Talk scope | thread project confines every tool; proposals carry `projectId`; command bar Ask → Talk; toast Talk button | running |
+| M — Monitoring | apps, SSRF-safe health checks, one incident per fingerprint, UNKNOWN when unobserved | running |
+| N — Automations | n8n clients (HKDF-derived keys), signed typed triggers, runs history, runbook | running |
+
+Coordinator first: `resolveProject` / `ownerWorkspaceIds` in `workspaces.ts` (tested), `projectId` on P1 contracts, `monitoring.ts` / `automations.ts` contracts, `subject.incidentId` on notifications.
+Merge step: remove adapters, delete `scope.ts`, re-squash P1 migration (keep conversation triggers), end-to-end Talk tests per project, all checks, push, update PR #1.
+
 ## Next
 
-- Rebase onto `main` after MVP wave 5/6 lands; then swap `scope.ts` to the real workspace/project model and add decoy cross-project tests (NFR-CNV-05).
-- Wave 2 candidates: LLM "why it matters" in briefs, FR-BIZ-04..06, Talk in the command bar (Ask mode), voice (FR-CWV-02/03), Agents view regrouping animation.
-- Owner check: one live Talk turn on Anthropic and on Foundry (router uses `tool_choice: auto` — forced tool choice was rejected by the default model).
+- Owner check: one live Talk turn on Anthropic and on Foundry.
+- Wave 3 candidates: agent registry + orchestrator (V1C), LLM "why it matters" in briefs, FR-BIZ-04..06, voice (FR-CWV-02/03).
 
 ## Deferred (named, not built)
 
