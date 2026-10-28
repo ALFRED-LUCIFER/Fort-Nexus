@@ -31,7 +31,7 @@ import { requireGithub } from "./github.ts";
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const IdParams = z.object({ id: z.uuid() });
 
-const owner = (req: FastifyRequest) => {
+export const owner = (req: FastifyRequest) => {
   if (!req.owner) throw new HttpError(401, "UNAUTHENTICATED", "Sign in required");
   return req.owner;
 };
