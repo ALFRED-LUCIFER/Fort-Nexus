@@ -363,6 +363,7 @@ describe("pipeline", () => {
         db: db.db,
         github: null,
         ownerId: "owner",
+        ...P1_SCOPE,
         subjectJobId: null,
         connectorsDir: "/nonexistent",
         correlationId: "c",

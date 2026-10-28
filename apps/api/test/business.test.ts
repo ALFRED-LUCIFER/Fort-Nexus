@@ -516,6 +516,7 @@ describe("Talk answers business questions from the gateway (FR-BIZ-07)", () => {
         db: appDb.db,
         github: null,
         ownerId: "owner",
+        ...projectScope(),
         subjectJobId: null,
         connectorsDir: dir,
         correlationId: randomUUID(),

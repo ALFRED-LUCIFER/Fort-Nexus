@@ -14,10 +14,22 @@ import { getPaymentFailures, getSalesSummary } from "../business/metrics.ts";
 import type { Db } from "../db/index.ts";
 import { approvals, jobs, runEvents } from "../db/schema.ts";
 import { HttpError } from "../errors.ts";
-import { searchFindings } from "../research/service.ts";
+import { searchFindings as searchFindingsPreMerge } from "../research/service.ts";
 import type { GithubCatalog } from "../github/catalog.ts";
 import { ownerActor, type JobRow } from "../jobs.ts";
-import { projectScope } from "../scope.ts";
+import { boundRepositoryIds } from "../workspaces.ts";
+
+// Business and research calls are written against the pinned P1 wave-2 signatures (docs/specs/p1-wave-2.md,
+// "Cross-module signatures") that S1/S2 build in parallel.
+// shortcut: today's business/research code still filters on workspaceId, so until S1/S2 merge the calls also pass
+// ToolContext.workspaceId and research goes through this adapter. At merge the coordinator deletes the adapter, the
+// `workspaceId` arguments and ToolContext.workspaceId, and imports searchFindings directly.
+const searchFindings = (
+  db: Db,
+  _ownerId: string,
+  { projectId, ...q }: { projectId: string; q?: string; limit: number },
+  workspaceId: string,
+) => searchFindingsPreMerge(db, { workspaceId, projectId }, q);
 
 // FR-CWV-07 / FR-CXR-04: every reply is built here from records NEXUS read itself, with sources and a basis.
 // The model's intent picks the tool; it never supplies a fact.
@@ -37,6 +49,10 @@ export type ToolContext = {
   db: Db;
   github: GithubCatalog | null;
   ownerId: string;
+  /** The thread's project: every tool sees only its records (FR-CXR-01, NFR-CNV-05). */
+  projectId: string;
+  /** Pre-merge only (see the shortcut above). */
+  workspaceId: string;
   subjectJobId: string | null;
   connectorsDir: string;
   correlationId: string;
@@ -106,7 +122,7 @@ async function findJob(ctx: ToolContext, jobId: string) {
   const [job] = await ctx.db
     .select()
     .from(jobs)
-    .where(and(eq(jobs.id, jobId), eq(jobs.initiatorId, ctx.ownerId)));
+    .where(and(eq(jobs.id, jobId), eq(jobs.initiatorId, ctx.ownerId), eq(jobs.projectId, ctx.projectId)));
   return job ?? null;
 }
 
@@ -115,7 +131,12 @@ async function runStatus(intent: Extract<Intent, { kind: "RUN_STATUS" }>, ctx: T
   if (jobId) {
     const job = await findJob(ctx, jobId);
     if (!job)
-      return { intent, text: `I can't find a run ${shortId(jobId)} of yours.`, basis: "NONE", sources: [] };
+      return {
+        intent,
+        text: `I can't find a run ${shortId(jobId)} of yours in this project.`,
+        basis: "NONE",
+        sources: [],
+      };
     return { ...(await jobStatus(job, ctx)), intent, subjectJobId: job.id };
   }
   // FR-CXR-07: no explicit run and no subject → only exactly one recent active or failed run is a safe antecedent.
@@ -125,6 +146,7 @@ async function runStatus(intent: Extract<Intent, { kind: "RUN_STATUS" }>, ctx: T
     .where(
       and(
         eq(jobs.initiatorId, ctx.ownerId),
+        eq(jobs.projectId, ctx.projectId),
         gte(jobs.updatedAt, new Date(Date.now() - FOLLOW_UP_WINDOW_MS)),
         or(notInArray(jobs.status, [...TERMINAL_JOB_STATUSES]), eq(jobs.status, "FAILED")),
       ),
@@ -235,10 +257,11 @@ async function listRuns(intent: Intent, ctx: ToolContext): Promise<Reply> {
   const rows = await ctx.db
     .select()
     .from(jobs)
-    .where(eq(jobs.initiatorId, ctx.ownerId))
+    .where(and(eq(jobs.initiatorId, ctx.ownerId), eq(jobs.projectId, ctx.projectId)))
     .orderBy(desc(jobs.id))
     .limit(RECENT_RUNS);
-  if (rows.length === 0) return { intent, text: "You have no runs yet.", basis: "OBSERVED", sources: [] };
+  if (rows.length === 0)
+    return { intent, text: "This project has no runs yet.", basis: "OBSERVED", sources: [] };
   return {
     intent,
     text: [
@@ -264,11 +287,17 @@ async function proposeIssueRun(
     const repo = (await ctx.github.repositories()).items.find((r) => r.fullName.toLowerCase() === name);
     if (!repo)
       return none(`${intent.repositoryFullName} isn't a repository the NEXUS GitHub app can access.`);
+    // Only Dev projects bind repositories, so this also turns away a Business project's thread.
+    if (!(await boundRepositoryIds(ctx.db, ctx.ownerId, ctx.projectId)).has(repo.id))
+      return none(
+        `${repo.fullName} isn't bound to this project, so I won't start a run for it here. Bind it in Settings → Workspaces.`,
+      );
     const { issue } = await ctx.github.issue(repo.id, intent.issueNumber);
     if (issue.state === "closed")
       return none(`Issue #${issue.number} on ${repo.fullName} is closed, so I won't start a run for it.`);
     const request = CreateJobRequest.parse({
       jobType: "DEV_ISSUE_TO_PR",
+      projectId: ctx.projectId,
       repositoryId: repo.id,
       issueNumber: issue.number,
     });
@@ -327,17 +356,22 @@ async function businessMetric(
   intent: Extract<Intent, { kind: "BUSINESS_METRIC" }>,
   ctx: ToolContext,
 ): Promise<Reply> {
+  const none = (text: string): Reply => ({ intent, text, basis: "NONE", sources: [] });
+  // A Dev project has no connectors, so it gets the same honest "no source" answer (DATA-G02).
   const scope = {
-    ...projectScope(),
     db: ctx.db,
     connectorsDir: ctx.connectorsDir,
     actor: ownerActor(ctx.ownerId),
     correlationId: ctx.correlationId,
+    ownerId: ctx.ownerId,
+    projectId: ctx.projectId,
+    workspaceId: ctx.workspaceId, // pre-merge only (see the shortcut at the top)
   };
   const usable = (await listConnectors(scope)).filter((c) => c.hasDictionary && c.status !== "DISABLED");
-  const none = (text: string): Reply => ({ intent, text, basis: "NONE", sources: [] });
   if (usable.length === 0)
-    return none("No business source with a metric dictionary is connected, so I have no figures to report.");
+    return none(
+      "No business source with a metric dictionary is connected to this project, so I have no figures to report.",
+    );
   // FR-CXR-07: never guess between sources.
   if (usable.length > 1)
     return none(
@@ -374,10 +408,12 @@ async function researchSearch(
   intent: Extract<Intent, { kind: "RESEARCH_SEARCH" }>,
   ctx: ToolContext,
 ): Promise<Reply> {
-  const { items } = await searchFindings(ctx.db, projectScope(), {
-    q: intent.query.trim() || undefined,
-    limit: RESEARCH_HITS,
-  });
+  const { items } = await searchFindings(
+    ctx.db,
+    ctx.ownerId,
+    { projectId: ctx.projectId, q: intent.query.trim() || undefined, limit: RESEARCH_HITS },
+    ctx.workspaceId,
+  );
   if (items.length === 0)
     return { intent, text: `No research findings match "${intent.query}".`, basis: "NONE", sources: [] };
   const lines = items.map((f) => {

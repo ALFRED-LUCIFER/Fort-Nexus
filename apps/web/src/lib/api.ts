@@ -44,6 +44,7 @@ import {
   type CreateConnectorRequest,
   type CreateJobRequest,
   type CreateProjectRequest,
+  type CreateThreadRequest,
   type CreateWatchlistRequest,
   type FindingSearchQuery,
   type JobStatus,
@@ -205,9 +206,14 @@ export const api = {
     request(`/v1/business/metrics/sales-summary?${metricQuery(connectorId)}`, SalesSummaryResponse),
   paymentFailures: (connectorId: string) =>
     request(`/v1/business/metrics/payment-failures?${metricQuery(connectorId)}`, PaymentFailuresResponse),
-  threads: () => request("/v1/conversations?limit=50", ThreadList),
+  // projectId omitted = the read-only "All" view across the owner's projects.
+  threads: (projectId?: string) =>
+    request(
+      `/v1/conversations?${new URLSearchParams({ limit: "50", ...(projectId && { projectId }) })}`,
+      ThreadList,
+    ),
   thread: (id: string) => request(`/v1/conversations/${encodeURIComponent(id)}`, ThreadDetail),
-  createThread: () => request("/v1/conversations", Thread, post({}, {})),
+  createThread: (body: CreateThreadRequest) => request("/v1/conversations", Thread, post({}, body)),
   postTurn: (threadId: string, text: string, idempotencyKey: string) =>
     request(
       `/v1/conversations/${encodeURIComponent(threadId)}/turns`,
@@ -267,6 +273,7 @@ export const keys = {
   metric: (name: "sales" | "payments", connectorId: string) =>
     ["business", "metric", name, connectorId] as const,
   threads: ["conversations"] as const,
+  threadsOf: (projectId: string | undefined) => ["conversations", "list", projectId ?? "all"] as const,
   thread: (id: string) => ["conversations", id] as const,
   research: ["research"] as const,
   watchlists: ["research", "watchlists"] as const,
