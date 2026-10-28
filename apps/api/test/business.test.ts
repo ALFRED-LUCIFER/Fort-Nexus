@@ -50,6 +50,7 @@ create table shop.payments (id serial primary key, created_at timestamptz not nu
 create table shop.refunds (id serial primary key, order_id int, created_at timestamptz not null, amount numeric(12, 2) not null);
 create table shop.order_items (id serial primary key, order_id int not null, product text, quantity int not null,
   amount_cents bigint not null);
+create table shop.order_items_returns (order_id int not null, product text, quantity int not null, amount_cents bigint not null);
 create table private.customers (id serial primary key, email text);
 create view shop.slow_orders as select o.* from shop.orders o cross join lateral (select pg_sleep(0.3)) s;
 
@@ -89,6 +90,8 @@ insert into shop.order_items (order_id, product, quantity, amount_cents) values
   (8, 'Later thing', 1, 7777);
 insert into shop.order_items (order_id, product, quantity, amount_cents)
   select 2, 'P' || lpad(i::text, 2, '0'), i, i * 100 from generate_series(1, 12) i;
+
+insert into shop.order_items_returns values (6, 'Widget', 1, 199), (6, 'Widget', -2, -398);
 
 create role nexus_ro login password '${RO_PASSWORD}';
 grant usage on schema shop to nexus_ro;
@@ -721,6 +724,21 @@ describe("revenue and top products (FR-BIZ-04/05)", () => {
     expect(day.current.items).toHaveLength(TOP_PRODUCTS_LIMIT);
     expect(day.current.items[0]).toEqual({ product: "P12", quantity: 12, revenue: "12.00" });
     expect(day.current.items.at(-1)).toEqual({ product: "P03", quantity: 3, revenue: "3.00" });
+  });
+
+  it("FR-BIZ-05: return lines (negative quantities) make top products NOT_DEFINED, not a wrong number or a 500", async () => {
+    const c = await connector(
+      {},
+      {
+        ...DICTIONARY,
+        orderItems: { ...DICTIONARY.orderItems!, table: "shop.order_items_returns" },
+      },
+    );
+    expect((await topProducts({ connectorId: c.id })).current).toMatchObject({
+      status: "UNAVAILABLE",
+      reason: "NOT_DEFINED",
+      message: expect.stringContaining("returns"),
+    });
   });
 
   it("DATA-G02: without a refunds or order-items section the tools are NOT_DEFINED, never 0 refunds", async () => {

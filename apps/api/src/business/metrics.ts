@@ -73,6 +73,9 @@ const majorSum = (unit: AmountUnit, digits: number) =>
 const sumText = (column: string, unit: AmountUnit, digits: number) =>
   unit === "MINOR" ? `sum(${column})/${10 ** digits}` : `sum(${column})`;
 
+/** The source's data doesn't fit the metric's definition; reported as NOT_DEFINED, never as a wrong number. */
+class NotDefined extends Error {}
+
 const unavailable = (reason: Unavailable["reason"], message: string): Unavailable => ({
   status: "UNAVAILABLE",
   reason,
@@ -187,7 +190,7 @@ async function runTool<R>(
     } catch (err) {
       const u = isTimeout(err)
         ? unavailable("TIMEOUT", `${ready.row.name} didn't answer within ${ready.row.statementTimeoutMs} ms`)
-        : err instanceof IdentifierError
+        : err instanceof IdentifierError || err instanceof NotDefined
           ? unavailable("NOT_DEFINED", err.message)
           : err instanceof ConnectError
             ? unavailable("CONNECTOR_FAILED", `${ready.row.name}: ${err.message}`)
@@ -378,8 +381,8 @@ export async function getTopProducts(scope: ToolScope, query: MetricQuery): Prom
       it.amountColumn,
     ].map(quoteColumn);
     const digits = minorDigits(r.dict.currency);
-    // shortcut: assumes non-negative integer quantities (no return lines in the items table); a product whose quantities
-    // sum below zero fails response validation (500), add a returns filter to the dictionary when a source needs one.
+    // shortcut: return lines (negative quantities) make top products NOT_DEFINED instead of netting them; add a returns
+    // filter to the dictionary when a source needs one.
     const res = await c.query<WindowRow & { top: { k: string; q: number; v: string }[] }>(
       `with ${WINDOW},
        o as (select x.${id} as id from ${orders} x, w
@@ -395,6 +398,8 @@ export async function getTopProducts(scope: ToolScope, query: MetricQuery): Prom
       [win.day, r.dict.reportingTimezone, win.now, win.reference, o.paidStatuses],
     );
     const w = res.rows[0]!;
+    if (w.top.some((g) => g.q < 0))
+      throw new NotDefined(`${r.row.name}'s order items include returns (negative quantities)`);
     return {
       status: "AVAILABLE",
       currency: r.dict.currency,
