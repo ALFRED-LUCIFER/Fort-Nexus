@@ -1,0 +1,127 @@
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { ZodTypeProvider } from "fastify-type-provider-zod";
+import { z } from "zod";
+import {
+  CreateWatchlistRequest,
+  Finding,
+  FindingList,
+  FindingSearchQuery,
+  IDEMPOTENCY_HEADER,
+  IdempotencyKey,
+  ResearchBrief,
+  ResearchRun,
+  ResearchRunList,
+  UpdateWatchlistRequest,
+  Watchlist,
+  WatchlistList,
+} from "@nexus/contracts";
+import type { Deps } from "../app.ts";
+import { ownerActor } from "../jobs.ts";
+import { owner } from "../routes/owner.ts";
+import { projectScope } from "../scope.ts";
+import {
+  archiveWatchlist,
+  createManualRun,
+  createWatchlist,
+  getBrief,
+  listRuns,
+  listWatchlists,
+  markRead,
+  searchFindings,
+  updateWatchlist,
+  type Ctx,
+} from "./service.ts";
+
+const IdParams = z.object({ id: z.uuid() });
+
+const ctx = (req: FastifyRequest): Ctx => ({
+  scope: projectScope(),
+  actor: ownerActor(owner(req).id),
+  correlationId: req.id,
+});
+
+/** EPIC RES. Registered inside the owner scope: session required, mutations need a trusted Origin. */
+export async function researchRoutes(app: FastifyInstance, { db, research }: Deps) {
+  const r = app.withTypeProvider<ZodTypeProvider>();
+
+  r.get("/v1/research/watchlists", { schema: { response: { 200: WatchlistList } } }, async () => ({
+    items: await listWatchlists(db, projectScope()),
+  }));
+
+  r.post(
+    "/v1/research/watchlists",
+    { schema: { body: CreateWatchlistRequest, response: { 201: Watchlist } } },
+    async (req, reply) => {
+      reply.code(201);
+      return createWatchlist(db, ctx(req), req.body);
+    },
+  );
+
+  r.patch(
+    "/v1/research/watchlists/:id",
+    { schema: { params: IdParams, body: UpdateWatchlistRequest, response: { 200: Watchlist } } },
+    async (req) => updateWatchlist(db, ctx(req), req.params.id, req.body),
+  );
+
+  r.delete("/v1/research/watchlists/:id", { schema: { params: IdParams } }, async (req, reply) => {
+    await archiveWatchlist(db, ctx(req), req.params.id);
+    return reply.code(204).send();
+  });
+
+  // Answers once the run is recorded; it executes in the background (poll the run).
+  r.post(
+    "/v1/research/watchlists/:id/run",
+    {
+      schema: {
+        params: IdParams,
+        headers: z.object({ [IDEMPOTENCY_HEADER]: IdempotencyKey }),
+        response: { 202: ResearchRun },
+      },
+    },
+    async (req, reply) => {
+      const { run, created } = await createManualRun(
+        db,
+        ctx(req),
+        req.params.id,
+        req.headers[IDEMPOTENCY_HEADER],
+      );
+      if (created) research.start(run.id);
+      reply.code(202);
+      return run;
+    },
+  );
+
+  r.get(
+    "/v1/research/runs",
+    {
+      schema: {
+        querystring: z.object({ watchlistId: z.uuid().optional() }),
+        response: { 200: ResearchRunList },
+      },
+    },
+    async (req) => ({ items: await listRuns(db, projectScope(), req.query.watchlistId) }),
+  );
+
+  r.get(
+    "/v1/research/runs/:id",
+    { schema: { params: IdParams, response: { 200: ResearchBrief } } },
+    async (req) => getBrief(db, projectScope(), req.params.id),
+  );
+
+  r.get(
+    "/v1/research/findings",
+    {
+      schema: {
+        querystring: FindingSearchQuery.extend({ cursor: z.uuid().optional() }),
+        response: { 200: FindingList },
+      },
+    },
+    async (req) => searchFindings(db, projectScope(), req.query),
+  );
+
+  r.post(
+    "/v1/research/findings/:id/read",
+    { schema: { params: IdParams, response: { 200: Finding } } },
+    async (req) => markRead(db, ctx(req), req.params.id),
+  );
+}

@@ -31,6 +31,8 @@ import { createGithubCatalog, type GithubCatalog } from "./github/catalog.ts";
 import { createExecutor, expireApprovals, type Executor } from "./issue-to-pr.ts";
 import { reapExpiredLeases } from "./jobs.ts";
 import { createHub, type Hub } from "./notify.ts";
+import { researchRoutes } from "./research/routes.ts";
+import { createResearch, type Research } from "./research/service.ts";
 import { githubRoutes } from "./routes/github.ts";
 import { ownerRoutes } from "./routes/owner.ts";
 import { runnerRegisterRoute, runnerRoutes } from "./routes/runner.ts";
@@ -44,6 +46,7 @@ export type Deps = {
   /** null until the GitHub App is set up. */
   github: GithubCatalog | null;
   executor: Executor;
+  research: Research;
 };
 
 const REAPER_INTERVAL_MS = 5_000;
@@ -116,7 +119,17 @@ export async function buildApp(config: Config) {
   const auth = createAuth(config, db, github);
   const catalog = github ? createGithubCatalog(github, app.log) : null;
   const executor = createExecutor(db, catalog, app.log);
-  const deps: Deps = { config, db, auth, hub, shutdown: shutdown.signal, github: catalog, executor };
+  const research = createResearch(db, app.log, shutdown.signal);
+  const deps: Deps = {
+    config,
+    db,
+    auth,
+    hub,
+    shutdown: shutdown.signal,
+    github: catalog,
+    executor,
+    research,
+  };
 
   app.addHook("onRequest", async (request, reply) => {
     reply.header("x-request-id", request.id);
@@ -230,7 +243,8 @@ export async function buildApp(config: Config) {
     ownerRoutes(scope, deps)
       .then(() => githubRoutes(scope, deps))
       .then(() => businessRoutes(scope, deps))
-      .then(() => conversationRoutes(scope, deps)),
+      .then(() => conversationRoutes(scope, deps))
+      .then(() => researchRoutes(scope, deps)),
   );
   await app.register(async (scope) => runnerRegisterRoute(scope, deps));
   await app.register(async (scope) => runnerRoutes(scope, deps));
@@ -254,6 +268,7 @@ export async function buildApp(config: Config) {
       expireApprovals(db).then((n) => {
         if (n > 0) app.log.info({ count: n }, "pending approvals expired");
       }),
+      research.tick(),
     ]).catch((err: unknown) => app.log.error({ err }, "reaper failed"));
   app.addHook("onReady", async () => {
     await reap();
@@ -271,6 +286,7 @@ export async function buildApp(config: Config) {
     shutdown.abort(); // ends SSE streams and lease long-polls so close() doesn't wait on them
   });
   app.addHook("onClose", async () => {
+    await research.close(); // in-flight runs record their outcome before the pool closes
     await hub.close();
     await pool.end();
   });

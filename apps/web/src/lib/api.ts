@@ -8,6 +8,8 @@ import {
   Connector,
   ConnectorList,
   CreateJobResponse,
+  Finding,
+  FindingList,
   GithubStatus,
   IDEMPOTENCY_HEADER,
   IssueDetail,
@@ -19,19 +21,27 @@ import {
   PairingCodeResponse,
   PaymentFailuresResponse,
   RepositoryList,
+  ResearchBrief,
+  ResearchRun,
+  ResearchRunList,
   RunnerList,
   SalesSummaryResponse,
   PostTurnResponse,
   Thread,
   ThreadDetail,
   ThreadList,
+  Watchlist,
+  WatchlistList,
   type ApprovalDecisionRequest,
   type ApprovalStatus,
   type CreateConnectorRequest,
   type CreateJobRequest,
+  type CreateWatchlistRequest,
+  type FindingSearchQuery,
   type JobStatus,
   type UpdateConnectorRequest,
   type ProposalDecisionRequest,
+  type UpdateWatchlistRequest,
 } from "@nexus/contracts";
 
 export type { Me } from "@nexus/contracts";
@@ -167,7 +177,32 @@ export const api = {
     ),
   decideProposal: (id: string, body: ProposalDecisionRequest) =>
     request(`/v1/conversations/proposals/${encodeURIComponent(id)}/decision`, ActionProposal, post({}, body)),
+  watchlists: () => request("/v1/research/watchlists", WatchlistList).then((l) => l.items),
+  createWatchlist: (body: z.input<typeof CreateWatchlistRequest>) =>
+    request("/v1/research/watchlists", Watchlist, post({}, body)),
+  updateWatchlist: (id: string, body: UpdateWatchlistRequest) =>
+    request(`/v1/research/watchlists/${encodeURIComponent(id)}`, Watchlist, send("PATCH", body)),
+  runWatchlist: (id: string, idempotencyKey: string) =>
+    request(
+      `/v1/research/watchlists/${encodeURIComponent(id)}/run`,
+      ResearchRun,
+      post({ [IDEMPOTENCY_HEADER]: idempotencyKey }),
+    ),
+  researchRuns: (watchlistId: string) =>
+    request(`/v1/research/runs?${new URLSearchParams({ watchlistId })}`, ResearchRunList).then(
+      (l) => l.items,
+    ),
+  brief: (runId: string) => request(`/v1/research/runs/${encodeURIComponent(runId)}`, ResearchBrief),
+  findings: (q: FindingFilters & { cursor?: string }) => {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== "") params.set(k, String(v));
+    return request(`/v1/research/findings?${params}`, FindingList);
+  },
+  readFinding: (id: string) =>
+    request(`/v1/research/findings/${encodeURIComponent(id)}/read`, Finding, post()),
 };
+
+export type FindingFilters = Partial<Omit<FindingSearchQuery, "cursor">>;
 
 export type ApprovalQuery = { status: ApprovalStatus } | { jobId: string };
 
@@ -188,4 +223,9 @@ export const keys = {
     ["business", "metric", name, connectorId] as const,
   threads: ["conversations"] as const,
   thread: (id: string) => ["conversations", id] as const,
+  research: ["research"] as const,
+  watchlists: ["research", "watchlists"] as const,
+  researchRuns: (watchlistId: string) => ["research", "runs", watchlistId] as const,
+  brief: (runId: string) => ["research", "brief", runId] as const,
+  findings: (f: FindingFilters) => ["research", "findings", f] as const,
 };

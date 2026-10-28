@@ -21,6 +21,7 @@ import { P1Button } from "./P1Button.tsx";
 import { BusinessDrawer, BusinessZone, bizSub, useConnectors } from "./business.tsx";
 import { IssueDrawer, RepoDrawer } from "./github.tsx";
 import { InboxDrawer } from "./Inbox.tsx";
+import { ResearchDrawer, ResearchZone, researchSub, useWatchlists } from "./research.tsx";
 import { RunDrawer } from "./RunDrawer.tsx";
 import { TalkDrawer } from "./Talk.tsx";
 import { CodeZone, EmptyZone, SystemsZone, type ZoneProps } from "./zones.tsx";
@@ -54,9 +55,11 @@ export function Board() {
   const approvals = usePendingApprovals();
   const connectors = useConnectors();
   const pending = approvals.data?.length;
+  const watchlists = useWatchlists();
 
   const openRun = (id: string) => void navigate({ search: { ws: search.ws, drawer: `run:${id}` } });
   const openRepo = (id: string) => void navigate({ search: { ws: search.ws, drawer: `repo:${id}` } });
+  const openResearch = () => void navigate({ search: { ws: search.ws, drawer: "research" } });
   const closeDrawer = () => void navigate({ search: { ws: search.ws } });
 
   // Pan / zoom. Positions are in screen px; the board is scaled around its top-left corner.
@@ -200,13 +203,13 @@ export function Board() {
     {
       id: "res",
       label: "Research",
-      sub: "not connected",
+      sub: researchSub(watchlists.data),
       x: 40,
       y: 1160,
       w: 800,
       h: 580,
       tint: "oklch(0.80 0.05 290 / .14)",
-      body: <EmptyZone>No watchlists yet. The research agent arrives in P1.</EmptyZone>,
+      body: <ResearchZone watchlists={watchlists} onOpen={openResearch} />,
     },
     {
       id: "agt",
@@ -329,12 +332,13 @@ export function Board() {
               Agents
             </P1Button>
           </div>
-          <P1Button
-            why="The daily brief arrives in P1."
+          <button
+            type="button"
+            onClick={openResearch}
             className="rounded-xl px-2.5 py-2 font-serif text-[17px] leading-none italic"
           >
             Brief
-          </P1Button>
+          </button>
           <button
             type="button"
             aria-label={
@@ -471,6 +475,7 @@ export function Board() {
       {drawerKind === "talk" && (
         <TalkDrawer threadId={drawerId} banner={offlineBanner} onClose={closeDrawer} />
       )}
+      {drawerKind === "research" && <ResearchDrawer banner={offlineBanner} onClose={closeDrawer} />}
       {drawerKind === "issue" && drawerId && drawerNumber && (
         <IssueDrawer
           repoId={drawerId}
