@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { getRouteApi } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { m } from "motion/react";
-import type { Runner } from "@nexus/contracts";
+import { AnimatePresence, m } from "motion/react";
+import { AgentKey, type Runner } from "@nexus/contracts";
 import { authClient } from "../lib/auth.ts";
 import { currentTheme, toggleTheme } from "../lib/theme.ts";
 import {
@@ -16,6 +16,7 @@ import {
   useRepositories,
   useRunners,
 } from "../lib/queries.ts";
+import { AgentDrawer, AgentsZone, agentLanes, useAgents } from "./agents.tsx";
 import { CommandBar } from "./CommandBar.tsx";
 import { StopButton, useStopBanner } from "./EmergencyStop.tsx";
 import { P1Button } from "./P1Button.tsx";
@@ -68,12 +69,16 @@ export function Board() {
   const watchlists = useWatchlists();
   const unread = useScopeNotifications().unread ?? 0;
   const apps = useMonitoredApps(projectId, scope.ready);
+  const agents = useAgents(projectId);
+  const [group, setGroup] = useState<"domains" | "agents">("domains");
+  const agentKey = AgentKey.safeParse(drawerId);
 
   const openRun = (id: string) => void navigate({ search: { ...scope.keep, drawer: `run:${id}` } });
   const openRepo = (id: string) => void navigate({ search: { ...scope.keep, drawer: `repo:${id}` } });
   const openResearch = () => void navigate({ search: { ...scope.keep, drawer: "research" } });
   const openIncident = (id: string) => void navigate({ search: { ...scope.keep, drawer: `incident:${id}` } });
   const openSystems = () => void navigate({ search: { ...scope.keep, drawer: "systems" } });
+  const openAgent = (k: AgentKey) => void navigate({ search: { ...scope.keep, drawer: `agent:${k}` } });
   const closeDrawer = () => void navigate({ search: scope.keep });
 
   // Pan / zoom. Positions are in screen px; the board is scaled around its top-left corner.
@@ -237,13 +242,13 @@ export function Board() {
     {
       id: "agt",
       label: "Agents",
-      sub: "none configured",
+      sub: agents.data ? `${agents.data.length} agents · scoped tools` : "",
       x: 880,
       y: 1160,
       w: 1160,
       h: 580,
       tint: "oklch(0.80 0.06 155 / .14)",
-      body: <EmptyZone>No agents configured. Scoped agents arrive in P1.</EmptyZone>,
+      body: <AgentsZone query={agents} projectId={projectId} onOpen={openAgent} />,
     },
     {
       id: "auto",
@@ -295,11 +300,18 @@ export function Board() {
             transform: `translate(${view.x}px,${view.y}px) scale(${view.z})`,
           }}
         >
-          {zones.map(({ ws: zws, body, ...z }) => (
-            <Zone key={z.id} {...z} dim={ws !== "all" && !!zws && zws !== ws}>
-              {body}
-            </Zone>
-          ))}
+          {/* Regrouping cross-fades the zone sets (opacity only, so it also suits reduced motion). */}
+          <AnimatePresence initial={false} mode="wait">
+            <m.div key={group} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+              {(group === "agents" ? agentLanes(agents, projectId, openAgent) : zones).map(
+                ({ ws: zws, body, ...z }: ZoneDef) => (
+                  <Zone key={z.id} {...z} dim={ws !== "all" && !!zws && zws !== ws}>
+                    {body}
+                  </Zone>
+                ),
+              )}
+            </m.div>
+          </AnimatePresence>
         </main>
       </div>
 
@@ -352,12 +364,17 @@ export function Board() {
 
         <div className={`${glass} h-[52px] gap-0.5 px-1.5`}>
           <div role="group" aria-label="Board grouping" className="hidden rounded-xl bg-hair p-[3px] lg:flex">
-            <button type="button" aria-pressed="true" className={seg(true)}>
-              Domains
-            </button>
-            <P1Button why="The Agents view arrives in P1 with agents." className={seg(false)}>
-              Agents
-            </P1Button>
+            {(["domains", "agents"] as const).map((g) => (
+              <button
+                key={g}
+                type="button"
+                aria-pressed={group === g}
+                onClick={() => setGroup(g)}
+                className={seg(group === g)}
+              >
+                {g === "domains" ? "Domains" : "Agents"}
+              </button>
+            ))}
           </div>
           <button
             type="button"
@@ -484,6 +501,9 @@ export function Board() {
       {drawerKind === "incident" && drawerId && (
         <IncidentDrawer id={drawerId} banner={banner} onClose={closeDrawer} />
       )}
+      {drawerKind === "agent" && agentKey.success && (
+        <AgentDrawer agent={agentKey.data} banner={banner} onClose={closeDrawer} />
+      )}
       {drawerKind === "issue" && drawerId && drawerNumber && (
         <IssueDrawer repoId={drawerId} number={Number(drawerNumber)} banner={banner} onClose={closeDrawer} />
       )}
@@ -524,7 +544,10 @@ function Zone({ id, label, sub, x, y, w, h, tint, dim, children }: ZoneProps) {
       transition={ZONE_MOVE}
     >
       <div className="absolute top-[22px] left-7 flex items-baseline gap-3 whitespace-nowrap">
-        <h2 id={`zone-${id}`} className="m-0 font-serif text-[48px] leading-none font-normal">
+        <h2
+          id={`zone-${id}`}
+          className={`m-0 font-serif leading-none font-normal ${w < 400 ? "text-[24px]" : "text-[48px]"}`}
+        >
           {label}
         </h2>
         <span className="font-mono text-[12px] text-ink3">{sub}</span>

@@ -11,6 +11,7 @@ import {
   type ThreadList,
   type Turn,
 } from "@nexus/contracts";
+import { pinnedAgentProfile, resolveAgentProfile } from "../agents/service.ts";
 import { loadAi } from "../ai.ts";
 import type { Deps } from "../app.ts";
 import { audit } from "../audit.ts";
@@ -38,7 +39,7 @@ const toThreadDto = (t: ThreadRow): Thread => ({
   projectId: t.projectId,
   title: t.title,
   subjectJobId: t.subjectJobId,
-  profileVersionId: null, // wave 3 agent A stores and returns the pinned Chief of Staff profile version
+  profileVersionId: t.profileVersionId,
   createdAt: t.createdAt.toISOString(),
   updatedAt: t.updatedAt.toISOString(),
 });
@@ -123,6 +124,8 @@ export async function createThread(
   input: { ownerId: string; body: CreateThreadRequest; correlationId: string },
 ): Promise<Thread> {
   const { subjectJobId } = input.body;
+  // FR-WKS-05: the thread keeps the Chief of Staff version effective now, even after the profile changes.
+  const { versionId } = await resolveAgentProfile(db, input.ownerId, input.body.projectId, "CHIEF_OF_STAFF");
   return db.transaction(async (tx) => {
     const scope = await resolveProject(tx, input.ownerId, input.body.projectId, { write: true });
     if (subjectJobId) {
@@ -150,6 +153,7 @@ export async function createThread(
         ownerId: input.ownerId,
         title: input.body.title ?? DEFAULT_TITLE,
         subjectJobId: subjectJobId ?? null,
+        profileVersionId: versionId,
       })
       .returning();
     await audit(tx, {
@@ -158,7 +162,7 @@ export async function createThread(
       resourceType: "conversation",
       resourceId: thread!.id,
       correlationId: input.correlationId,
-      metadata: auditMeta(scope, { subjectJobId: subjectJobId ?? null }),
+      metadata: auditMeta(scope, { subjectJobId: subjectJobId ?? null, profileVersionId: versionId }),
     });
     return toThreadDto(thread!);
   });
@@ -241,6 +245,8 @@ export async function postTurn(
   if (existing) return replay(existing);
 
   const ai = await loadAi(deps.config.aiFile); // 409 with the runbook path until ai.json exists
+  const profile = await pinnedAgentProfile(db, "CHIEF_OF_STAFF", thread.profileVersionId);
+  const model = profile.settings.model ?? ai.model;
   const recent = await db
     .select({ role: conversationTurns.role, text: conversationTurns.text })
     .from(conversationTurns)
@@ -284,11 +290,14 @@ export async function postTurn(
     return replay(raced!);
   }
 
-  const routed = await routeIntent(ai, {
-    text: input.body.text,
-    subject: subject ?? null,
-    recentTurns: recent.reverse(),
-  });
+  const routed = await routeIntent(
+    { ...ai, model },
+    {
+      text: input.body.text,
+      subject: subject ?? null,
+      recentTurns: recent.reverse(),
+    },
+  );
   const reply: Omit<Reply, "intent"> & { intent: Reply["intent"] | null } =
     "providerError" in routed
       ? { intent: null, text: `${routed.providerError} Nothing was done.`, basis: "NONE", sources: [] }
@@ -369,6 +378,8 @@ export async function postTurn(
         basis: reply.basis,
         proposalId,
         subjectJobId: reply.subjectJobId ?? null,
+        profileVersionId: thread.profileVersionId,
+        model,
       }),
     });
     return {
