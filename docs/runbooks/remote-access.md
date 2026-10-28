@@ -53,6 +53,6 @@ Only if Tailscale isn't possible. **Create the Access application first**, so th
 2. `cloudflared tunnel login && cloudflared tunnel create nexus && cloudflared tunnel route dns nexus nexus.<your-domain>`; ingress `service: http://127.0.0.1:8787`; run it as a service (`sudo cloudflared service install`).
 3. `PUBLIC_ORIGIN=https://nexus.<your-domain>` + the GitHub callback URL as in §3.
 
-## Known limit
+## Client IP and rate limits
 
-Inside its container the API sees every request as coming from the Docker gateway, so per-IP rate limits share one bucket for all clients. Harmless for a single owner; revisit if NEXUS ever has several users.
+Rate limits are per client IP. Tailscale Serve adds the device's tailnet address in `X-Forwarded-For`; the API believes that header only from one proxy hop (`TRUST_PROXY_HOPS=1`, the default) connecting from loopback or a private address (the Compose gateway). A forged `X-Forwarded-For` from anywhere else is ignored. The Cloudflare fallback is also one hop. Raise it only if another reverse proxy sits between that proxy and the API; `0` ignores the header.

@@ -34,19 +34,27 @@ const GITHUB_POLL_MS = 60_000;
 export const useGithubStatus = () =>
   useQuery({ queryKey: keys.github, queryFn: api.githubStatus, refetchInterval: GITHUB_POLL_MS });
 
-/** Repositories once the app is installed somewhere; disabled (no 409s) until then. */
-export const useRepositories = (enabled: boolean) =>
+/**
+ * Repositories once the app is installed somewhere; disabled (no 409s) until then. With a project only the ones
+ * bound to it; without, every installed repository.
+ */
+export const useRepositories = (enabled: boolean, projectId?: string) =>
   useQuery({
-    queryKey: keys.repositories,
-    queryFn: api.repositories,
+    queryKey: keys.repositoriesOf(projectId),
+    queryFn: () => api.repositories(projectId),
     enabled,
     refetchInterval: GITHUB_POLL_MS,
   });
 
-export const useRecentJobs = () =>
+/** Dev + Business and their projects (FR-WKS-01..03). */
+export const useWorkspaces = () => useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces });
+
+/** Newest runs of one project, or of all projects (the read-only "All" view) when projectId is undefined. */
+export const useRecentJobs = (projectId: string | undefined, enabled = true) =>
   useQuery({
-    queryKey: [...keys.jobs, "recent"],
-    queryFn: () => api.jobs({ limit: RECENT_RUNS }),
+    queryKey: [...keys.jobs, "recent", projectId ?? "all"],
+    queryFn: () => api.jobs({ limit: RECENT_RUNS, projectId }),
+    enabled,
     refetchInterval: POLL_MS,
   });
 
@@ -58,11 +66,21 @@ export const useQueuedJobs = () =>
     select: (l) => (l.nextCursor ? `${l.items.length}+` : String(l.items.length)),
   });
 
-/** Pending approvals for the Inbox button and drawer (FR-INB-01). */
-export const usePendingApprovals = () =>
+/** Pending approvals for the Inbox button and drawer (FR-INB-01), of one project or of all of them. */
+export const usePendingApprovals = (projectId?: string, enabled = true) =>
   useQuery({
-    queryKey: keys.approvalsBy({ status: "PENDING" }),
-    queryFn: () => api.approvals({ status: "PENDING" }),
+    queryKey: keys.approvalsBy({ status: "PENDING", ...(projectId && { projectId }) }),
+    queryFn: () => api.approvals({ status: "PENDING", ...(projectId && { projectId }) }),
+    enabled,
+    refetchInterval: POLL_MS,
+  });
+
+/** Inbox, its unread badge and toasts (FR-NTF-02, FR-INB-01): the newest notifications of the scope. */
+export const useNotifications = (projectId?: string, enabled = true) =>
+  useQuery({
+    queryKey: keys.notificationsOf(projectId),
+    queryFn: () => api.notifications(projectId),
+    enabled,
     refetchInterval: POLL_MS,
   });
 

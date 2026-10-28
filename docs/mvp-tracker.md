@@ -23,8 +23,8 @@ Single source of truth for delivery progress. Update it at the end of every wave
 | 08 Cancel stops work; audit kept | ✅ | |
 | 09 Daily + per-job budgets enforced | ✅ daily cap (owner timezone) + per-job; lease clamps to remaining; shortcut: in-flight runs can overshoot with >1 parallel run | `apps/api/src/system.ts` |
 | 10 Encrypted off-host backup + restore drill + bootstrap runbook | ✅ AES-256-GCM backup, restore drill passed on a disposable stack; owner installs the schedule (`node scripts/runner-service.mjs install`) | `scripts/backup.mjs`, `docs/runbooks/` |
-| CR-001 #1 Workspaces/projects, zero cross-project access | ❌ → wave 6 | FR-WKS-01..03, FR-CSP-01 |
-| CR-001 #2 Job done/failed → inbox alert → contextual summary | ⚠️ approvals only → wave 6 | FR-NTF-01/02 |
+| CR-001 #1 Workspaces/projects, zero cross-project access | ✅ decoy-tested (repo bound to A unusable from B; lists never leak; archived blocks) | `apps/api/src/workspaces.ts` |
+| CR-001 #2 Job done/failed → inbox alert → contextual summary | ✅ exactly-once, fact-based notifications + toasts + deep links | `apps/api/src/notifications.ts` |
 | CR-001 #8 Host offline → no false execution claim | ✅ | |
 | Real run: one real issue → draft PR on a test repo | ❌ needs owner setup (below) | |
 
@@ -32,12 +32,13 @@ Single source of truth for delivery progress. Update it at the end of every wave
 
 Spike 0 · GitHub sign-in + `github:setup` · ENG-04 sandbox · ENG-05 Claude engine (egress proxy, Anthropic/Foundry) · ENG-06 repo/issue catalog · ENG-07 issue → approved draft PR · **wave 5**: FR-DEV-05 test verification, emergency stop + daily budget + sessions/runners revoke (Settings drawer), Compose deploy + runner/backup services + encrypted backups + restore drill + runbooks. Specs: `docs/specs/`. ADRs: `docs/adr/`. Runbooks: `docs/runbooks/` (start with `bootstrap.md`).
 
-## Now — wave 6 (next)
+## Now — MVP gate review + real run
 
-- Workspaces (Dev | Business) + projects; every job, approval, query and event scoped by `workspaceId + projectId`; cross-project access denied (NFR-CNV-05 decoy tests).
-- Notifications: canonical events → deduplicated in-app inbox (job completed/failed/blocked, approvals), deep links to the exact run (FR-NTF-01/02, FR-INB-01).
-- Small fixes queued: rate-limit client IP behind Docker/Tailscale (`trustProxy`), `Verification.reason`, active-run count in `SystemControls`.
-- Then: MVP gate review against this table + the real run.
+Waves 1–6 are on `main` (wave 6: workspaces/projects with decoy-tested isolation, notifications, client-IP rate limiting, `Verification.reason`). Remaining:
+
+1. Gate review on a running stack (`node scripts/nexus.mjs up`), walking every row above; record evidence (commands, screenshots in `docs/design/screens/`).
+2. The real run (needs owner setup below): one real issue on a test repo → Claude at home → tests verified → approve → draft PR on GitHub.
+3. Known small follow-ups: active-run count in `SystemControls`, server-side unread count excluding approval notices, budget reservation for >1 parallel run, log rotation.
 
 ## Owner setup still needed for the real run
 

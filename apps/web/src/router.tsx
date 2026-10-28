@@ -23,10 +23,12 @@ const text = (max: number) =>
     .optional()
     .catch(undefined);
 
-// Deep-linkable board state: `/?ws=dev&drawer=run:<uuid>`, `drawer=repo:<repoId>` (with issue filters),
+// Deep-linkable board state: `/?ws=dev&project=<uuid>&drawer=run:<uuid>`, `drawer=repo:<repoId>` (with issue filters),
 // `drawer=issue:<repoId>:<number>`, `drawer=inbox`, `drawer=settings`. Bad values fall back instead of erroring.
 export const BoardSearch = z.object({
   ws: Workspace.optional().catch(undefined),
+  // The selected project of `ws` (FR-WKS-02); without one the board is a read-only aggregate.
+  project: z.uuid().optional().catch(undefined),
   drawer: z
     .string()
     .regex(

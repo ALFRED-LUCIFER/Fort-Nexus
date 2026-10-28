@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { BlockList, isIP } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import Fastify, {
@@ -30,9 +31,11 @@ import { createExecutor, expireApprovals, type Executor } from "./issue-to-pr.ts
 import { reapExpiredLeases } from "./jobs.ts";
 import { createHub, type Hub } from "./notify.ts";
 import { githubRoutes } from "./routes/github.ts";
+import { notificationRoutes } from "./routes/notifications.ts";
 import { ownerRoutes } from "./routes/owner.ts";
 import { runnerRegisterRoute, runnerRoutes } from "./routes/runner.ts";
 import { systemRoutes } from "./routes/system.ts";
+import { workspaceRoutes } from "./routes/workspaces.ts";
 import { emergencyStopEngaged } from "./system.ts";
 
 export type Deps = {
@@ -71,6 +74,24 @@ function sendError(
   return reply.code(status).type("application/json; charset=utf-8").send(body);
 }
 
+// Where a proxy hop may connect from: loopback (Tailscale Serve, Vite) or a private IPv4 range (the Compose
+// gateway). Tailnet addresses (100.64/10, fd7a:115c:a1e0::/48) are clients, never proxies.
+const PROXY_PEERS = new BlockList();
+PROXY_PEERS.addSubnet("127.0.0.0", 8, "ipv4");
+PROXY_PEERS.addAddress("::1", "ipv6");
+for (const [net, prefix] of [
+  ["10.0.0.0", 8],
+  ["172.16.0.0", 12],
+  ["192.168.0.0", 16],
+] as const)
+  PROXY_PEERS.addSubnet(net, prefix, "ipv4");
+
+/** request.ip = the address the last trusted proxy saw, so each client gets its own rate-limit bucket. */
+export const trustedProxy = (hops: number) => (address: string, hop: number) => {
+  const family = isIP(address);
+  return hop < hops && family !== 0 && PROXY_PEERS.check(address, family === 6 ? "ipv6" : "ipv4");
+};
+
 export async function buildApp(config: Config) {
   // Missing file = not set up yet (API runs, sign-in explains how); a malformed or world-readable one fails fast.
   const github = loadGithubAppConfig(config.githubAppFile);
@@ -96,7 +117,7 @@ export async function buildApp(config: Config) {
           },
     genReqId: () => randomUUID(),
     requestIdHeader: false, // never trust a client-supplied id as the correlation id
-    trustProxy: "loopback", // Tailscale Serve / Vite proxy on the same host set X-Forwarded-For
+    trustProxy: trustedProxy(config.trustProxyHops),
     bodyLimit: 1024 * 1024,
   });
   app.setValidatorCompiler(validatorCompiler);
@@ -229,7 +250,9 @@ export async function buildApp(config: Config) {
   await app.register(async (scope) =>
     ownerRoutes(scope, deps)
       .then(() => githubRoutes(scope, deps))
-      .then(() => systemRoutes(scope, deps)),
+      .then(() => systemRoutes(scope, deps))
+      .then(() => workspaceRoutes(scope, deps))
+      .then(() => notificationRoutes(scope, deps)),
   );
   await app.register(async (scope) => runnerRegisterRoute(scope, deps));
   await app.register(async (scope) => runnerRoutes(scope, deps));

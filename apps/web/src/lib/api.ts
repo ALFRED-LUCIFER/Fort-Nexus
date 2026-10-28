@@ -11,16 +11,22 @@ import {
   Job,
   JobList,
   Me,
+  Notification,
+  NotificationList,
   OwnerSessionList,
   PairingCodeResponse,
+  Project,
   RepositoryList,
   Runner,
   RunnerList,
   SystemControls,
+  WorkspaceList,
   type ApprovalDecisionRequest,
   type ApprovalStatus,
   type CreateJobRequest,
+  type CreateProjectRequest,
   type JobStatus,
+  type UpdateProjectRequest,
 } from "@nexus/contracts";
 
 export type { Me } from "@nexus/contracts";
@@ -95,9 +101,14 @@ export const api = {
   // 204: no body.
   revokeSession: (id: string) =>
     request(`/v1/sessions/${encodeURIComponent(id)}`, z.null(), post({}, undefined, "DELETE")),
-  jobs: (q: { limit: number; status?: JobStatus }) =>
+  // projectId omitted = the owner-wide aggregate (the read-only "All" view).
+  jobs: (q: { limit: number; status?: JobStatus; projectId?: string }) =>
     request(
-      `/v1/jobs?${new URLSearchParams({ limit: String(q.limit), ...(q.status && { status: q.status }) })}`,
+      `/v1/jobs?${new URLSearchParams({
+        limit: String(q.limit),
+        ...(q.status && { status: q.status }),
+        ...(q.projectId && { projectId: q.projectId }),
+      })}`,
       JobList,
     ),
   job: (id: string) => request(`/v1/jobs/${encodeURIComponent(id)}`, Job),
@@ -105,7 +116,9 @@ export const api = {
     request("/v1/jobs", CreateJobResponse, post({ [IDEMPOTENCY_HEADER]: idempotencyKey }, body)),
   cancelJob: (id: string) => request(`/v1/jobs/${encodeURIComponent(id)}/cancel`, Job, post()),
   githubStatus: () => request("/v1/github/status", GithubStatus),
-  repositories: () => request("/v1/repositories", RepositoryList),
+  // With a project: only the repositories bound to it. Without: every installed repository (binding UI).
+  repositories: (projectId?: string) =>
+    request(`/v1/repositories${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`, RepositoryList),
   issues: (repoId: string, f: IssueFilters) => {
     const params = new URLSearchParams();
     for (const [k, v] of Object.entries(f)) if (v !== undefined && v !== "") params.set(k, String(v));
@@ -118,9 +131,28 @@ export const api = {
   // Answers only after the push finished: EXECUTED with result, or FAILED with error.
   decide: (id: string, body: ApprovalDecisionRequest) =>
     request(`/v1/approvals/${encodeURIComponent(id)}/decision`, Approval, post({}, body)),
+  // Newest 100 of the scope; owner-wide notices (projectId null) are in every project's list.
+  notifications: (projectId?: string) =>
+    request(
+      `/v1/notifications?${new URLSearchParams({ limit: "100", ...(projectId && { projectId }) })}`,
+      NotificationList,
+    ),
+  setNotificationStatus: (id: string, status: "READ" | "ACKNOWLEDGED") =>
+    request(`/v1/notifications/${encodeURIComponent(id)}/status`, Notification, post({}, { status })),
+  workspaces: () => request("/v1/workspaces", WorkspaceList),
+  createProject: (workspaceId: string, body: CreateProjectRequest) =>
+    request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/projects`, Project, post({}, body)),
+  updateProject: (id: string, body: UpdateProjectRequest) =>
+    request(`/v1/projects/${encodeURIComponent(id)}`, Project, post({}, body, "PATCH")),
+  bindRepository: (projectId: string, repoId: string, bound: boolean) =>
+    request(
+      `/v1/projects/${encodeURIComponent(projectId)}/repositories/${encodeURIComponent(repoId)}`,
+      Project,
+      post({}, undefined, bound ? "PUT" : "DELETE"),
+    ),
 };
 
-export type ApprovalQuery = { status: ApprovalStatus } | { jobId: string };
+export type ApprovalQuery = { status: ApprovalStatus; projectId?: string } | { jobId: string };
 
 export const keys = {
   me: ["me"] as const,
@@ -131,8 +163,12 @@ export const keys = {
   job: (id: string) => ["jobs", id] as const,
   github: ["github"] as const,
   repositories: ["github", "repositories"] as const,
+  repositoriesOf: (projectId: string | undefined) => ["github", "repositories", projectId ?? "all"] as const,
   issues: (repoId: string, f: IssueFilters) => ["github", "issues", repoId, f] as const,
   issue: (repoId: string, number: number) => ["github", "issue", repoId, number] as const,
   approvals: ["approvals"] as const,
   approvalsBy: (q: ApprovalQuery) => ["approvals", q] as const,
+  workspaces: ["workspaces"] as const,
+  notifications: ["notifications"] as const,
+  notificationsOf: (projectId: string | undefined) => ["notifications", projectId ?? "all"] as const,
 };

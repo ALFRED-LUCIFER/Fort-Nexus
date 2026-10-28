@@ -9,6 +9,7 @@ import {
   type Runner,
 } from "@nexus/contracts";
 import { api, keys } from "../lib/api.ts";
+import { useScope } from "./scope.tsx";
 
 const route = getRouteApi("/");
 
@@ -51,12 +52,15 @@ const input =
  * a retry of the same preview reuses it, so the API answers with the original job instead of a second one.
  */
 export function StartRunPreview({
+  projectId,
   repoId,
   repo,
   detail,
   runner,
   onCancel,
 }: {
+  /** The project the run belongs to; the API checks the repository is bound to it. */
+  projectId: string;
   repoId: string;
   repo: Repository | undefined;
   detail: IssueDetail;
@@ -64,7 +68,7 @@ export function StartRunPreview({
   onCancel: () => void;
 }) {
   const navigate = route.useNavigate();
-  const { ws } = route.useSearch();
+  const { keep } = useScope();
   const queryClient = useQueryClient();
   const [base, setBase] = useState(repo?.defaultBranch ?? "");
   const [budget, setBudget] = useState<Record<BudgetKey, string>>({
@@ -80,6 +84,7 @@ export function StartRunPreview({
   const n = detail.issue.number;
   const body = {
     jobType: "DEV_ISSUE_TO_PR" as const,
+    projectId,
     repositoryId: repoId,
     issueNumber: n,
     ...(base.trim() && { baseBranch: base.trim() }),
@@ -98,7 +103,7 @@ export function StartRunPreview({
     mutationFn: () => api.createJob(IssueJob.parse(body), idemKey),
     onSuccess: (res) => {
       void queryClient.invalidateQueries({ queryKey: keys.jobs });
-      void navigate({ search: { ws, drawer: `run:${res.jobId}` } });
+      void navigate({ search: { ...keep, drawer: `run:${res.jobId}` } });
     },
   });
   const change = (apply: () => void) => {

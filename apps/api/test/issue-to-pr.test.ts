@@ -15,9 +15,10 @@ import {
 } from "@nexus/contracts";
 import { buildApp } from "../src/app.ts";
 import { createDb, type Db } from "../src/db/index.ts";
+import { projectRepositories } from "../src/db/schema.ts";
 import { buildAction, expireApprovals } from "../src/issue-to-pr.ts";
 import { canonical, reapExpiredLeases, sha256 } from "../src/jobs.ts";
-import { createTestApp, ownerSession, type TestApp } from "./helpers/owner-session.ts";
+import { createTestApp, homeProjectId, ownerSession, type TestApp } from "./helpers/owner-session.ts";
 
 // GitHub is a stateful fake at fetch level (refs, PRs, objects); Octokit and token minting are production code.
 const GH = "https://api.github.com";
@@ -182,6 +183,7 @@ let sql: pg.Pool;
 let cookie: string;
 let gh: ReturnType<typeof fakeGithub>;
 let runnerToken: string;
+let projectId: string;
 
 type Opts = { body?: unknown; origin?: string | null; headers?: Record<string, string> };
 const owner = (method: "GET" | "POST", url: string, o: Opts = {}) =>
@@ -205,7 +207,7 @@ const runner = (token: string, url: string, body?: unknown) =>
 const createIssueJob = (body: Record<string, unknown> = {}, key = randomUUID()) =>
   owner("POST", "/v1/jobs", {
     headers: { "idempotency-key": key },
-    body: { jobType: "DEV_ISSUE_TO_PR", repositoryId: "101", issueNumber: 42, ...body },
+    body: { jobType: "DEV_ISSUE_TO_PR", repositoryId: "101", issueNumber: 42, projectId, ...body },
   });
 
 async function pairRunner() {
@@ -229,6 +231,7 @@ const FILES = [
 // Test output is repo-controlled: it carries @mentions, closing keywords and backtick runs like agent text does.
 const FAILED: Verification = {
   status: "failed",
+  reason: null,
   source: "package.json",
   install: ["npm", "ci"],
   test: ["npm", "test"],
@@ -285,6 +288,11 @@ beforeAll(async () => {
   app = t.app;
   ({ db, pool: sql } = createDb(t.databaseUrl));
   cookie = await ownerSession(t);
+  projectId = await homeProjectId(t, cookie);
+  // Both installed repos are bound to "home"; 999 isn't installed (and so can't be bound).
+  await db
+    .insert(projectRepositories)
+    .values(["101", "201"].map((repositoryId) => ({ projectId, repositoryId })));
 });
 afterAll(async () => {
   await app?.close();
@@ -305,7 +313,8 @@ afterEach(() => vi.restoreAllMocks());
 describe("create DEV_ISSUE_TO_PR", () => {
   it("rejects an unknown repo, a missing write permission, a PR number, a missing issue and bad base branches", async () => {
     const cases: [Record<string, unknown>, number, string, unknown][] = [
-      [{ repositoryId: "999" }, 400, "VALIDATION_FAILED", { field: "repositoryId" }],
+      // Not bound to the project: refused before GitHub is asked anything.
+      [{ repositoryId: "999" }, 403, "FORBIDDEN", { field: "repositoryId" }],
       [
         { repositoryId: "201" },
         403,
@@ -346,7 +355,7 @@ describe("create DEV_ISSUE_TO_PR", () => {
     });
     const diag = await owner("POST", "/v1/jobs", {
       headers: { "idempotency-key": randomUUID() },
-      body: { jobType: "RUNNER_DIAGNOSTIC", preset: "node-version" },
+      body: { jobType: "RUNNER_DIAGNOSTIC", preset: "node-version", projectId },
     });
     expect((await job(diag.json().jobId)).issue).toBeNull();
     await owner("POST", `/v1/jobs/${diag.json().jobId}/cancel`);
@@ -539,6 +548,7 @@ describe("buildAction verification", () => {
     );
   const notConfigured: Verification = {
     status: "not_configured",
+    reason: null,
     source: null,
     install: null,
     test: null,

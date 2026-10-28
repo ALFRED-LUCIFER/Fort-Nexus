@@ -15,6 +15,7 @@ import { SANDBOX_IMAGE, docker, imageExists, removeLeftovers } from "./sandbox.t
 import {
   FAKE_KEY,
   JOB,
+  PROJECT,
   bareRepo,
   eventsOf,
   fakeApi,
@@ -66,6 +67,7 @@ const BASIC = Buffer.from(`x-access-token:${TOKEN}`).toString("base64");
 const BRANCH = `nexus/issue-42-${JOB.slice(0, 8)}`;
 const NOT_CONFIGURED = {
   status: "not_configured",
+  reason: null,
   source: null,
   install: null,
   test: null,
@@ -106,6 +108,7 @@ async function fakeGithub(dir: string, files: Record<string, string> = {}) {
 const issueLease = (over: { task?: unknown; budget?: Record<string, number> } = {}) => ({
   ...leaseFor({
     jobType: "DEV_ISSUE_TO_PR",
+    projectId: PROJECT,
     repositoryId: "123",
     issueNumber: 42,
     budget: { maxWallClockMinutes: 10, maxTurns: 20, maxCostUsd: 2, ...over.budget },

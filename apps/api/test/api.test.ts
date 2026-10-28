@@ -6,10 +6,11 @@ import type { Job, LeaseResponse, RunEvent } from "@nexus/contracts";
 import type { Config } from "../src/config.ts";
 import { createDb, type Db } from "../src/db/index.ts";
 import { reapExpiredLeases } from "../src/jobs.ts";
-import { createTestApp, ownerSession } from "./helpers/owner-session.ts";
+import { createTestApp, homeProjectId, ownerSession } from "./helpers/owner-session.ts";
 
 const EVIL = "https://evil.example";
-const NODE_VERSION = { jobType: "RUNNER_DIAGNOSTIC", preset: "node-version" } as const;
+// projectId is the owner's "home" project, filled in once the owner exists (beforeAll).
+const NODE_VERSION = { jobType: "RUNNER_DIAGNOSTIC", preset: "node-version", projectId: "" };
 
 let app: FastifyInstance;
 let config: Config;
@@ -94,6 +95,7 @@ beforeAll(async () => {
   ownerLogin = t.githubApp!.ownerGithubLogin;
   ({ db, pool: sql } = createDb(t.databaseUrl));
   cookie = await ownerSession(t);
+  NODE_VERSION.projectId = await homeProjectId(t, cookie);
 });
 
 afterAll(async () => {
@@ -173,7 +175,7 @@ describe("job creation", () => {
     expect(again.json().jobId).toBe(first.json().jobId);
     expect(first.json().streamUrl).toBe(`/v1/jobs/${first.json().jobId}/events`);
 
-    const reused = await createJob(key, { jobType: "RUNNER_DIAGNOSTIC", preset: "git-version" });
+    const reused = await createJob(key, { ...NODE_VERSION, preset: "git-version" });
     expect(reused.statusCode).toBe(409);
     expect(reused.json().error.code).toBe("IDEMPOTENCY_KEY_REUSED");
 

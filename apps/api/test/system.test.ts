@@ -6,14 +6,16 @@ import { eq } from "drizzle-orm";
 import type { IssueSnapshot, Job, LeaseResponse, SystemControls } from "@nexus/contracts";
 import { buildApp } from "../src/app.ts";
 import { createDb, type Db } from "../src/db/index.ts";
-import { approvals, jobs } from "../src/db/schema.ts";
+import { approvals, jobs, projectRepositories } from "../src/db/schema.ts";
 import { createJob } from "../src/jobs.ts";
 import { getSystemControls, leaseRequest } from "../src/system.ts";
-import { createTestApp, ownerSession, type TestApp } from "./helpers/owner-session.ts";
+import { createTestApp, homeProjectId, ownerSession, type TestApp } from "./helpers/owner-session.ts";
 
-const NODE_VERSION = { jobType: "RUNNER_DIAGNOSTIC", preset: "node-version" } as const;
+// projectId is the owner's "home" project, filled in once the owner exists (beforeAll).
+const NODE_VERSION = { jobType: "RUNNER_DIAGNOSTIC", preset: "node-version", projectId: "" };
 const issueJob = (maxCostUsd: number) => ({
   jobType: "DEV_ISSUE_TO_PR" as const,
+  projectId: NODE_VERSION.projectId,
   repositoryId: "101",
   issueNumber: 42,
   budget: { maxWallClockMinutes: 45, maxTurns: 60, maxCostUsd },
@@ -124,6 +126,8 @@ beforeAll(async () => {
   ({ db, pool: sql } = createDb(t.databaseUrl));
   cookie = await ownerSession(t);
   ownerId = (await owner("GET", "/v1/me")).json().id;
+  NODE_VERSION.projectId = await homeProjectId(t, cookie);
+  await db.insert(projectRepositories).values({ projectId: NODE_VERSION.projectId, repositoryId: "101" });
 });
 
 afterAll(async () => {
@@ -207,6 +211,7 @@ describe("emergency stop", () => {
       .insert(approvals)
       .values({
         jobId: job.id,
+        projectId: job.projectId,
         riskTier: "R2",
         status: "PENDING",
         action: { type: "github.push_draft_pr" } as never, // never executed in this test

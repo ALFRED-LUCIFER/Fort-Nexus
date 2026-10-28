@@ -5,10 +5,11 @@ import { SetDailyBudgetRequest, type OwnerSession, type Runner, type SystemContr
 import { api, keys } from "../lib/api.ts";
 import { RUNNER_TONE, ago, until, useNow, useRunners, useSystem } from "../lib/queries.ts";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
+import { WorkspacesSettings } from "./WorkspacesSettings.tsx";
 
 const route = getRouteApi("/");
 
-// Design dSettings tabs. Security & devices and Budgets & limits are real; the rest say honestly what exists.
+// Design dSettings tabs. Security & devices, Workspaces and Budgets & limits are real; the rest say honestly what exists.
 const TABS = [
   ["conn", "Connections"],
   ["ws", "Workspaces"],
@@ -25,9 +26,8 @@ const TABS = [
 ] as const;
 type Tab = (typeof TABS)[number][0];
 
-const LATER: Record<Exclude<Tab, "sec" | "limits">, string> = {
+const LATER: Record<Exclude<Tab, "sec" | "limits" | "ws">, string> = {
   conn: "Managing connections here arrives in P1. Today the only connection is the NEXUS GitHub App, set up on the home machine.",
-  ws: "Workspaces and projects arrive in P1. Until then everything belongs to the one owner.",
   profiles: "Agent profiles arrive in P1 with agents.",
   remote:
     "Remote access is configured on the home machine (Tailscale Serve, see the runbook). Managing it here arrives in P1.",
@@ -72,6 +72,8 @@ export function SettingsDrawer({ banner, onClose }: { banner?: ReactNode; onClos
           <Security />
         ) : tab === "limits" ? (
           <Limits />
+        ) : tab === "ws" ? (
+          <WorkspacesSettings />
         ) : (
           <p className="m-0 flex-none text-[14px] leading-[1.55] text-pretty text-ink2">{LATER[tab]}</p>
         )}

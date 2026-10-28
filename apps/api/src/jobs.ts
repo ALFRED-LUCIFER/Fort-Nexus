@@ -21,7 +21,9 @@ import type { Db, Tx } from "./db/index.ts";
 import { approvals, jobs, runEventBatches, runEvents, runners } from "./db/schema.ts";
 import { HttpError, invalidTransition, notFound } from "./errors.ts";
 import { workBranch } from "./issue-to-pr.ts";
+import { notifyForJobEvents } from "./notifications.ts";
 import { assertCanStart, emergencyStopEngaged, reportedCostUsd } from "./system.ts";
+import { assertProjectAllowsJob } from "./workspaces.ts";
 
 export const JOB_EVENTS_CHANNEL = "nexus_job_events";
 export const LEASED: JobStatus[] = ["PREPARING", "RUNNING", "VERIFYING"];
@@ -46,6 +48,7 @@ export const runnerActor = (runnerId: string) => `runner:${runnerId}`;
 
 export const toJobDto = (j: JobRow): Job => ({
   id: j.id,
+  projectId: j.projectId,
   jobType: j.jobType,
   status: j.status,
   riskTier: j.riskTier,
@@ -108,6 +111,7 @@ export async function writeEvents(
     })),
   );
   await tx.execute(sql`select pg_notify(${JOB_EVENTS_CHANNEL}, ${jobId})`);
+  await notifyForJobEvents(tx, jobId, events);
   return afterSeq + events.length;
 }
 
@@ -180,7 +184,7 @@ export async function failJob(
 }
 
 // ── Owner operations ──
-// shortcut: jobs are scoped by owner only; workspaceId/projectId scope (Part B #5) arrives with workspaces (FR-WKS-01).
+// Creation and lists are scoped by project (FR-WKS-02); single-object reads stay owner-scoped and return projectId.
 
 export async function createJob(
   db: Db,
@@ -210,10 +214,13 @@ export async function createJob(
   const [existing] = await db.select().from(jobs).where(byKey);
   if (existing) return replay(existing);
   const body = input.body;
-  await assertCanStart(db, body, input.timezone); // before GitHub is called; re-checked under lock below
+  // Before GitHub is called; both re-checked under lock below.
+  await assertProjectAllowsJob(db, input.ownerId, body);
+  await assertCanStart(db, body, input.timezone);
   const snapshot = body.jobType === "DEV_ISSUE_TO_PR" ? await input.pinIssue(body) : null;
 
   return db.transaction(async (tx) => {
+    await assertProjectAllowsJob(tx, input.ownerId, body);
     await assertCanStart(tx, body, input.timezone);
     const target = input.body.runnerId;
     if (target) {
@@ -230,6 +237,7 @@ export async function createJob(
       .insert(jobs)
       .values({
         initiatorId: input.ownerId,
+        projectId: body.projectId,
         jobType: body.jobType,
         status: "QUEUED",
         // RUNNER_DIAGNOSTIC: read-only fixed argv. DEV_ISSUE_TO_PR: sandboxed edits; the push is a separate R2 approval.
@@ -274,6 +282,7 @@ export async function createJob(
       correlationId: input.correlationId,
       metadata: {
         jobType: job.jobType,
+        projectId: job.projectId,
         targetRunnerId: target ?? null,
         ...(body.jobType === "RUNNER_DIAGNOSTIC"
           ? { preset: body.preset }
@@ -305,6 +314,7 @@ export async function listJobs(db: Db, ownerId: string, q: ListJobsQuery): Promi
     .where(
       and(
         eq(jobs.initiatorId, ownerId),
+        q.projectId ? eq(jobs.projectId, q.projectId) : undefined,
         q.status ? eq(jobs.status, q.status) : undefined,
         q.cursor ? lt(jobs.id, q.cursor) : undefined,
       ),

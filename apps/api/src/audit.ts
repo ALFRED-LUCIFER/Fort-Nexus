@@ -4,7 +4,8 @@ import { auditRecords } from "./db/schema.ts";
 export type AuditEntry = {
   actor: string;
   action: string;
-  resourceType: "job" | "runner" | "github_account" | "approval" | "session" | "system";
+  resourceType:
+    "job" | "runner" | "github_account" | "approval" | "session" | "system" | "project" | "notification";
   resourceId: string;
   correlationId: string;
   outcome?: "SUCCEEDED" | "DENIED" | "FAILED";

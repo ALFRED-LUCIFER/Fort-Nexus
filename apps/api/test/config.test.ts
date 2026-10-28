@@ -10,6 +10,8 @@ describe("loadConfig", () => {
     const c = loadConfig(base);
     expect(c).toMatchObject({ host: "127.0.0.1", port: 8787, publicOrigin: "http://127.0.0.1:8787" });
     expect(c.trustedOrigins).toEqual(["http://127.0.0.1:8787", "http://localhost:5173"]);
+    expect(c.trustProxyHops).toBe(1);
+    expect(() => loadConfig({ ...base, TRUST_PROXY_HOPS: "4" })).toThrow(/TRUST_PROXY_HOPS/);
     const prod = loadConfig({
       ...base,
       NODE_ENV: "production",

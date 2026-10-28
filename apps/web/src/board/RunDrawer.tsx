@@ -306,6 +306,9 @@ function TestsCard({ v }: { v: Verification }) {
         </p>
       ) : (
         <>
+          {v.status === "error" && v.reason && (
+            <p className="m-0 text-[12.5px] leading-[1.5] break-words text-ink2">Why: {v.reason}</p>
+          )}
           <dl className="m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-[11.5px] leading-[1.45]">
             {facts.map(([k, val]) => (
               <div key={k} className="contents">

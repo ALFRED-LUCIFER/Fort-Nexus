@@ -5,6 +5,7 @@ import type { Db, Tx } from "./db/index.ts";
 import { jobs, systemControls } from "./db/schema.ts";
 import { HttpError } from "./errors.ts";
 import { LEASED, moveJob, ownerActor, type JobRow } from "./jobs.ts";
+import { notifySecurity } from "./notifications.ts";
 
 // Owner safety controls: emergency stop (FR-INB-04, FR-CSP-09) and the daily budget cap (FR-SEC-08, GATE-09).
 // Lock order everywhere: the controls row first, then jobs, so engaging the stop can't deadlock with a create/lease.
@@ -181,6 +182,19 @@ export async function setEmergencyStop(
       correlationId: input.correlationId,
       // FR-INB-04: what was actually stopped, not just that the button was pressed.
       metadata: input.engaged ? { cancelledJobIds: cancelled, cancelRequestedJobIds: stopping } : {},
+    });
+    await notifySecurity(tx, {
+      ownerId: input.ownerId,
+      dedupKey: `emergency_stop:${input.engaged ? "engaged" : "released"}:${input.correlationId}`,
+      ...(input.engaged
+        ? {
+            title: "Emergency stop engaged",
+            body: `Queued runs cancelled: ${cancelled.length}. Running runs asked to stop: ${stopping.length}. Nothing new starts and approved pushes wait until you release it.`,
+          }
+        : {
+            title: "Emergency stop released",
+            body: "Runs can start again and approved pushes the stop held resume now.",
+          }),
     });
   });
 }

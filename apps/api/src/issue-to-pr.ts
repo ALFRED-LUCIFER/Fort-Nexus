@@ -31,6 +31,7 @@ import {
 } from "./jobs.ts";
 import type { RunnerRow } from "./runners.ts";
 import { assertNotStopped } from "./system.ts";
+import { assertProjectActive } from "./workspaces.ts";
 
 // ENG-07: changeset upload → owner approval of the exact action hash → the API pushes and opens a draft PR.
 
@@ -48,6 +49,7 @@ export const workBranch = (issueNumber: number, jobId: string) =>
 export const toApprovalDto = (a: ApprovalRow): Approval => ({
   id: a.id,
   jobId: a.jobId,
+  projectId: a.projectId,
   riskTier: a.riskTier,
   status: a.status,
   action: a.action,
@@ -229,6 +231,7 @@ export async function uploadChangeset(
       .insert(approvals)
       .values({
         jobId: job.id,
+        projectId: job.projectId,
         riskTier: "R2",
         status: "PENDING",
         action,
@@ -287,6 +290,7 @@ export async function listApprovals(db: Db, ownerId: string, q: ListApprovalsQue
     .where(
       and(
         eq(jobs.initiatorId, ownerId),
+        q.projectId ? eq(approvals.projectId, q.projectId) : undefined,
         q.status ? eq(approvals.status, q.status) : undefined,
         q.jobId ? eq(approvals.jobId, q.jobId) : undefined,
       ),
@@ -347,6 +351,7 @@ export async function decideApproval(
       .for("update");
     if (!row) throw notFound("Approval");
     const { approvals: a, jobs: job } = row;
+    await assertProjectActive(tx, a.projectId);
     if (a.status !== "PENDING")
       throw new HttpError(409, "CONFLICT", `This approval is already ${a.status.toLowerCase()}`, {
         status: a.status,

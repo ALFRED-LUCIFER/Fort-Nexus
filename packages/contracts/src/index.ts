@@ -6,3 +6,5 @@ export * from "./auth.ts";
 export * from "./github.ts";
 export * from "./issue-to-pr.ts";
 export * from "./system.ts";
+export * from "./workspaces.ts";
+export * from "./notifications.ts";

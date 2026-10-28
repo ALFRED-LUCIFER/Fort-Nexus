@@ -25,6 +25,7 @@ import { git } from "./workspace.ts";
 // that would be pushed (base + changeset). What to run comes from the BASE commit, never from the agent's work.
 
 export const VERIFY_TAIL_MAX = 8_000;
+const VERIFY_REASON_MAX = 500; // Verification.reason
 const DEFAULT_TIMEOUT_MS = 15 * 60_000;
 const KEEP_CHARS = 64 * 1024; // raw output kept before redaction; only the tail is reported
 
@@ -204,6 +205,9 @@ export async function runVerification(opts: VerifyOptions): Promise<VerifyResult
       redact(output) + (note ? `${output && !output.endsWith("\n") ? "\n" : ""}[nexus] ${note}` : "");
     return {
       status,
+      // Every error path passes its note; the reason is shown on its own, outside the repo-controlled tail.
+      reason:
+        status === "error" ? redact(note ?? "verification could not run").slice(0, VERIFY_REASON_MAX) : null,
       source: plan?.source ?? null,
       install: plan?.install ?? null,
       test: plan?.test ?? null,

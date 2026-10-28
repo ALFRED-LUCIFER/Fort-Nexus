@@ -1,10 +1,11 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Approval, ApprovalDecisionRequest } from "@nexus/contracts";
 import { ApiRequestError, api, keys } from "../lib/api.ts";
 import { shortHash, until, useNow } from "../lib/queries.ts";
 import { TEST_WORD } from "./runEvents.ts";
+import { decisionBlocked, useScope } from "./scope.tsx";
 
 // The API answers 409 when the hash no longer matches, the approval was already decided or expired, or the job moved on.
 const CHANGED =
@@ -33,6 +34,9 @@ export function DecisionButtons({
     </>
   );
   const queryClient = useQueryClient();
+  // Approvals are decided inside their own project only; "All" is read-only (FR-WKS-02, C-05).
+  const blocked = decisionBlocked(useScope(), approval);
+  const blockedId = useId();
   const [confirming, setConfirming] = useState<Approval | null>(null);
   const decide = useMutation({
     mutationFn: ({ a, decision }: { a: Approval; decision: ApprovalDecisionRequest["decision"] }) =>
@@ -55,7 +59,8 @@ export function DecisionButtons({
       <div className="flex gap-1.5">
         <button
           type="button"
-          disabled={decide.isPending}
+          disabled={decide.isPending || !!blocked}
+          aria-describedby={blocked ? blockedId : undefined}
           onClick={() => decide.mutate({ a: approval, decision: "deny" })}
           className="flex-1 rounded-xl border border-hair px-3 py-2.5 text-[12.5px] font-medium whitespace-nowrap text-ink2 disabled:opacity-60"
         >
@@ -63,7 +68,8 @@ export function DecisionButtons({
         </button>
         <button
           type="button"
-          disabled={decide.isPending}
+          disabled={decide.isPending || !!blocked}
+          aria-describedby={blocked ? blockedId : undefined}
           onClick={() => setConfirming(approval)}
           className="flex-1 rounded-xl bg-amber px-3 py-2.5 text-[12.5px] font-medium whitespace-nowrap text-onacc disabled:opacity-60"
         >
@@ -71,6 +77,11 @@ export function DecisionButtons({
           {sr}
         </button>
       </div>
+      {blocked && (
+        <p id={blockedId} className="m-0 text-[12.5px] leading-snug text-ink2">
+          {blocked}
+        </p>
+      )}
       {error && (
         <p role="alert" className="m-0 text-[12.5px] leading-snug text-coral">
           {error}
@@ -129,7 +140,7 @@ const testsSentence = (a: Approval) =>
   ({
     passed: "NEXUS ran the tests in the sandbox: they passed.",
     failed: `NEXUS ran the tests in the sandbox: they FAILED (exit code ${a.action.verification.exitCode ?? "?"}).`,
-    error: "NEXUS couldn't run the tests.",
+    error: `NEXUS couldn't run the tests${a.action.verification.reason ? `: ${a.action.verification.reason}` : ""}.`,
     not_configured: "The tests were not verified by NEXUS.",
   })[a.action.verification.status];
 

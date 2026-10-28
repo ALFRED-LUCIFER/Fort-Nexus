@@ -4,7 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { SSE_RUN_EVENT, type Approval, type Job, type Verification } from "@nexus/contracts";
 import {
   FakeEventSource,
+  IN_PROJECT,
   JOB_ID,
+  PROJECT_ID,
   ME,
   apiError,
   event,
@@ -24,6 +26,7 @@ const HEAD = "nexus/issue-42-22222222";
 
 const PASSED: Verification = {
   status: "passed",
+  reason: null,
   source: "package.json",
   install: ["npm", "ci"],
   test: ["npm", "test"],
@@ -39,6 +42,7 @@ const FAILED: Verification = {
 };
 const NOT_CONFIGURED: Verification = {
   status: "not_configured",
+  reason: null,
   source: null,
   install: null,
   test: null,
@@ -55,6 +59,7 @@ const issueJob = (over: Partial<Job> = {}): Job =>
     runnerId: runner().id,
     request: {
       jobType: "DEV_ISSUE_TO_PR",
+      projectId: PROJECT_ID,
       repositoryId: "101",
       issueNumber: 42,
       budget: { maxWallClockMinutes: 45, maxTurns: 60, maxCostUsd: 5 },
@@ -65,6 +70,7 @@ const issueJob = (over: Partial<Job> = {}): Job =>
 const approval = (over: Partial<Approval> = {}): Approval => ({
   id: APPROVAL_ID,
   jobId: JOB_ID,
+  projectId: PROJECT_ID,
   riskTier: "R2",
   status: "PENDING",
   action: {
@@ -102,7 +108,7 @@ function open(j: Job, extra: Parameters<typeof mockFetch>[0] = {}) {
     [`GET /v1/jobs/${JOB_ID}`]: () => json(j),
     ...extra,
   });
-  renderApp(`/?drawer=run:${JOB_ID}`);
+  renderApp(`${IN_PROJECT}&drawer=run:${JOB_ID}`);
   return calls;
 }
 
@@ -190,10 +196,16 @@ describe("approval gate", () => {
     ],
     [
       "error",
-      { ...FAILED, status: "error", exitCode: null, outputTail: "[nexus] install failed with exit code 1" },
+      {
+        ...FAILED,
+        status: "error",
+        reason: "install failed with exit code 1",
+        exitCode: null,
+        outputTail: "[nexus] install failed with exit code 1",
+      },
       "Tests couldn't run.",
       "couldn't run · run by NEXUS in the sandbox",
-      /NEXUS couldn't run the tests\./,
+      /NEXUS couldn't run the tests: install failed with exit code 1\./,
     ],
   ] as const)(
     "verification %s: an amber warning on the gate, still approvable, and the confirm step repeats it",
@@ -288,8 +300,7 @@ describe("approval gate", () => {
       /approval changed after you opened it .*so nothing was decided/,
     );
     await waitFor(() => expect(fact(gate, "action hash")).toBe("9e1b44d0…aa07"));
-    const gets = calls.filter((c) => c.path === "/v1/approvals");
-    expect(gets.at(-1)!.query.get("jobId")).toBe(JOB_ID);
+    const gets = calls.filter((c) => c.path === "/v1/approvals" && c.query.get("jobId") === JOB_ID);
     expect(calls.indexOf(gets.at(-1)!)).toBeGreaterThan(calls.indexOf(decisions(calls)[0]!));
   });
 });
@@ -406,6 +417,20 @@ describe("issue run", () => {
     );
   });
 
+  it("couldn't run: the card says why, in the runner's words", async () => {
+    open(issueJob({ status: "VERIFYING" }), { "GET /v1/approvals": () => json({ items: [] }) });
+    const es = await stream();
+    const reason = "Docker is not reachable on the runner host";
+    act(() =>
+      es.emit(
+        SSE_RUN_EVENT,
+        event(1, "test.completed", { ...FAILED, status: "error", reason, exitCode: null, outputTail: "" }),
+      ),
+    );
+    const card = await screen.findByRole("region", { name: "Tests couldn't run" });
+    expect(within(card).getByText(`Why: ${reason}`)).toBeTruthy();
+  });
+
   it("keeps Draft PR open until external_action.completed, even when the approval says EXECUTED", () => {
     const base = [
       event(1, "job.created"),
@@ -484,14 +509,15 @@ describe("inbox", () => {
       "GET /v1/jobs": () => json({ items: [], nextCursor: null }),
       "GET /v1/approvals": (c) =>
         c.query.get("status") === "PENDING" ? json({ items: pending }) : json({ items: [] }),
+      "GET /v1/notifications": () => json({ items: [], unreadCount: 0 }),
       [`POST /v1/approvals/${APPROVAL_ID}/decision`]: () => {
         pending = pending.slice(1);
         return json(approval({ status: "APPROVED" }));
       },
     });
     const user = userEvent.setup();
-    const { router } = renderApp("/");
-    await user.click(await screen.findByRole("button", { name: "Inbox, 2 pending approvals" }));
+    const { router } = renderApp(IN_PROJECT);
+    await user.click(await screen.findByRole("button", { name: "Inbox, 2 pending approvals, 0 unread" }));
     expect(router.state.location.search).toMatchObject({ drawer: "inbox" });
 
     const list = await screen.findByRole("list", { name: "Pending approvals" });
@@ -508,10 +534,12 @@ describe("inbox", () => {
     expect(decisions(calls)[0]!.body).toEqual({ decision: "approve", actionHash: HASH });
 
     await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(1));
-    expect(screen.getByRole("button", { name: "Inbox, 1 pending approval", hidden: true })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Inbox, 1 pending approval, 0 unread", hidden: true }),
+    ).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: "Failures" }));
-    expect(screen.getByText(/Failures arrive in P1/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /^Failures/ }));
+    expect(screen.getByText("No failed runs.")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /^All/ }));
     await user.click(screen.getByRole("button", { name: "Open the run for #7" }));
     expect(router.state.location.search).toMatchObject({ drawer: `run:${JOB_ID}` });
@@ -526,8 +554,9 @@ describe("inbox", () => {
       "GET /v1/jobs": () => json({ items: [], nextCursor: null }),
       "GET /v1/approvals": () =>
         fail ? apiError(503, "INTERNAL", "Approvals are unavailable right now.") : json({ items: [] }),
+      "GET /v1/notifications": () => json({ items: [], unreadCount: 0 }),
     });
-    renderApp("/?drawer=inbox");
+    renderApp(`${IN_PROJECT}&drawer=inbox`);
     const dialog = await screen.findByRole("dialog");
     expect((await within(dialog).findByRole("alert")).textContent).toBe(
       "Approvals are unavailable right now.",
@@ -535,6 +564,8 @@ describe("inbox", () => {
     fail = false;
     await act(() => vi.advanceTimersByTimeAsync(5_000));
     expect(await within(dialog).findByText(/Nothing needs you\./)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Inbox, 0 pending approvals", hidden: true })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Inbox, 0 pending approvals, 0 unread", hidden: true }),
+    ).toBeTruthy();
   });
 });

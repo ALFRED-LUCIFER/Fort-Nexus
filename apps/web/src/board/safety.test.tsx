@@ -4,7 +4,9 @@ import userEvent from "@testing-library/user-event";
 import type { Approval, Job, OwnerSession, Runner, SystemControls } from "@nexus/contracts";
 import {
   FakeEventSource,
+  IN_PROJECT,
   JOB_ID,
+  PROJECT_ID,
   ME,
   apiError,
   job,
@@ -105,6 +107,7 @@ describe("emergency stop", () => {
     const approval: Approval = {
       id: "44444444-4444-4444-8444-444444444444",
       jobId: JOB_ID,
+      projectId: PROJECT_ID,
       riskTier: "R2",
       status: "PENDING",
       action: {
@@ -122,6 +125,7 @@ describe("emergency stop", () => {
         stats: { added: 1, removed: 1 },
         verification: {
           status: "passed",
+          reason: null,
           source: "nexus.json",
           install: null,
           test: ["pnpm", "test"],
@@ -146,7 +150,7 @@ describe("emergency stop", () => {
       },
     });
     const user = userEvent.setup();
-    renderApp("/?drawer=inbox");
+    renderApp(`${IN_PROJECT}&drawer=inbox`);
     await user.click(await screen.findByRole("button", { name: /^Approve/ }));
     await user.click(screen.getByRole("button", { name: "Approve push" }));
     expect((await screen.findByText(message)).getAttribute("role")).toBe("alert");

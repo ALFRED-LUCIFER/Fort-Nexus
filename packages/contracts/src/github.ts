@@ -42,7 +42,11 @@ export const Repository = z.object({
 });
 export type Repository = z.infer<typeof Repository>;
 
-export const RepositoryQuery = z.object({ q: z.string().trim().max(100).optional() });
+export const RepositoryQuery = z.object({
+  q: z.string().trim().max(100).optional(),
+  // Only repositories bound to this project (FR-WKS-03); omitted = every installed repository (Settings / binding UI).
+  projectId: z.uuid().optional(),
+});
 export type RepositoryQuery = z.infer<typeof RepositoryQuery>;
 
 export const RepositoryList = z.object({ items: z.array(Repository), syncedAt: z.iso.datetime() });

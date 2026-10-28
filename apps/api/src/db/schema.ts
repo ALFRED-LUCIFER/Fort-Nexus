@@ -22,11 +22,14 @@ import type {
   JobOutcome,
   JobStatus,
   JobType,
+  NotificationCategory,
+  NotificationStatus,
   RiskTier,
   RunEventType,
   PushDraftPrAction,
   RunStage,
   UploadChangesetRequest,
+  WorkspaceMode,
 } from "@nexus/contracts";
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, mode: "date" });
@@ -131,6 +134,52 @@ export const runnerPairingCodes = pgTable("runner_pairing_codes", {
   createdAt: ts("created_at").notNull().defaultNow(),
 });
 
+// FR-WKS-01..03: exactly one DEV and one BUSINESS workspace per owner; projects are the hard scope boundary.
+export const workspaces = pgTable(
+  "workspaces",
+  {
+    id: id(),
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => user.id),
+    mode: text("mode").$type<WorkspaceMode>().notNull(),
+    name: text("name").notNull(),
+    createdAt: ts("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("workspaces_owner_mode_uq").on(t.ownerId, t.mode),
+    check("workspaces_mode_valid", sql`${t.mode} in ('DEV', 'BUSINESS')`),
+  ],
+);
+
+export const projects = pgTable(
+  "projects",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    slug: text("slug").notNull(),
+    name: text("name").notNull(),
+    archivedAt: ts("archived_at"),
+    createdAt: ts("created_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("projects_workspace_slug_uq").on(t.workspaceId, t.slug)],
+);
+
+// Explicit repository bindings (GitHub repo id); a repo may be bound to several projects.
+export const projectRepositories = pgTable(
+  "project_repositories",
+  {
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    repositoryId: text("repository_id").notNull(),
+    createdAt: ts("created_at").notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.repositoryId] })],
+);
+
 export const jobs = pgTable(
   "jobs",
   {
@@ -138,6 +187,9 @@ export const jobs = pgTable(
     initiatorId: text("initiator_id")
       .notNull()
       .references(() => user.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
     jobType: text("job_type").$type<JobType>().notNull(),
     status: text("status").$type<JobStatus>().notNull(),
     riskTier: text("risk_tier").$type<RiskTier>().notNull(),
@@ -163,6 +215,7 @@ export const jobs = pgTable(
     uniqueIndex("jobs_initiator_idempotency_key_uq").on(t.initiatorId, t.idempotencyKey),
     index("jobs_status_created_idx").on(t.status, t.createdAt),
     index("jobs_initiator_id_idx").on(t.initiatorId, t.id),
+    index("jobs_project_id_idx").on(t.projectId, t.id),
     index("jobs_lease_idx")
       .on(t.leaseExpiresAt)
       .where(sql`${t.leaseExpiresAt} is not null`),
@@ -246,6 +299,10 @@ export const approvals = pgTable(
     jobId: uuid("job_id")
       .notNull()
       .references(() => jobs.id),
+    // Always the job's project (frozen by trigger like the action).
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
     riskTier: text("risk_tier").$type<Approval["riskTier"]>().notNull(),
     status: text("status").$type<ApprovalStatus>().notNull(),
     action: jsonb("action").$type<PushDraftPrAction>().notNull(),
@@ -257,7 +314,11 @@ export const approvals = pgTable(
     result: jsonb("result").$type<NonNullable<Approval["result"]>>(),
     error: text("error"),
   },
-  (t) => [index("approvals_job_idx").on(t.jobId), index("approvals_status_idx").on(t.status, t.expiresAt)],
+  (t) => [
+    index("approvals_job_idx").on(t.jobId),
+    index("approvals_status_idx").on(t.status, t.expiresAt),
+    index("approvals_project_idx").on(t.projectId, t.id),
+  ],
 );
 
 // External write ledger (PRD §18.4): one row per idempotent action key, written before the provider is called.
@@ -297,5 +358,38 @@ export const systemControls = pgTable(
   (t) => [
     check("system_controls_singleton", sql`${t.id} = 1`),
     check("system_controls_budget_positive", sql`${t.dailyBudgetUsd} > 0`),
+  ],
+);
+
+// FR-NTF-01/02: one row per verified event, written in the event's transaction; dedup_key makes replays no-ops.
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: id(),
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => user.id),
+    // null only for owner-wide notices (emergency stop, runner revoked).
+    projectId: uuid("project_id").references(() => projects.id),
+    category: text("category").$type<NotificationCategory>().notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    jobId: uuid("job_id").references(() => jobs.id),
+    approvalId: uuid("approval_id").references(() => approvals.id),
+    dedupKey: text("dedup_key").notNull().unique(),
+    status: text("status").$type<NotificationStatus>().notNull().default("UNREAD"),
+    statusChangedAt: ts("status_changed_at"),
+    createdAt: ts("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("notifications_owner_idx").on(t.ownerId, t.id),
+    index("notifications_owner_unread_idx")
+      .on(t.ownerId)
+      .where(sql`${t.status} = 'UNREAD'`),
+    check(
+      "notifications_category_valid",
+      sql`${t.category} in ('INFORMATIONAL', 'TASK_DONE', 'TASK_FAILED', 'APPROVAL_REQUIRED', 'BUSINESS_EXCEPTION', 'SECURITY_CRITICAL')`,
+    ),
+    check("notifications_status_valid", sql`${t.status} in ('UNREAD', 'READ', 'ACKNOWLEDGED')`),
   ],
 );

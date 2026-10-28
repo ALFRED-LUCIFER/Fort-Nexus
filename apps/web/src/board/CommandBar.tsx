@@ -23,10 +23,15 @@ const seg = (on: boolean) =>
  */
 export function CommandBar({
   runners,
+  projectId,
+  blocked,
   onQueued,
   children,
 }: {
   runners: readonly Runner[] | undefined;
+  /** The project a queued job belongs to; Execute is disabled (with `blocked` as the reason) without one. */
+  projectId: string | undefined;
+  blocked: string | null;
   onQueued: (jobId: string) => void;
   children?: ReactNode;
 }) {
@@ -128,8 +133,11 @@ export function CommandBar({
         )}
         {panel === "preview" && (
           <ExecutePreview
+            key={projectId ?? "none"} // another project is another request: fresh Idempotency-Key
             freeText={text.trim()}
             runners={runners}
+            projectId={blocked ? undefined : projectId}
+            blocked={blocked}
             onAdjust={close}
             onQueued={(id) => {
               setPanel(null);
@@ -157,11 +165,15 @@ function Panel({ children, label }: { children: ReactNode; label?: string }) {
 function ExecutePreview({
   freeText,
   runners,
+  projectId,
+  blocked,
   onAdjust,
   onQueued,
 }: {
   freeText: string;
   runners: readonly Runner[] | undefined;
+  projectId: string | undefined;
+  blocked: string | null;
   onAdjust: () => void;
   onQueued: (jobId: string) => void;
 }) {
@@ -226,6 +238,11 @@ function ExecutePreview({
           Free-text commands need the conversation service (P1). Pick a preset; “{freeText}” is not sent.
         </p>
       )}
+      {blocked && (
+        <p id="execute-blocked" className="m-0 text-[12.5px] leading-snug text-ink2">
+          {blocked}
+        </p>
+      )}
       {!online && (
         <p
           className="m-0 rounded-xl px-3 py-2.5 text-[12.5px] leading-snug"
@@ -251,8 +268,9 @@ function ExecutePreview({
         </button>
         <button
           type="button"
-          disabled={queue.isPending}
-          onClick={() => queue.mutate({ jobType: "RUNNER_DIAGNOSTIC", preset })}
+          disabled={queue.isPending || !projectId}
+          aria-describedby={blocked ? "execute-blocked" : undefined}
+          onClick={() => projectId && queue.mutate({ jobType: "RUNNER_DIAGNOSTIC", preset, projectId })}
           className="rounded-xl bg-teal px-3.5 py-2.5 text-[12.5px] font-medium text-onacc disabled:opacity-60"
         >
           {queue.isPending ? "Queuing…" : runner ? `Queue on ${runner.name}` : "Queue job"}

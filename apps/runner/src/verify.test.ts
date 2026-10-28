@@ -180,6 +180,7 @@ describe("runVerification without a runnable config (no Docker needed)", () => {
     const r = await repo({}, { "NOTES.md": "x\n" });
     expect((await verify(r).result).verification).toEqual({
       status: "not_configured",
+      reason: null,
       source: null,
       install: null,
       test: null,
@@ -193,7 +194,12 @@ describe("runVerification without a runnable config (no Docker needed)", () => {
     const r = await repo({ ".nexus.json": "{" }, { "NOTES.md": "x\n" });
     const { verification, stopConfirmed } = await verify(r).result;
     expect(stopConfirmed).toBe(true);
-    expect(verification).toMatchObject({ status: "error", source: null, exitCode: null });
+    expect(verification).toMatchObject({
+      status: "error",
+      reason: ".nexus.json at the base commit is not valid JSON",
+      source: null,
+      exitCode: null,
+    });
     expect(verification.outputTail).toBe("[nexus] .nexus.json at the base commit is not valid JSON");
   });
 });
@@ -289,7 +295,7 @@ describe.skipIf(!dockerUp)("runVerification in the real sandbox", () => {
       { "NOTES.md": "x\n" },
     );
     const { verification } = await verify(r, { runnerLabel }).result;
-    expect(verification).toMatchObject({ status: "failed", exitCode: 3, install: null });
+    expect(verification).toMatchObject({ status: "failed", reason: null, exitCode: 3, install: null });
     expect(verification.outputTail.length).toBeLessThanOrEqual(VERIFY_TAIL_MAX);
     expect(verification.outputTail).toContain("1 test failed");
     expect(verification.outputTail).toContain("token=[REDACTED]");
@@ -307,7 +313,11 @@ describe.skipIf(!dockerUp)("runVerification in the real sandbox", () => {
     async (_, cfg, tail) => {
       const r = await repo({ ".nexus.json": nexusJson(cfg) }, { "NOTES.md": "x\n" });
       const { verification } = await verify(r, { runnerLabel }).result;
-      expect(verification).toMatchObject({ status: "error", exitCode: null });
+      expect(verification).toMatchObject({
+        status: "error",
+        reason: "install failed with exit code 1",
+        exitCode: null,
+      });
       expect(verification.outputTail).toMatch(tail);
       await gone(r.jobId);
     },
@@ -325,7 +335,11 @@ describe.skipIf(!dockerUp)("runVerification in the real sandbox", () => {
     const { verification, stopConfirmed } = await verify(r, { runnerLabel, maxTimeoutMs: 2_000 }).result;
     expect(Date.now() - started).toBeLessThan(30_000);
     expect(stopConfirmed).toBe(true);
-    expect(verification).toMatchObject({ status: "error", exitCode: null });
+    expect(verification).toMatchObject({
+      status: "error",
+      reason: "timed out after 2 s during test",
+      exitCode: null,
+    });
     expect(verification.outputTail).toMatch(/\[nexus\] timed out after 2 s during test$/);
     await gone(r.jobId);
   }, 60_000);

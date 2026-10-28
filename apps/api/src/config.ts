@@ -38,6 +38,9 @@ const Env = z.object({
     )
     .pipe(z.array(origin)),
   BETTER_AUTH_SECRET: z.string().min(32, "BETTER_AUTH_SECRET must be at least 32 characters"),
+  // Reverse proxies in front of the API that append X-Forwarded-For (Tailscale Serve = 1). Only hops from loopback or
+  // private addresses (the Compose gateway) are believed; 0 ignores the header. More than one is never needed at home.
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(3).default(1),
   RUNNER_LEASE_POLL_MS: z.coerce.number().int().min(0).max(60_000).default(RUNNER_LEASE_POLL_MS),
   // The owner's day for the daily budget (FR-SEC-08). IANA names only: Postgres reads "+04:00" with the sign inverted.
   OWNER_TIMEZONE: z
@@ -62,6 +65,7 @@ export type Config = {
   trustedOrigins: string[];
   authSecret: string;
   leasePollMs: number;
+  trustProxyHops: number;
   githubAppFile: string;
   ownerTimezone: string;
 };
@@ -99,6 +103,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, inContainer = r
     trustedOrigins: [...new Set([e.PUBLIC_ORIGIN, ...e.TRUSTED_ORIGINS, ...devOrigins])],
     authSecret: e.BETTER_AUTH_SECRET,
     leasePollMs: e.RUNNER_LEASE_POLL_MS,
+    trustProxyHops: e.TRUST_PROXY_HOPS,
     githubAppFile: e.GITHUB_APP_FILE ?? defaultGithubAppFile(),
     ownerTimezone: e.OWNER_TIMEZONE,
   };

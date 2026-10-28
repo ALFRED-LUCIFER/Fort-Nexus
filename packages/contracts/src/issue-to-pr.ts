@@ -86,6 +86,8 @@ export type NexusRepoConfig = z.infer<typeof NexusRepoConfig>;
 // FR-DEV-05: what NEXUS itself ran after the agent finished — never the agent's claim.
 export const Verification = z.object({
   status: z.enum(["passed", "failed", "not_configured", "error"]),
+  // Why it couldn't run (status "error"); null otherwise.
+  reason: z.string().max(500).nullable(),
   source: z.enum(["nexus.json", "package.json"]).nullable(),
   install: z.array(z.string()).nullable(),
   test: z.array(z.string()).nullable(),
@@ -143,6 +145,7 @@ export type PushDraftPrAction = z.infer<typeof PushDraftPrAction>;
 export const Approval = z.object({
   id: z.uuid(),
   jobId: z.uuid(),
+  projectId: z.uuid(),
   riskTier: z.literal("R2"),
   status: ApprovalStatus,
   action: PushDraftPrAction,
@@ -164,6 +167,7 @@ export type ApprovalList = z.infer<typeof ApprovalList>;
 export const ListApprovalsQuery = z.object({
   status: ApprovalStatus.optional(),
   jobId: z.uuid().optional(),
+  projectId: z.uuid().optional(),
 });
 export type ListApprovalsQuery = z.infer<typeof ListApprovalsQuery>;
 

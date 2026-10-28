@@ -20,7 +20,9 @@ import { StopButton, useStopBanner } from "./EmergencyStop.tsx";
 import { P1Button } from "./P1Button.tsx";
 import { IssueDrawer, RepoDrawer } from "./github.tsx";
 import { InboxDrawer } from "./Inbox.tsx";
+import { NotificationToasts, useScopeNotifications } from "./notifications.tsx";
 import { RunDrawer } from "./RunDrawer.tsx";
+import { ScopeNav, useScope } from "./scope.tsx";
 import { SettingsDrawer } from "./Settings.tsx";
 import { CodeZone, EmptyZone, SystemsZone, type ZoneProps } from "./zones.tsx";
 
@@ -40,22 +42,28 @@ export function Board() {
   const search = route.useSearch();
   const navigate = route.useNavigate();
   const queryClient = useQueryClient();
-  const ws = search.ws ?? "all";
+  const scope = useScope();
+  const ws = scope.ws;
+  const projectId = scope.project?.id;
   // drawer = run:<jobId> | repo:<repoId> | issue:<repoId>:<number> (validated by BoardSearch).
   const [drawerKind, drawerId, drawerNumber] = search.drawer?.split(":") ?? [];
 
   const runners = useRunners();
-  const jobs = useRecentJobs();
+  const jobs = useRecentJobs(projectId, scope.ready);
   const queued = useQueuedJobs();
   const runner = preferredRunner(runners.data);
   const github = useGithubStatus();
-  const repos = useRepositories(github.data?.configured === true && github.data.installations.length > 0);
-  const approvals = usePendingApprovals();
+  const repos = useRepositories(
+    github.data?.configured === true && github.data.installations.length > 0 && scope.ready,
+    projectId,
+  );
+  const approvals = usePendingApprovals(projectId, scope.ready);
   const pending = approvals.data?.length;
+  const unread = useScopeNotifications().unread ?? 0;
 
-  const openRun = (id: string) => void navigate({ search: { ws: search.ws, drawer: `run:${id}` } });
-  const openRepo = (id: string) => void navigate({ search: { ws: search.ws, drawer: `repo:${id}` } });
-  const closeDrawer = () => void navigate({ search: { ws: search.ws } });
+  const openRun = (id: string) => void navigate({ search: { ...scope.keep, drawer: `run:${id}` } });
+  const openRepo = (id: string) => void navigate({ search: { ...scope.keep, drawer: `repo:${id}` } });
+  const closeDrawer = () => void navigate({ search: scope.keep });
 
   // Pan / zoom. Positions are in screen px; the board is scaled around its top-left corner.
   const vpRef = useRef<HTMLDivElement>(null);
@@ -166,6 +174,7 @@ export function Board() {
       tint: "oklch(0.80 0.06 195 / .16)",
       body: (
         <CodeZone
+          projectName={scope.project?.name}
           github={github}
           repos={repos}
           query={jobs}
@@ -185,7 +194,13 @@ export function Board() {
       w: 540,
       h: 640,
       tint: "oklch(0.85 0.07 70 / .18)",
-      body: <EmptyZone>No business sources connected. Read-only connectors arrive in P1.</EmptyZone>,
+      body: (
+        <EmptyZone>
+          {scope.project?.mode === "BUSINESS"
+            ? `No sources connected to ${scope.project.name}. Read-only business connectors arrive in P1.`
+            : "No business sources connected. Read-only connectors arrive in P1."}
+        </EmptyZone>
+      ),
     },
     {
       id: "sys",
@@ -300,7 +315,11 @@ export function Board() {
                 key={w}
                 type="button"
                 aria-pressed={ws === w}
-                onClick={() => void navigate({ search: (s) => ({ ...s, ws: w === "all" ? undefined : w }) })}
+                onClick={() =>
+                  void navigate({
+                    search: (s) => ({ ...s, ws: w === "all" ? undefined : w, project: undefined }),
+                  })
+                }
                 className={seg(ws === w)}
               >
                 {w === "all" ? "All" : w === "dev" ? "Dev" : "Business"}
@@ -309,7 +328,7 @@ export function Board() {
           </div>
         </div>
 
-        <CommandBar runners={runners.data} onQueued={openRun}>
+        <CommandBar runners={runners.data} projectId={projectId} blocked={scope.blocked} onQueued={openRun}>
           {!search.drawer && banner}
           {runners.error && (
             <div
@@ -342,18 +361,18 @@ export function Board() {
             aria-label={
               pending === undefined
                 ? "Inbox"
-                : `Inbox, ${pending} pending ${pending === 1 ? "approval" : "approvals"}`
+                : `Inbox, ${pending} pending ${pending === 1 ? "approval" : "approvals"}, ${unread} unread`
             }
-            onClick={() => void navigate({ search: { ws: search.ws, drawer: "inbox" } })}
+            onClick={() => void navigate({ search: { ...scope.keep, drawer: "inbox" } })}
             className={`${pillBtn} flex items-center gap-1.5`}
           >
             Inbox
-            {!!pending && (
+            {!!((pending ?? 0) + unread) && (
               <span
                 aria-hidden="true"
                 className="min-w-[18px] rounded-full bg-amber px-1.5 py-[3px] text-center font-mono text-[10.5px] leading-none text-onacc"
               >
-                {pending}
+                {(pending ?? 0) + unread}
               </span>
             )}
           </button>
@@ -404,28 +423,7 @@ export function Board() {
             Fit
           </button>
         </div>
-        <nav
-          aria-label="Scope"
-          className="glass hidden h-10 items-center gap-[7px] rounded-[14px] pr-1.5 pl-3 font-mono text-[11.5px] whitespace-nowrap text-ink2 md:flex"
-        >
-          <span className="text-[10px] font-medium tracking-[.08em] text-ink3">SCOPE</span>
-          <span className="font-medium text-teal">
-            {ws === "all" ? "All" : ws === "dev" ? "Dev" : "Business"}
-          </span>
-          <span aria-hidden="true" className="text-ink3">
-            ›
-          </span>
-          <P1Button
-            why="Projects and the project switcher arrive in P1."
-            className="rounded-[9px] bg-hair px-2.5 py-2 font-mono text-[11.5px] font-medium text-ink"
-          >
-            no project ▾
-          </P1Button>
-          <span aria-hidden="true" className="text-ink3">
-            ›
-          </span>
-          <span className="pr-1.5">home runner</span>
-        </nav>
+        <ScopeNav />
       </div>
 
       <div className="glass absolute right-4 bottom-4 flex items-center gap-0.5 rounded-[14px] p-1">
@@ -443,7 +441,7 @@ export function Board() {
         </P1Button>
         <button
           type="button"
-          onClick={() => void navigate({ search: { ws: search.ws, drawer: "settings" } })}
+          onClick={() => void navigate({ search: { ...scope.keep, drawer: "settings" } })}
           className="h-8 rounded-[10px] px-2.5 text-[12px] font-medium text-ink2"
         >
           Settings
@@ -457,6 +455,7 @@ export function Board() {
         <StopButton />
       </div>
 
+      <NotificationToasts hidden={!!search.drawer} />
       {drawerKind === "run" && drawerId && (
         <RunDrawer jobId={drawerId} banner={banner} onClose={closeDrawer} />
       )}
