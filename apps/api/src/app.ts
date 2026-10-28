@@ -22,6 +22,7 @@ import {
 } from "fastify-type-provider-zod";
 import { AuthStatus, GITHUB_SETUP_COMMAND, type ApiError, type ErrorCode } from "@nexus/contracts";
 import { createAuth, type Auth } from "./auth.ts";
+import { automationRoutes, automationTriggerRoute } from "./automations/routes.ts";
 import { businessRoutes } from "./business/routes.ts";
 import type { Config } from "./config.ts";
 import { conversationRoutes } from "./conversations/routes.ts";
@@ -270,8 +271,11 @@ export async function buildApp(config: Config) {
       .then(() => notificationRoutes(scope, deps))
       .then(() => businessRoutes(scope, deps))
       .then(() => conversationRoutes(scope, deps))
-      .then(() => researchRoutes(scope, deps)),
+      .then(() => researchRoutes(scope, deps))
+      .then(() => automationRoutes(scope, deps)),
   );
+  // n8n's signed trigger: its own scope, outside the owner session (like the runner routes).
+  await app.register(async (scope) => automationTriggerRoute(scope, deps));
   await app.register(async (scope) => runnerRegisterRoute(scope, deps));
   await app.register(async (scope) => runnerRoutes(scope, deps));
 

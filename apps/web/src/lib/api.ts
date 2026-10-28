@@ -4,6 +4,10 @@ import {
   ApiError,
   Approval,
   ApprovalList,
+  AutomationClient,
+  AutomationClientList,
+  AutomationClientSecret,
+  AutomationRunList,
   ConnectionTestResult,
   Connector,
   ConnectorList,
@@ -41,6 +45,7 @@ import {
   WorkspaceList,
   type ApprovalDecisionRequest,
   type ApprovalStatus,
+  type CreateAutomationClientRequest,
   type CreateConnectorRequest,
   type CreateJobRequest,
   type CreateProjectRequest,
@@ -48,6 +53,7 @@ import {
   type FindingSearchQuery,
   type JobStatus,
   type ProposalDecisionRequest,
+  type UpdateAutomationClientRequest,
   type UpdateConnectorRequest,
   type UpdateProjectRequest,
   type UpdateWatchlistRequest,
@@ -239,6 +245,23 @@ export const api = {
   },
   readFinding: (id: string) =>
     request(`/v1/research/findings/${encodeURIComponent(id)}/read`, Finding, post()),
+  // projectId omitted = the read-only "All" view.
+  automationClients: (projectId?: string) =>
+    request(
+      `/v1/automations/clients${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`,
+      AutomationClientList,
+    ).then((l) => l.items),
+  createAutomationClient: (body: z.input<typeof CreateAutomationClientRequest>) =>
+    request("/v1/automations/clients", AutomationClientSecret, post({}, body)),
+  updateAutomationClient: (id: string, body: UpdateAutomationClientRequest) =>
+    request(`/v1/automations/clients/${encodeURIComponent(id)}`, AutomationClient, post({}, body, "PATCH")),
+  rotateAutomationClient: (id: string) =>
+    request(`/v1/automations/clients/${encodeURIComponent(id)}/rotate`, AutomationClientSecret, post()),
+  automationRuns: (projectId?: string) =>
+    request(
+      `/v1/automations/runs${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`,
+      AutomationRunList,
+    ).then((l) => l.items),
 };
 
 export type FindingFilters = Partial<Omit<FindingSearchQuery, "cursor">>;
@@ -273,4 +296,8 @@ export const keys = {
   researchRuns: (watchlistId: string) => ["research", "runs", watchlistId] as const,
   brief: (runId: string) => ["research", "brief", runId] as const,
   findings: (f: FindingFilters) => ["research", "findings", f] as const,
+  automations: ["automations"] as const,
+  automationClients: (projectId: string | undefined) =>
+    ["automations", "clients", projectId ?? "all"] as const,
+  automationRuns: (projectId: string | undefined) => ["automations", "runs", projectId ?? "all"] as const,
 };
