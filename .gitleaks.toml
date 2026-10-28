@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake secrets that exist only to test the runner's output redaction"
+paths = ['''apps/runner/src/output\.test\.ts''']

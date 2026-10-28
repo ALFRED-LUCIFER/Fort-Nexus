@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@300;400;500;600&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<style>
+body{margin:0;overflow:hidden;font-family:Onest,system-ui,sans-serif;-webkit-font-smoothing:antialiased;background:var(--bg);color:var(--ink);transition:background .4s,color .4s;--bg:#efebe3;--dot:rgba(60,50,35,.14);--glass:rgba(255,253,249,.62);--glass2:rgba(255,253,249,.9);--line:rgba(255,255,255,.8);--hair:rgba(50,40,25,.10);--shadow:0 1px 0 rgba(255,255,255,.6) inset,0 12px 40px -12px rgba(60,45,20,.24);--ink:#1d1c19;--ink2:#56534b;--ink3:#857f74;--teal:oklch(0.50 0.09 195);--amber:oklch(0.62 0.13 65);--coral:oklch(0.56 0.15 32);--green:oklch(0.55 0.10 155);--violet:oklch(0.52 0.09 290);--onacc:#fff;--card:rgba(255,253,249,.82);--term:#1b1a17}
+body[data-theme=dark]{--bg:#13120f;--dot:rgba(255,245,225,.07);--glass:rgba(34,32,28,.6);--glass2:rgba(36,34,30,.92);--line:rgba(255,255,255,.08);--hair:rgba(255,255,255,.08);--shadow:0 1px 0 rgba(255,255,255,.05) inset,0 16px 50px -14px rgba(0,0,0,.7);--ink:#eeeae2;--ink2:#aca79d;--ink3:#78746b;--teal:oklch(0.78 0.09 195);--amber:oklch(0.82 0.12 70);--coral:oklch(0.74 0.14 32);--green:oklch(0.78 0.10 155);--violet:oklch(0.76 0.08 290);--onacc:#10100e;--card:rgba(38,36,32,.9);--term:#0c0b0a}
+*{box-sizing:border-box}a{color:var(--teal);text-decoration:none}a:hover{color:var(--ink)}button,input{font-family:inherit}
+@keyframes nxp{0%,100%{opacity:1}50%{opacity:.3}}@keyframes nxdash{to{stroke-dashoffset:-24}}@keyframes nxbar{0%,100%{transform:scaleY(.3)}50%{transform:scaleY(1)}}@keyframes nxspin{to{transform:rotate(360deg)}}@keyframes nxbreath{0%,100%{transform:scale(.82);opacity:.75}50%{transform:scale(1.04);opacity:1}}
+</style>
+</helmet>
+<div style="position:fixed;inset:0">
+  <div ref="{{ vpRef }}" onPointerDown="{{ panStart }}" onPointerMove="{{ panMove }}" onPointerUp="{{ panEnd }}" onPointerLeave="{{ panEnd }}" style="position:absolute;inset:0;overflow:hidden;cursor:{{ cursor }};background-image:radial-gradient(var(--dot) 1px,transparent 1.3px);background-size:{{ dotSize }};background-position:{{ dotPos }};touch-action:none">
+    <div style="position:absolute;left:0;top:0;width:2080px;height:2340px;transform-origin:0 0;will-change:transform;transform:{{ boardT }};transition:{{ boardTr }}">
+      <sc-for list="{{ zones }}" as="z" hint-placeholder-count="5">
+        <div style="position:absolute;left:{{ z.x }}px;top:{{ z.y }}px;width:{{ z.w }}px;height:{{ z.h }}px;border-radius:32px;background:{{ z.tint }};opacity:{{ z.op }};border:1px solid var(--hair);transition:all .7s cubic-bezier(.2,.8,.2,1)">
+          <div style="position:absolute;left:28px;top:22px;display:flex;align-items:baseline;gap:12px;white-space:nowrap">
+            <span style="font:400 {{ z.fs }}/1 'Instrument Serif',serif;color:var(--ink)">{{ z.label }}</span>
+            <span style="font:400 12px/1 'JetBrains Mono',monospace;color:var(--ink3)">{{ z.sub }}</span>
+          </div>
+        </div>
+      </sc-for>
+      <svg width="2080" height="2340" style="position:absolute;left:0;top:0;overflow:visible;pointer-events:none">
+        <sc-for list="{{ links }}" as="l" hint-placeholder-count="12">
+          <path d="{{ l.d }}" fill="none" stroke="{{ l.c }}" stroke-width="{{ l.w }}" stroke-dasharray="{{ l.dash }}" stroke-linecap="round" opacity="{{ l.o }}" style="animation:{{ l.anim }}"></path>
+        </sc-for>
+      </svg>
+      <sc-for list="{{ nodes }}" as="n" hint-placeholder-count="22">
+        <div data-node="1" onClick="{{ n.pick }}" onDoubleClick="{{ n.open }}" style="position:absolute;left:{{ n.x }}px;top:{{ n.y }}px;width:{{ n.w }}px;padding:14px 16px;border-radius:{{ n.r }};background:var(--card);border:1px solid var(--line);box-shadow:{{ n.shadow }};cursor:pointer;display:flex;flex-direction:column;gap:8px;transition:left .7s cubic-bezier(.2,.8,.2,1),top .7s cubic-bezier(.2,.8,.2,1),box-shadow .25s,width .3s,opacity .4s;opacity:{{ n.op }};pointer-events:{{ n.pe }}">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="width:8px;height:8px;border-radius:50%;flex:none;background:{{ n.dot }};animation:{{ n.anim }}"></span>
+            <span style="font:500 10.5px/1.2 'JetBrains Mono',monospace;letter-spacing:.04em;color:var(--ink3);text-transform:uppercase;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ n.kicker }}</span>
+            <sc-if value="{{ n.ini }}" hint-placeholder-val="{{ false }}"><span style="font:500 10px/1 'JetBrains Mono',monospace;padding:4px 6px;border-radius:7px;background:var(--hair);color:var(--ink2)">{{ n.ini }}</span></sc-if>
+          </div>
+          <sc-if value="{{ n.value }}" hint-placeholder-val="{{ false }}"><span style="font:400 36px/1 'Instrument Serif',serif;color:var(--ink)">{{ n.value }}</span></sc-if>
+          <span style="font:500 {{ n.ts }}/1.3 Onest;color:var(--ink);text-wrap:pretty">{{ n.title }}</span>
+          <sc-if value="{{ n.showMeta }}" hint-placeholder-val="{{ true }}"><span style="font:400 11.5px/1.45 'JetBrains Mono',monospace;color:var(--ink2)">{{ n.meta }}</span></sc-if>
+          <sc-if value="{{ n.showDetail }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:8px;padding-top:9px;border-top:1px solid var(--hair)">
+              <sc-if value="{{ n.segs }}" hint-placeholder-val="{{ false }}"><div style="display:grid;grid-template-columns:repeat(6,1fr);gap:3px"><sc-for list="{{ n.segs }}" as="s" hint-placeholder-count="6"><span style="height:4px;border-radius:2px;background:{{ s }}"></span></sc-for></div></sc-if>
+              <span style="font:400 12px/1.5 Onest;color:var(--ink2);text-wrap:pretty">{{ n.detail }}</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ n.opp }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:10px;padding-top:2px">
+              <span style="font:400 22px/1.1 'Instrument Serif',serif;color:var(--teal)">{{ n.impact }}</span>
+              <sc-if value="{{ n.pvOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:5px 10px;padding:10px 12px;border-radius:12px;background:var(--hair);font:400 10.5px/1.4 'JetBrains Mono',monospace"><sc-for list="{{ n.rows }}" as="r" hint-placeholder-count="4"><span style="color:var(--ink3)">{{ r.k }}</span><span style="color:var(--ink)">{{ r.v }}</span></sc-for></div>
+              </sc-if>
+              <sc-if value="{{ n.oPending }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex;gap:5px">
+                  <button onClick="{{ n.oExplain }}" style="flex:1;height:34px;border:1px solid var(--hair);background:transparent;color:var(--ink);border-radius:10px;font:500 12px/1 Onest;cursor:pointer">Explain</button>
+                  <button onClick="{{ n.oPreview }}" style="flex:1;height:34px;border:1px solid var(--hair);background:{{ n.pvBg }};color:var(--ink);border-radius:10px;font:500 12px/1 Onest;cursor:pointer">Preview</button>
+                  <button onClick="{{ n.oApprove }}" style="flex:1.2;height:34px;border:0;background:var(--amber);color:var(--onacc);border-radius:10px;font:500 12px/1 Onest;cursor:pointer;white-space:nowrap">{{ n.oApproveL }}</button>
+                </div>
+              </sc-if>
+              <sc-if value="{{ n.oDone }}" hint-placeholder-val="{{ false }}"><span style="font:500 11.5px/1.3 'JetBrains Mono',monospace;color:var(--green)">✓ {{ n.oDoneText }}</span></sc-if>
+            </div>
+          </sc-if>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+  <header style="position:absolute;left:16px;right:16px;top:14px;display:flex;gap:10px;align-items:center;pointer-events:none;flex-wrap:nowrap">
+    <div style="pointer-events:auto;display:flex;align-items:center;gap:10px;height:52px;padding:0 6px 0 14px;border-radius:18px;background:var(--glass);backdrop-filter:blur(22px) saturate(1.4);-webkit-backdrop-filter:blur(22px) saturate(1.4);border:1px solid var(--line);box-shadow:var(--shadow)">
+      <span style="width:22px;height:22px;border-radius:50%;background:conic-gradient(from 200deg,var(--teal),var(--amber),var(--teal))"></span>
+      <span style="font:italic 400 25px/1 'Instrument Serif',serif;color:var(--ink)">nexus</span>
+      <span title="{{ hostLabel }}" style="width:7px;height:7px;border-radius:50%;background:{{ hostDot }};margin-left:2px"></span>
+      <div style="display:flex;padding:3px;border-radius:12px;background:var(--hair);margin-left:8px">
+        <sc-for list="{{ wsModes }}" as="m" hint-placeholder-count="3"><button onClick="{{ m.go }}" style="border:0;border-radius:9px;padding:9px 11px;font:500 12px/1 Onest;cursor:pointer;background:{{ m.bg }};color:{{ m.fg }};box-shadow:{{ m.sh }};white-space:nowrap">{{ m.label }}</button></sc-for>
+      </div>
+    </div>
+    <div style="pointer-events:auto;flex:1 1 0;min-width:0;max-width:780px;margin:0 auto;display:flex;align-items:center;gap:8px;height:52px;padding:0 6px 0 16px;border-radius:18px;background:var(--glass2);backdrop-filter:blur(22px) saturate(1.4);-webkit-backdrop-filter:blur(22px) saturate(1.4);border:1px solid var(--line);box-shadow:var(--shadow)">
+      <input value="{{ cmd }}" onChange="{{ setCmd }}" onKeyDown="{{ cmdKey }}" onFocus="{{ cmdFocus }}" onBlur="{{ cmdBlur }}" placeholder="{{ cmdPh }}" style="flex:1;min-width:0;border:0;outline:0;background:transparent;color:var(--ink);font:400 15px/1 Onest">
+      <button onClick="{{ toggleVoice }}" title="Voice command" style="width:40px;height:40px;flex:none;border-radius:12px;border:0;cursor:pointer;background:{{ micBg }};display:flex;align-items:center;justify-content:center;gap:2.5px">
+        <sc-for list="{{ micBars }}" as="b" hint-placeholder-count="4"><span style="width:3px;height:16px;border-radius:2px;background:{{ micFg }};transform:scaleY({{ b.s }});animation:{{ b.anim }}"></span></sc-for>
+      </button>
+      <div style="display:flex;padding:3px;border-radius:12px;background:var(--hair);flex:none;display:{{ modesDisp }}">
+        <sc-for list="{{ modes }}" as="m" hint-placeholder-count="3">
+          <button onClick="{{ m.go }}" style="border:0;border-radius:9px;padding:9px 11px;font:500 12px/1 Onest;cursor:pointer;background:{{ m.bg }};color:{{ m.fg }};box-shadow:{{ m.sh }}">{{ m.label }}</button>
+        </sc-for>
+      </div>
+      <button onClick="{{ submit }}" style="height:40px;flex:none;border:0;border-radius:12px;padding:0 16px;background:var(--teal);color:var(--onacc);font:500 13px/1 Onest;cursor:pointer">{{ submitLabel }}</button>
+    </div>
+    <div style="pointer-events:auto;display:flex;align-items:center;gap:2px;height:52px;padding:0 6px;border-radius:18px;background:var(--glass);backdrop-filter:blur(22px) saturate(1.4);-webkit-backdrop-filter:blur(22px) saturate(1.4);border:1px solid var(--line);box-shadow:var(--shadow)">
+      <div style="display:flex;padding:3px;border-radius:12px;background:var(--hair)">
+        <sc-for list="{{ groups }}" as="g" hint-placeholder-count="2">
+          <button onClick="{{ g.go }}" style="border:0;border-radius:9px;padding:9px 11px;font:500 12px/1 Onest;cursor:pointer;background:{{ g.bg }};color:{{ g.fg }};box-shadow:{{ g.sh }}">{{ g.label }}</button>
+        </sc-for>
+      </div>
+      <button onClick="{{ openBrief }}" style="border:0;border-radius:12px;padding:8px 10px;font:italic 400 17px/1 'Instrument Serif',serif;cursor:pointer;background:transparent;color:var(--ink)">Brief</button>
+      <button onClick="{{ openInbox }}" style="border:0;border-radius:12px;padding:8px 8px;font:500 12.5px/1 Onest;cursor:pointer;background:transparent;color:var(--ink2);display:flex;gap:6px;align-items:center;white-space:nowrap">Inbox<span style="font:500 10px/1 'JetBrains Mono',monospace;padding:3px 6px;border-radius:999px;background:var(--amber);color:var(--onacc)">{{ inboxN }}</span></button>
+      <button onClick="{{ toggleTheme }}" title="Light / dark" style="width:36px;height:36px;border:0;border-radius:12px;cursor:pointer;background:transparent;display:flex;align-items:center;justify-content:center"><span style="width:16px;height:16px;border-radius:50%;border:1.5px solid var(--ink);background:linear-gradient(90deg,var(--ink) 50%,transparent 50%)"></span></button>
+    </div>
+  </header>
+  <sc-if value="{{ preview }}" hint-placeholder-val="{{ false }}">
+    <div data-preview="1" style="position:absolute;top:80px;left:50%;transform:translateX(-50%);width:min(780px,calc(100% - 32px));padding:20px 22px;border-radius:22px;background:var(--glass2);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid var(--line);box-shadow:var(--shadow);display:flex;flex-direction:column;gap:16px;z-index:5">
+      <span style="font:italic 400 24px/1.2 'Instrument Serif',serif;color:var(--ink)">{{ previewTitle }}</span>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px">
+        <sc-for list="{{ previewRows }}" as="r" hint-placeholder-count="5">
+          <div style="display:flex;flex-direction:column;gap:6px"><span style="font:400 10.5px/1 'JetBrains Mono',monospace;color:var(--ink3);text-transform:uppercase;letter-spacing:.05em">{{ r.k }}</span><span style="font:400 13px/1.4 Onest;color:var(--ink)">{{ r.v }}</span></div>
+        </sc-for>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button onClick="{{ cancelPreview }}" style="border:1px solid var(--hair);background:transparent;color:var(--ink2);border-radius:12px;padding:10px 14px;font:500 12.5px/1 Onest;cursor:pointer">Adjust</button>
+        <button onClick="{{ confirmPreview }}" style="border:0;background:var(--teal);color:var(--onacc);border-radius:12px;padding:10px 14px;font:500 12.5px/1 Onest;cursor:pointer">Queue on home-studio</button>
+      </div>
+    </div>
+  </sc-if>
+  <div style="position:absolute;left:16px;bottom:16px;display:flex;gap:8px;align-items:center">
+    <div style="display:flex;align-items:center;gap:2px;padding:4px;border-radius:14px;background:var(--glass);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border:1px solid var(--line);box-shadow:var(--shadow)">
+      <button onClick="{{ zoomOut }}" style="width:32px;height:32px;border:0;border-radius:10px;background:transparent;color:var(--ink);font:400 18px/1 Onest;cursor:pointer">−</button>
+      <span style="min-width:46px;text-align:center;font:500 11.5px/1 'JetBrains Mono',monospace;color:var(--ink2)">{{ zoomPct }}</span>
+      <button onClick="{{ zoomIn }}" style="width:32px;height:32px;border:0;border-radius:10px;background:transparent;color:var(--ink);font:400 18px/1 Onest;cursor:pointer">+</button>
+      <button onClick="{{ fit }}" style="border:0;border-radius:10px;background:transparent;color:var(--ink2);font:500 12px/1 Onest;cursor:pointer;padding:0 10px;height:32px">Fit</button>
+    </div>
+    <div style="position:relative;display:flex;align-items:center;gap:7px;height:40px;padding:0 6px 0 12px;border-radius:14px;background:var(--glass);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border:1px solid var(--line);box-shadow:var(--shadow);font:400 11.5px/1 'JetBrains Mono',monospace;color:var(--ink2);white-space:nowrap">
+      <span style="font:500 10px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:var(--ink3)">SCOPE</span>
+      <span style="color:var(--teal);font-weight:500">{{ scopeMode }}</span><span style="color:var(--ink3)">›</span>
+      <button onClick="{{ toggleProj }}" style="border:0;border-radius:9px;padding:8px 10px;background:var(--hair);color:var(--ink);font:500 11.5px/1 'JetBrains Mono',monospace;cursor:pointer">{{ scopeProj }} ▾</button>
+      <span style="color:var(--ink3)">›</span><span>{{ scopeEnv }}</span><span style="color:var(--ink3)">›</span><span style="padding-right:6px">{{ scopeSrc }}</span>
+      <sc-if value="{{ projMenu }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;left:0;bottom:48px;width:320px;padding:8px;border-radius:18px;background:var(--glass2);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid var(--line);box-shadow:var(--shadow);display:flex;flex-direction:column;gap:2px;z-index:8;white-space:normal">
+          <sc-for list="{{ projList }}" as="p" hint-placeholder-count="6">
+            <sc-if value="{{ p.head }}" hint-placeholder-val="{{ false }}"><span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--ink3);padding:10px 10px 6px">{{ p.t }}</span></sc-if>
+            <sc-if value="{{ p.item }}" hint-placeholder-val="{{ true }}"><button onClick="{{ p.go }}" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;text-align:left;border:0;background:transparent;border-radius:12px;padding:9px 10px;cursor:pointer;color:var(--ink)" style-hover="background:var(--hair)"><span style="display:flex;flex-direction:column;gap:4px;min-width:0"><span style="font:500 13px/1.2 Onest">{{ p.n }}</span><span style="font:400 10.5px/1.3 'JetBrains Mono',monospace;color:var(--ink3)">{{ p.m }}</span></span><span style="color:var(--teal);font:400 10px/1 Onest">{{ p.mark }}</span></button></sc-if>
+          </sc-for>
+          <span style="font:400 10.5px/1.45 'JetBrains Mono',monospace;color:var(--ink3);padding:8px 10px 4px">switching re-binds connectors and agent profile · the other project’s data leaves this session</span>
+        </div>
+      </sc-if>
+    </div>
+    
+  </div>
+<sc-if value="{{ showHist }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;top:76px;left:50%;transform:translateX(-50%);width:min(780px,calc(100% - 32px));padding:10px;border-radius:20px;background:var(--glass2);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid var(--line);box-shadow:var(--shadow);display:flex;flex-direction:column;gap:2px;z-index:7">
+      <sc-for list="{{ hist }}" as="c" hint-placeholder-count="6">
+        <sc-if value="{{ c.head }}" hint-placeholder-val="{{ false }}"><span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--ink3);padding:10px 10px 6px">{{ c.t }}</span></sc-if>
+        <sc-if value="{{ c.item }}" hint-placeholder-val="{{ true }}"><button onMouseDown="{{ c.use }}" style="display:grid;grid-template-columns:62px minmax(0,1fr) auto;gap:10px;align-items:center;text-align:left;border:0;background:transparent;border-radius:12px;padding:10px;cursor:pointer;color:var(--ink)" style-hover="background:var(--hair)"><span style="font:500 10.5px/1 'JetBrains Mono',monospace;color:var(--teal)">{{ c.mode }}</span><span style="font:400 13.5px/1.3 Onest;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.t }}</span><span style="font:400 10.5px/1 'JetBrains Mono',monospace;color:var(--ink3)">{{ c.m }}</span></button></sc-if>
+      </sc-for>
+      <span style="font:400 10.5px/1.4 'JetBrains Mono',monospace;color:var(--ink3);padding:8px 10px 4px">reruns get a new run ID and today’s permissions · secrets are never saved in commands</span>
+    </div>
+  </sc-if>
+  <sc-if value="{{ vhud }}" hint-placeholder-val="{{ false }}">
+    <div data-vhud="1" style="position:absolute;top:80px;left:50%;transform:translateX(-50%);width:min(640px,calc(100% - 32px));padding:18px 20px;border-radius:24px;background:var(--glass2);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid var(--line);box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px;z-index:9">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="display:flex;gap:3px;align-items:center;height:18px"><sc-for list="{{ vhud.bars }}" as="b" hint-placeholder-count="5"><span style="width:3px;height:18px;border-radius:2px;background:{{ vhud.c }};animation:{{ b }}"></span></sc-for></span>
+        <span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:{{ vhud.c }}">{{ vhud.state }}</span>
+        <span style="flex:1"></span>
+        <span style="font:400 10.5px/1 'JetBrains Mono',monospace;color:var(--ink3)">{{ vhud.mic }}</span>
+        <button onClick="{{ toggleVoice }}" style="border:0;background:var(--hair);color:var(--ink);border-radius:10px;padding:8px 12px;font:500 12px/1 Onest;cursor:pointer">End</button>
+      </div>
+      <span style="font:400 24px/1.3 'Instrument Serif',serif;color:var(--ink);text-wrap:pretty">{{ vhud.caption }}</span>
+      <span style="font:400 10.5px/1.5 'JetBrains Mono',monospace;color:var(--ink3)">{{ vhud.disc }}</span>
+    </div>
+  </sc-if>
+  <sc-if value="{{ toasts }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;right:16px;top:80px;width:min(360px,calc(100% - 32px));display:flex;flex-direction:column;gap:10px;z-index:9">
+      <sc-for list="{{ toasts }}" as="t" hint-placeholder-count="2">
+        <div data-toast="1" style="padding:14px 16px;border-radius:20px;background:var(--glass2);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid var(--line);box-shadow:var(--shadow);display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;gap:8px;align-items:center"><span style="width:7px;height:7px;border-radius:50%;background:{{ t.c }}"></span><span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.05em;color:{{ t.c }}">{{ t.cat }}</span><span style="flex:1"></span><span style="font:400 10.5px/1 'JetBrains Mono',monospace;color:var(--ink3)">{{ t.meta }}</span></div>
+          <span style="font:500 14px/1.35 Onest;color:var(--ink)">{{ t.title }}</span>
+          <span style="font:400 12px/1.45 Onest;color:var(--ink2);text-wrap:pretty">{{ t.sub }}</span>
+          <div style="display:flex;gap:6px"><button onClick="{{ t.later }}" style="border:1px solid var(--hair);background:transparent;color:var(--ink2);border-radius:11px;padding:9px 11px;font:500 12px/1 Onest;cursor:pointer">Later</button><button onClick="{{ t.open }}" style="flex:1;border:1px solid var(--hair);background:transparent;color:var(--ink);border-radius:11px;padding:9px 11px;font:500 12px/1 Onest;cursor:pointer">Open</button><button onClick="{{ t.talk }}" style="flex:1;border:0;background:var(--teal);color:var(--onacc);border-radius:11px;padding:9px 11px;font:500 12px/1 Onest;cursor:pointer">Talk</button></div>
+        </div>
+      </sc-for>
+    </div>
+  </sc-if>
+  <sc-if value="{{ orbOn }}" hint-placeholder-val="{{ false }}">
+    <sc-if value="{{ whisper }}" hint-placeholder-val="{{ false }}">
+      <div data-whisper="1" style="position:absolute;right:94px;bottom:70px;width:min(330px,calc(100% - 130px));padding:14px 16px;border-radius:20px 20px 6px 20px;background:var(--glass2);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid var(--line);box-shadow:var(--shadow);display:flex;flex-direction:column;gap:10px;z-index:9">
+        <span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--teal)">NEXUS · NOTICED JUST NOW</span>
+        <span style="font:400 19px/1.3 'Instrument Serif',serif;color:var(--ink);text-wrap:pretty">{{ whisper.text }}</span>
+        <div style="display:flex;gap:6px"><button onClick="{{ whisper.later }}" style="border:1px solid var(--hair);background:transparent;color:var(--ink2);border-radius:11px;padding:9px 12px;font:500 12px/1 Onest;cursor:pointer">Later</button><button onClick="{{ whisper.go }}" style="border:0;background:var(--ink);color:var(--bg);border-radius:11px;padding:9px 12px;font:500 12px/1 Onest;cursor:pointer">Show me</button></div>
+      </div>
+    </sc-if>
+    <button onClick="{{ orbClick }}" title="Talk to NEXUS" style="position:absolute;right:16px;bottom:64px;width:64px;height:64px;border-radius:50%;border:1px solid var(--line);background:var(--glass2);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:var(--shadow);cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:9">{{ orb }}</button>
+  </sc-if>
+  <sc-if value="{{ banner }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;top:76px;left:50%;transform:translateX(-50%);width:min(780px,calc(100% - 32px));display:flex;align-items:center;gap:12px;padding:12px 14px 12px 18px;border-radius:16px;background:{{ banner.bg }};color:#fff;box-shadow:var(--shadow);z-index:12">
+      <span style="width:8px;height:8px;border-radius:50%;background:#fff;animation:nxp 1.2s infinite;flex:none"></span>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px"><span style="font:500 13.5px/1.3 Onest">{{ banner.title }}</span><span style="font:400 11.5px/1.4 'JetBrains Mono',monospace;opacity:.85">{{ banner.sub }}</span></div>
+      <button onClick="{{ banner.act }}" style="flex:none;border:0;background:#fff;color:#1d1c19;border-radius:11px;padding:9px 12px;font:500 12.5px/1 Onest;cursor:pointer">{{ banner.actLabel }}</button>
+    </div>
+  </sc-if>
+  <div style="position:absolute;right:16px;bottom:16px;display:flex;gap:2px;align-items:center;padding:4px;border-radius:14px;background:var(--glass);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border:1px solid var(--line);box-shadow:var(--shadow)">
+    <button onClick="{{ openTalk }}" style="border:0;border-radius:10px;background:transparent;color:var(--teal);font:500 12px/1 Onest;cursor:pointer;padding:0 10px;height:32px">Talk</button>
+    <button onClick="{{ openKnow }}" style="border:0;border-radius:10px;background:transparent;color:var(--ink2);font:500 12px/1 Onest;cursor:pointer;padding:0 10px;height:32px">Knowledge</button>
+    <button onClick="{{ openSettings }}" style="border:0;border-radius:10px;background:transparent;color:var(--ink2);font:500 12px/1 Onest;cursor:pointer;padding:0 10px;height:32px">Settings</button>
+    <button onClick="{{ togglePhone }}" style="border:0;border-radius:10px;background:transparent;color:var(--ink2);font:500 12px/1 Onest;cursor:pointer;padding:0 10px;height:32px">Phone</button>
+    <button onClick="{{ toggleKill }}" style="border:0;border-radius:10px;background:{{ killBg }};color:{{ killFg }};font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.06em;cursor:pointer;padding:0 12px;height:32px">{{ killLabel }}</button>
+  </div>
+  <sc-if value="{{ insp }}" hint-placeholder-val="{{ false }}">
+    <div data-inspector="1" style="position:absolute;left:{{ insp.x }}px;top:{{ insp.y }}px;width:290px;padding:16px;border-radius:20px;background:var(--glass2);backdrop-filter:blur(26px) saturate(1.5);-webkit-backdrop-filter:blur(26px) saturate(1.5);border:1px solid var(--line);box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px;transition:left .35s cubic-bezier(.2,.8,.2,1),top .35s cubic-bezier(.2,.8,.2,1);z-index:4">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.05em;text-transform:uppercase;color:var(--ink3)">{{ insp.kicker }}</span>
+        <button onClick="{{ closeInsp }}" style="border:0;background:transparent;color:var(--ink3);font:400 16px/1 Onest;cursor:pointer;padding:2px 4px">×</button>
+      </div>
+      <span style="font:400 22px/1.15 'Instrument Serif',serif;color:var(--ink);text-wrap:pretty">{{ insp.title }}</span>
+      <span style="font:400 12.5px/1.5 Onest;color:var(--ink2);text-wrap:pretty">{{ insp.detail }}</span>
+      <div style="display:flex;flex-direction:column;gap:6px;padding:10px 12px;border-radius:12px;background:var(--hair)">
+        <sc-for list="{{ insp.facts }}" as="f" hint-placeholder-count="3">
+          <div style="display:flex;justify-content:space-between;gap:10px;font:400 11.5px/1.3 'JetBrains Mono',monospace"><span style="color:var(--ink3)">{{ f.k }}</span><span style="color:var(--ink);text-align:right">{{ f.v }}</span></div>
+        </sc-for>
+      </div>
+      <sc-if value="{{ insp.pending }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;gap:6px">
+          <button onClick="{{ insp.deny }}" style="flex:1;border:1px solid var(--hair);background:transparent;color:var(--ink2);border-radius:12px;padding:10px;font:500 12.5px/1 Onest;cursor:pointer">Deny</button>
+          <button onClick="{{ insp.approve }}" style="flex:1;border:0;background:var(--amber);color:var(--onacc);border-radius:12px;padding:10px;font:500 12.5px/1 Onest;cursor:pointer">Approve</button>
+        </div>
+      </sc-if>
+      <div style="display:flex;gap:6px">
+        <button onClick="{{ insp.quick }}" style="flex:1;border:1px solid var(--hair);background:transparent;color:var(--ink);border-radius:12px;padding:10px;font:500 12.5px/1 Onest;cursor:pointer">{{ insp.quickLabel }}</button>
+        <button onClick="{{ insp.open }}" style="flex:1;border:0;background:var(--ink);color:var(--bg);border-radius:12px;padding:10px;font:500 12.5px/1 Onest;cursor:pointer">Open focus →</button>
+      </div>
+    </div>
+  </sc-if>
+<sc-if value="{{ dr }}" hint-placeholder-val="{{ false }}">
+    <div data-drawer="1" style="position:absolute;right:16px;top:80px;bottom:16px;width:min(760px,calc(100% - 32px));border-radius:26px;background:var(--glass2);backdrop-filter:blur(30px) saturate(1.5);-webkit-backdrop-filter:blur(30px) saturate(1.5);border:1px solid var(--line);box-shadow:0 30px 90px -30px rgba(40,30,10,.4);display:flex;flex-direction:column;overflow:hidden;z-index:10">
+      <div style="padding:20px 24px 16px;display:flex;gap:16px;align-items:flex-start;border-bottom:1px solid var(--hair)">
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:8px">
+          <span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3)">{{ dr.kicker }}</span>
+          <h2 style="margin:0;font:400 30px/1.1 'Instrument Serif',serif;color:var(--ink);text-wrap:pretty">{{ dr.title }}</h2>
+        </div>
+        <button onClick="{{ closeDrawer }}" style="flex:none;border:0;background:var(--hair);color:var(--ink2);border-radius:12px;padding:9px 12px;font:500 12px/1 Onest;cursor:pointer">Back to board  esc</button>
+      </div>
+      <div data-dscroll="1" style="flex:1;min-height:0;overflow:auto;padding:20px 24px 24px;display:flex;flex-direction:column;gap:18px">
+        <sc-if value="{{ dConv }}" hint-placeholder-val="{{ false }}">
+          <div data-stagger="1" style="flex:none;display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 12px;border-radius:14px;background:var(--hair)">
+            <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap;font:400 11.5px/1 'JetBrains Mono',monospace;color:var(--ink2)"><sc-for list="{{ cv.crumbs }}" as="c" hint-placeholder-count="4"><span style="color:{{ c.c }}">{{ c.t }}</span><span style="color:var(--ink3)">{{ c.sep }}</span></sc-for></div>
+            <span style="font:400 11px/1 'JetBrains Mono',monospace;color:var(--ink3)">{{ cv.profile }}</span>
+          </div>
+          <div data-stagger="1" style="flex:none;padding:16px 18px;border-radius:18px;border:1px solid var(--hair);display:flex;flex-direction:column;gap:12px">
+            <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap"><span style="font:400 21px/1.2 'Instrument Serif',serif;color:var(--ink)">{{ cv.subject }}</span><span style="font:400 10.5px/1 'JetBrains Mono',monospace;color:var(--ink3)">{{ cv.subMeta }}</span></div>
+            <div style="display:flex;gap:6px">
+              <sc-for list="{{ cv.ladder }}" as="s" hint-placeholder-count="7"><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:7px"><span style="height:4px;border-radius:2px;background:{{ s.c }}"></span><span style="font:500 11px/1.25 Onest;color:{{ s.tc }};text-wrap:pretty">{{ s.l }}</span><span style="font:400 10px/1 'JetBrains Mono',monospace;color:var(--ink3)">{{ s.st }}</span></div></sc-for>
+            </div>
+            <span style="font:400 10.5px/1.4 'JetBrains Mono',monospace;color:var(--ink3)">{{ cv.ladderNote }}</span>
+          </div>
+          <sc-for list="{{ cv.turns }}" as="m" hint-placeholder-count="5">
+            <div data-stagger="1" style="flex:none;display:flex;flex-direction:column;gap:8px;align-items:{{ m.al }}">
+              <span style="font:400 10.5px/1 'JetBrains Mono',monospace;color:var(--ink3)">{{ m.who }} · {{ m.via }} · {{ m.t }}</span>
+              <div style="max-width:min(560px,92%);padding:12px 16px;border-radius:{{ m.r }};background:{{ m.bg }};color:{{ m.fg }};font:400 14px/1.55 Onest;text-wrap:pretty">{{ m.text }}</div>
+              <sc-if value="{{ m.srcs }}" hint-placeholder-val="{{ false }}"><div style="display:flex;gap:5px;flex-wrap:wrap;max-width:560px"><sc-for list="{{ m.srcs }}" as="s" hint-placeholder-count="2"><span style="font:400 10.5px/1.2 'JetBrains Mono',monospace;padding:5px 8px;border-radius:999px;border:1px solid var(--hair);color:var(--ink2);display:flex;gap:6px;align-items:center"><span style="width:6px;height:6px;border-radius:50%;background:{{ s.c }}"></span>{{ s.k }} · {{ s.l }}</span></sc-for></div></sc-if>
+              <sc-if value="{{ m.prop }}" hint-placeholder-val="{{ false }}">
+                <div style="width:min(560px,100%);padding:16px;border-radius:18px;background:{{ m.prop.bg }};border:1px solid {{ m.prop.bd }};display:flex;flex-direction:column;gap:10px">
+                  <span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:{{ m.prop.fg }}">{{ m.prop.kicker }}</span>
+                  <span style="font:400 20px/1.2 'Instrument Serif',serif;color:var(--ink)">{{ m.prop.title }}</span>
+                  <div style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 14px;font:400 11.5px/1.35 'JetBrains Mono',monospace"><sc-for list="{{ m.prop.rows }}" as="r" hint-placeholder-count="5"><span style="color:var(--ink3)">{{ r.k }}</span><span style="color:var(--ink)">{{ r.v }}</span></sc-for></div>
+                  <sc-if value="{{ m.prop.pending }}" hint-placeholder-val="{{ true }}"><div style="display:flex;gap:6px"><button onClick="{{ m.prop.deny }}" style="flex:1;border:1px solid var(--hair);background:transparent;color:var(--ink2);border-radius:12px;padding:10px;font:500 12.5px/1 Onest;cursor:pointer">Not now</button><button onClick="{{ m.prop.approve }}" style="flex:1;border:0;background:var(--amber);color:var(--onacc);border-radius:12px;padding:10px;font:500 12.5px/1 Onest;cursor:pointer">Confirm &amp; open PR</button></div></sc-if>
+                  <sc-if value="{{ m.prop.done }}" hint-placeholder-val="{{ false }}"><span style="font:500 12px/1.4 'JetBrains Mono',monospace;color:{{ m.prop.fg }}">{{ m.prop.doneText }}</span></sc-if>
+                </div>
+              </sc-if>
+              <sc-if value="{{ m.mail }}" hint-placeholder-val="{{ false }}">
+                <div style="width:min(560px,100%);border-radius:18px;border:1px solid {{ m.mail.bd }};background:var(--card);opacity:{{ m.mail.op }};overflow:hidden">
+                  <div style="display:flex;justify-content:space-between;gap:10px;padding:11px 14px;border-bottom:1px solid var(--hair);font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.05em"><span style="color:{{ m.mail.fg }}">{{ m.mail.kicker }}</span><span style="color:var(--ink3)">{{ m.mail.hash }}</span></div>
+                  <div style="padding:10px 14px;display:grid;grid-template-columns:62px minmax(0,1fr);gap:6px 10px;font:400 11.5px/1.35 'JetBrains Mono',monospace;border-bottom:1px solid var(--hair)"><sc-for list="{{ m.mail.rows }}" as="r" hint-placeholder-count="3"><span style="color:var(--ink3)">{{ r.k }}</span><span style="color:var(--ink)">{{ r.v }}</span></sc-for></div>
+                  <p style="margin:0;padding:12px 14px;font:400 13.5px/1.6 Onest;color:var(--ink);text-wrap:pretty">{{ m.mail.body }}</p>
+                  <sc-if value="{{ m.mail.pending }}" hint-placeholder-val="{{ false }}"><div style="display:flex;gap:6px;justify-content:flex-end;padding:0 14px 14px;flex-wrap:wrap"><button style="border:1px solid var(--hair);background:transparent;color:var(--ink);border-radius:11px;padding:9px 12px;font:500 12px/1 Onest;cursor:pointer">Edit</button><button onClick="{{ m.mail.send }}" style="border:0;background:var(--amber);color:var(--onacc);border-radius:11px;padding:9px 12px;font:500 12px/1 Onest;cursor:pointer">Approve &amp; send v2</button></div></sc-if>
+                  <sc-if value="{{ m.mail.done }}" hint-placeholder-val="{{ false }}"><span style="display:block;padding:0 14px 14px;font:500 12px/1.4 'JetBrains Mono',monospace;color:var(--green)">{{ m.mail.doneText }}</span></sc-if>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+          <div style="flex:none;position:sticky;bottom:-24px;margin:auto -24px -24px;padding:12px 24px 18px;display:flex;flex-direction:column;gap:10px;background:var(--bg);border-top:1px solid var(--hair);z-index:2">
+            <div style="display:flex;gap:6px;flex-wrap:wrap"><sc-for list="{{ cv.chips }}" as="c" hint-placeholder-count="4"><button onClick="{{ c.go }}" style="border:1px solid var(--hair);background:transparent;color:var(--ink);border-radius:999px;padding:8px 12px;font:400 12px/1 Onest;cursor:pointer;white-space:nowrap" style-hover="background:var(--hair)">{{ c.l }}</button></sc-for></div>
+            <div style="display:flex;align-items:center;gap:8px;height:52px;padding:0 6px 0 16px;border-radius:16px;background:var(--hair)">
+              <input value="{{ cvText }}" onChange="{{ setCvText }}" onKeyDown="{{ cvKey }}" placeholder="{{ cv.ph }}" style="flex:1;min-width:0;border:0;outline:0;background:transparent;color:var(--ink);font:400 14px/1 Onest">
+              <button onClick="{{ cvTalk }}" style="height:40px;flex:none;border:0;border-radius:12px;padding:0 14px;background:{{ cvMicBg }};color:{{ cvMicFg }};font:500 12.5px/1 Onest;cursor:pointer;display:flex;gap:7px;align-items:center"><span style="width:7px;height:7px;border-radius:50%;background:currentColor;animation:{{ cvMicAnim }}"></span>{{ cvMicL }}</button>
+              <button onClick="{{ cvSend }}" style="height:40px;flex:none;border:0;border-radius:12px;padding:0 16px;background:var(--teal);color:var(--onacc);font:500 13px/1 Onest;cursor:pointer">Send</button>
+            </div>
+            <span style="font:400 10.5px/1.45 'JetBrains Mono',monospace;color:var(--ink3)">{{ cv.foot }}</span>
+          </div>
+        </sc-if>
+        <sc-if value="{{ dOpp }}" hint-placeholder-val="{{ false }}">
+          <div data-stagger="1" style="flex:none;display:flex;gap:14px;flex-wrap:wrap;align-items:baseline"><span style="font:400 36px/1 'Instrument Serif',serif;color:var(--teal)">{{ op.impact }}</span><span style="font:400 11.5px/1 'JetBrains Mono',monospace;color:var(--ink3)">{{ op.conf }}</span></div>
+          <div data-stagger="1" style="flex:none;display:flex;gap:10px;align-items:flex-start;padding:14px 16px;border-radius:16px;background:oklch(0.60 0.08 195 / .09)"><span style="font:italic 400 20px/1 'Instrument Serif',serif;color:var(--teal);flex:none">Explain</span><span style="font:400 13.5px/1.6 Onest;color:var(--ink2);text-wrap:pretty">{{ op.explain }}</span></div>
+          <div data-stagger="1" style="flex:none;display:flex;gap:6px;flex-wrap:wrap"><sc-for list="{{ op.srcs }}" as="s" hint-placeholder-count="3"><span style="font:400 11px/1.2 'JetBrains Mono',monospace;padding:6px 9px;border-radius:999px;border:1px solid var(--hair);color:var(--ink2);display:flex;gap:6px;align-items:center"><span style="width:6px;height:6px;border-radius:50%;background:{{ s.c }}"></span>{{ s.k }} · {{ s.l }}</span></sc-for></div>
+          <div data-stagger="1" style="flex:none;padding:18px;border-radius:18px;border:1px solid {{ op.bd }};display:flex;flex-direction:column;gap:14px">
+            <span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--ink3)">PREVIEW · EXACTLY WHAT WILL HAPPEN</span>
+            <div style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 16px;font:400 12px/1.4 'JetBrains Mono',monospace"><sc-for list="{{ op.rows }}" as="r" hint-placeholder-count="4"><span style="color:var(--ink3)">{{ r.k }}</span><span style="color:var(--ink)">{{ r.v }}</span></sc-for></div>
+            <sc-if value="{{ op.pending }}" hint-placeholder-val="{{ true }}"><div style="display:flex;gap:8px;justify-content:flex-end"><button onClick="{{ op.deny }}" style="border:1px solid var(--hair);background:transparent;color:var(--ink2);border-radius:12px;padding:11px 16px;font:500 12.5px/1 Onest;cursor:pointer">Not now</button><button onClick="{{ op.approve }}" style="border:0;background:var(--amber);color:var(--onacc);border-radius:12px;padding:11px 16px;font:500 12.5px/1 Onest;cursor:pointer">{{ op.approveL }}</button></div></sc-if>
+            <sc-if value="{{ op.done }}" hint-placeholder-val="{{ false }}"><span style="font:500 12px/1.4 'JetBrains Mono',monospace;color:{{ op.dc }}">{{ op.doneText }}</span></sc-if>
+          </div>
+        </sc-if>
+        <sc-if value="{{ dRun }}" hint-placeholder-val="{{ false }}">
+          <div data-stagger="1" style="flex:none;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px">
+            <sc-for list="{{ stages }}" as="s" hint-placeholder-count="6">
+              <div style="display:flex;flex-direction:column;gap:7px;min-width:0"><span style="height:4px;border-radius:2px;background:{{ s.c }}"></span><span style="font:500 11.5px/1.2 Onest;color:{{ s.tc }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.label }}</span><span style="font:400 10.5px/1 'JetBrains Mono',monospace;color:var(--ink3)">{{ s.t }}</span></div>
+            </sc-for>
+          </div>
+          <div data-stagger="1" style="flex:none;display:flex;gap:10px;align-items:flex-start;padding:14px 16px;border-radius:16px;background:oklch(0.60 0.08 195 / .09)"><span style="font:italic 400 20px/1 'Instrument Serif',serif;color:var(--teal);flex:none">Explain</span><span style="font:400 13px/1.55 Onest;color:var(--ink2);text-wrap:pretty">{{ explain }}</span></div>
+          <div data-stagger="1" style="flex:none;border-radius:18px;background:var(--term);overflow:hidden">
+            <div style="display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.07);flex-wrap:wrap">
+              <span style="width:7px;height:7px;border-radius:50%;background:oklch(0.78 0.10 155);animation:nxp 1.6s infinite"></span>
+              <span style="font:500 12px/1 Onest;color:#eeeae2">Live on home-studio</span>
+              <span style="font:400 11px/1 'JetBrains Mono',monospace;color:#78746b">container nx-8f21 · redacted · reconnect-safe</span>
+            </div>
+            <div style="padding:14px 16px;display:flex;flex-direction:column;gap:4px;font:400 12px/1.6 'JetBrains Mono',monospace;max-height:300px;overflow:auto">
+              <sc-for list="{{ runLog }}" as="ln" hint-placeholder-count="10">
+                <div style="display:grid;grid-template-columns:62px 74px minmax(0,1fr);gap:10px"><span style="color:#5e5a52">{{ ln.t }}</span><span style="color:{{ ln.kc }}">{{ ln.k }}</span><span style="color:#d9d4ca;word-break:break-word">{{ ln.m }}</span></div>
+              </sc-for>
+            </div>
+          </div>
+          <div data-stagger="1" style="flex:none;display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:14px">
+            <div style="border-radius:18px;border:1px solid var(--hair);overflow:hidden">
+              <div style="padding:12px 16px;font:500 13px/1 Onest;color:var(--ink);border-bottom:1px solid var(--hair)">Changed files · +142 −38</div>
+              <sc-for list="{{ files }}" as="f" hint-placeholder-count="5">
+                <div style="display:flex;justify-content:space-between;gap:10px;padding:8px 16px;border-bottom:1px solid var(--hair);font:400 11.5px/1.3 'JetBrains Mono',monospace"><span style="color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ f.p }}</span><span style="flex:none;white-space:nowrap"><span style="color:var(--green)">+{{ f.a }}</span> <span style="color:var(--coral)">−{{ f.d }}</span></span></div>
+              </sc-for>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <div style="border-radius:18px;padding:16px;background:{{ gateBg }};border:1px solid {{ gateBd }};display:flex;flex-direction:column;gap:10px">
+                <span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:{{ gateFg }}">{{ gateKicker }}</span>
+                <span style="font:400 20px/1.2 'Instrument Serif',serif;color:var(--ink)">{{ gateTitle }}</span>
+                <span style="font:400 12px/1.45 Onest;color:var(--ink2)">Never merges. main is protected. Params hash 7f3a…c91.</span>
+                <sc-if value="{{ gatePending }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;gap:6px"><button onClick="{{ gateDeny }}" style="flex:1;border:1px solid var(--hair);background:transparent;color:var(--ink2);border-radius:12px;padding:10px;font:500 12.5px/1 Onest;cursor:pointer">Deny</button><button onClick="{{ gateApprove }}" style="flex:1;border:0;background:var(--amber);color:var(--onacc);border-radius:12px;padding:10px;font:500 12.5px/1 Onest;cursor:pointer">Approve push</button></div>
+                </sc-if>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                <sc-for list="{{ runStats }}" as="s" hint-placeholder-count="4"><div style="padding:10px 12px;border-radius:14px;background:var(--hair);display:flex;flex-direction:column;gap:4px"><span style="font:400 10.5px/1 'JetBrains Mono',monospace;color:var(--ink3)">{{ s.k }}</span><span style="font:500 13px/1.2 Onest;color:var(--ink)">{{ s.v }}</span></div></sc-for>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+        <sc-if value="{{ dIssue }}" hint-placeholder-val="{{ false }}">
+          <p data-stagger="1" style="flex:none;margin:0;font:400 15px/1.6 Onest;color:var(--ink2);text-wrap:pretty">{{ issueBody }}</p>
+          <div data-stagger="1" style="flex:none;display:flex;flex-direction:column;gap:8px;padding:16px;border-radius:18px;border:1px solid var(--hair)">
+            <span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--ink3)">ACCEPTANCE CRITERIA · EXTRACTED</span>
+            <sc-for list="{{ issueAC }}" as="a" hint-placeholder-count="2"><div style="display:flex;gap:10px;font:400 13.5px/1.45 Onest;color:var(--ink)"><span style="width:14px;height:14px;border-radius:5px;border:1.5px solid var(--teal);margin-top:2px;flex:none"></span>{{ a }}</div></sc-for>
+          </div>
+          <div data-stagger="1" style="flex:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
+            <sc-for list="{{ launch }}" as="f" hint-placeholder-count="6"><div style="padding:12px 14px;border-radius:14px;background:var(--hair);display:flex;flex-direction:column;gap:6px"><span style="font:400 10.5px/1 'JetBrains Mono',monospace;color:var(--ink3);text-transform:uppercase">{{ f.k }}</span><span style="font:500 13px/1.2 Onest;color:var(--ink)">{{ f.v }}</span></div></sc-for>
+          </div>
+          <div data-stagger="1" style="flex:none;display:flex;gap:8px;justify-content:space-between;align-items:center;flex-wrap:wrap">
+            <span style="font:400 12px/1.4 Onest;color:var(--ink3)">Runs at home in an isolated container. Push + PR always ask you first.</span>
+            <div style="display:flex;gap:8px"><button style="border:1px solid var(--hair);background:transparent;color:var(--ink);border-radius:14px;padding:12px 16px;font:500 13px/1 Onest;cursor:pointer">Plan only</button><button onClick="{{ startRun }}" style="border:0;background:var(--teal);color:var(--onacc);border-radius:14px;padding:12px 18px;font:500 13px/1 Onest;cursor:pointer">Start run on home-studio</button></div>
+          </div>
+        </sc-if>
+<sc-if value="{{ dBiz }}" hint-placeholder-val="{{ false }}">
+          <div data-stagger="1" style="flex:none;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px">
+            <sc-for list="{{ briefStats }}" as="s" hint-placeholder-count="4"><div style="padding:14px;border-radius:16px;background:var(--hair);display:flex;flex-direction:column;gap:6px"><span style="font:400 30px/1 'Instrument Serif',serif;color:var(--ink)">{{ s.v }}</span><span style="font:400 11px/1.3 'JetBrains Mono',monospace;color:var(--ink3)">{{ s.k }}</span></div></sc-for>
+          </div>
+          <div data-stagger="1" style="flex:none;padding:18px;border-radius:18px;border:1px solid var(--hair);display:flex;flex-direction:column;gap:12px">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap"><span style="font:500 13px/1 Onest;color:var(--ink)">Orders by hour</span><span style="font:400 11px/1 'JetBrains Mono',monospace;color:var(--ink3)">■ today  □ yesterday · GST</span></div>
+            <div style="display:grid;grid-template-columns:repeat(15,minmax(0,1fr));gap:5px;align-items:end;height:140px">
+              <sc-for list="{{ hours }}" as="h" hint-placeholder-count="15"><div style="display:flex;gap:2px;align-items:flex-end;height:100%"><span style="flex:1;border-radius:3px;background:var(--hair);height:{{ h.y }}%"></span><span style="flex:1;border-radius:3px;background:var(--teal);opacity:{{ h.o }};height:{{ h.t }}%"></span></div></sc-for>
+            </div>
+          </div>
+          <div data-stagger="1" style="flex:none;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px">
+            <div style="padding:18px;border-radius:18px;border:1px solid var(--hair);display:flex;flex-direction:column;gap:10px">
+              <span style="font:500 13px/1 Onest;color:var(--ink)">Failed payments by reason</span>
+              <sc-for list="{{ fails }}" as="f" hint-placeholder-count="4"><div style="display:grid;grid-template-columns:120px minmax(0,1fr) 24px;gap:10px;align-items:center"><span style="font:400 12.5px/1.2 Onest;color:var(--ink2)">{{ f.r }}</span><span style="height:8px;border-radius:4px;background:var(--hair);overflow:hidden"><span style="display:block;height:100%;border-radius:4px;width:{{ f.w }}%;background:{{ f.c }}"></span></span><span style="font:500 12px/1 'JetBrains Mono',monospace;color:var(--ink);text-align:right">{{ f.n }}</span></div></sc-for>
+            </div>
+            <div style="padding:18px;border-radius:18px;background:oklch(0.70 0.13 65 / .12);display:flex;flex-direction:column;gap:10px">
+              <span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--amber)">FINANCIAL ANALYST · HYPOTHESIS</span>
+              <span style="font:400 19px/1.3 'Instrument Serif',serif;color:var(--ink);text-wrap:pretty">3DS timeouts began 11:40 — the same minute checkout-api v2.31 deployed. Likely related, not proven.</span>
+              <div style="display:flex;gap:6px;flex-wrap:wrap"><button onClick="{{ toInc }}" style="border:0;background:var(--ink);color:var(--bg);border-radius:12px;padding:10px 12px;font:500 12.5px/1 Onest;cursor:pointer">Open incident</button><button style="border:1px solid var(--hair);background:transparent;color:var(--ink);border-radius:12px;padding:10px 12px;font:500 12.5px/1 Onest;cursor:pointer">Task for DevOps</button></div>
+            </div>
+          </div>
+          <span data-stagger="1" style="flex:none;font:400 11px/1.5 'JetBrains Mono',monospace;color:var(--ink3)">source: supabase:shop-prod (read-only role) · stripe restricted key · freshness 14:30 · gross ≠ net ≠ profit</span>
+        </sc-if>
+        <sc-if value="{{ dInc }}" hint-placeholder-val="{{ false }}">
+          <div data-stagger="1" style="flex:none;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px">
+            <sc-for list="{{ incStats }}" as="s" hint-placeholder-count="4"><div style="padding:14px;border-radius:16px;background:var(--hair);display:flex;flex-direction:column;gap:6px"><span style="font:400 26px/1 'Instrument Serif',serif;color:{{ s.c }}">{{ s.v }}</span><span style="font:400 11px/1.3 'JetBrains Mono',monospace;color:var(--ink3)">{{ s.k }}</span></div></sc-for>
+          </div>
+          <div data-stagger="1" style="flex:none;padding:18px;border-radius:18px;border:1px solid var(--hair);display:flex;flex-direction:column;gap:14px">
+            <span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--ink3)">DEVOPS AGENT · HYPOTHESES (CONFIDENCE)</span>
+            <sc-for list="{{ hypos }}" as="h" hint-placeholder-count="3">
+              <div style="display:grid;grid-template-columns:52px minmax(0,1fr);gap:12px;align-items:center"><span style="font:400 26px/1 'Instrument Serif',serif;color:var(--ink)">{{ h.p }}</span><div style="display:flex;flex-direction:column;gap:6px"><span style="font:400 13.5px/1.45 Onest;color:var(--ink)">{{ h.t }}</span><span style="height:4px;border-radius:2px;background:var(--hair);overflow:hidden"><span style="display:block;height:100%;width:{{ h.p }};background:var(--coral)"></span></span></div></div>
+            </sc-for>
+          </div>
+          <div data-stagger="1" style="flex:none;display:flex;gap:8px;flex-wrap:wrap"><button style="border:1px solid var(--hair);background:transparent;color:var(--ink);border-radius:14px;padding:12px 16px;font:500 13px/1 Onest;cursor:pointer">View logs</button><button style="border:1px solid var(--hair);background:transparent;color:var(--ink);border-radius:14px;padding:12px 16px;font:500 13px/1 Onest;cursor:pointer">Propose rollback (needs approval)</button><button onClick="{{ toIssue }}" style="border:0;background:var(--teal);color:var(--onacc);border-radius:14px;padding:12px 16px;font:500 13px/1 Onest;cursor:pointer">Create fix issue → run</button></div>
+        </sc-if>
+        <sc-if value="{{ dRes }}" hint-placeholder-val="{{ false }}">
+          <div data-stagger="1" style="flex:none;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px">
+            <div style="padding:14px 16px;border-radius:16px;border:1px solid var(--hair);display:flex;flex-direction:column;gap:8px"><span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--ink3)">WATCHLISTS · NEXT RUN 08:00</span><div style="display:flex;gap:5px;flex-wrap:wrap"><sc-for list="{{ watch }}" as="w" hint-placeholder-count="6"><span style="font:400 11.5px/1 Onest;padding:6px 9px;border-radius:999px;background:var(--hair);color:var(--ink)">{{ w }}</span></sc-for></div></div>
+            <div style="padding:14px 16px;border-radius:16px;border:1px solid var(--hair);display:flex;flex-direction:column;gap:7px"><span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--ink3)">SCORING WEIGHTS · YOURS TO TUNE</span><sc-for list="{{ weights }}" as="w" hint-placeholder-count="5"><div style="display:grid;grid-template-columns:110px minmax(0,1fr) 34px;gap:8px;align-items:center;font:400 11.5px/1 'JetBrains Mono',monospace;color:var(--ink2)"><span>{{ w.k }}</span><span style="height:6px;border-radius:3px;background:var(--hair);overflow:hidden"><span style="display:block;height:100%;width:{{ w.p }};background:var(--violet)"></span></span><span style="text-align:right">{{ w.p }}</span></div></sc-for></div>
+          </div>
+          <div data-stagger="1" style="flex:none;padding:16px 18px;border-radius:18px;background:oklch(0.70 0.13 65 / .12);display:flex;flex-direction:column;gap:8px"><span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--amber)">OPPORTUNITY · CLUSTERED FROM 14 COMPLAINTS</span><span style="font:400 20px/1.25 'Instrument Serif',serif;color:var(--ink)">Small shops lose hours matching payouts to orders at month-end.</span><span style="font:400 12.5px/1.5 Onest;color:var(--ink2)">Target: 1–10 person stores · competitors: Ledgr, spreadsheets · evidence: 9 forum threads, 5 support tickets · hypothesis, needs validation.</span><div style="display:flex;gap:6px;flex-wrap:wrap"><button style="border:0;background:var(--ink);color:var(--bg);border-radius:11px;padding:9px 12px;font:500 12px/1 Onest;cursor:pointer">Create validation tasks</button><button style="border:1px solid var(--hair);background:transparent;color:var(--ink);border-radius:11px;padding:9px 12px;font:500 12px/1 Onest;cursor:pointer">Affects ledgerly-app →</button></div></div>
+          <sc-for list="{{ findings }}" as="f" hint-placeholder-count="4">
+            <div data-stagger="1" style="flex:none;display:grid;grid-template-columns:56px minmax(0,1fr) auto;gap:14px;padding:16px;border-radius:18px;border:1px solid {{ f.bd }};background:{{ f.bg }};align-items:start">
+              <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start"><span style="font:400 34px/1 'Instrument Serif',serif;color:var(--ink)">{{ f.score }}</span><span style="font:500 9.5px/1 'JetBrains Mono',monospace;color:{{ f.rc }}">{{ f.read }}</span></div>
+              <div style="display:flex;flex-direction:column;gap:6px;min-width:0"><span style="font:500 14.5px/1.35 Onest;color:var(--ink);text-wrap:pretty">{{ f.title }}</span><span style="font:400 13px/1.5 Onest;color:var(--ink2);text-wrap:pretty">{{ f.detail }}</span><span style="font:400 11px/1 'JetBrains Mono',monospace;color:var(--ink3)">{{ f.kicker }} · <a href="#">{{ f.meta }}</a></span></div>
+              <button style="border:1px solid var(--hair);background:transparent;color:var(--ink);border-radius:12px;padding:9px 12px;font:500 12px/1 Onest;cursor:pointer;white-space:nowrap">Create issue</button>
+            </div>
+          </sc-for>
+        </sc-if>
+        <sc-if value="{{ dInbox }}" hint-placeholder-val="{{ false }}">
+          <div data-stagger="1" style="flex:none;display:flex;gap:4px;padding:4px;border-radius:14px;background:var(--hair);flex-wrap:wrap">
+            <sc-for list="{{ inboxTabs }}" as="t" hint-placeholder-count="6"><button onClick="{{ t.go }}" style="border:0;border-radius:10px;padding:9px 12px;font:500 12px/1 Onest;cursor:pointer;background:{{ t.bg }};color:{{ t.fg }};box-shadow:{{ t.sh }};white-space:nowrap">{{ t.l }} <span style="font:400 10.5px/1 'JetBrains Mono',monospace;opacity:.6">{{ t.n }}</span></button></sc-for>
+          </div>
+          <sc-for list="{{ inboxItems }}" as="it" hint-placeholder-count="6">
+            <div data-stagger="1" style="flex:none;display:grid;grid-template-columns:4px minmax(0,1fr) auto;gap:14px;align-items:center;padding:14px 16px 14px 0;border-radius:16px;border:1px solid var(--hair);overflow:hidden">
+              <span style="align-self:stretch;background:{{ it.c }}"></span>
+              <div style="display:flex;flex-direction:column;gap:5px;min-width:0"><span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.05em;color:{{ it.c }}">{{ it.kind }}</span><span style="font:500 14px/1.35 Onest;color:var(--ink)">{{ it.t }}</span><span style="font:400 12px/1.4 Onest;color:var(--ink2)">{{ it.s }}</span></div>
+              <div style="display:flex;gap:6px">
+                <sc-if value="{{ it.ap }}" hint-placeholder-val="{{ false }}"><button onClick="{{ it.deny }}" style="border:1px solid var(--hair);background:transparent;color:var(--ink2);border-radius:11px;padding:9px 11px;font:500 12px/1 Onest;cursor:pointer">Deny</button><button onClick="{{ it.approve }}" style="border:0;background:var(--amber);color:var(--onacc);border-radius:11px;padding:9px 11px;font:500 12px/1 Onest;cursor:pointer">Approve</button></sc-if>
+                <sc-if value="{{ it.other }}" hint-placeholder-val="{{ true }}"><button onClick="{{ it.go }}" style="border:1px solid var(--hair);background:transparent;color:var(--ink);border-radius:11px;padding:9px 11px;font:500 12px/1 Onest;cursor:pointer;white-space:nowrap">{{ it.a }}</button></sc-if>
+              </div>
+            </div>
+          </sc-for>
+          <div data-stagger="1" style="flex:none;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:14px 16px;border-radius:16px;background:var(--hair);font:400 12px/1.4 'JetBrains Mono',monospace;color:var(--ink2)"><span>notify: push (phone) · email digest 08:00 · quiet hours 22:00–07:00 · deduped</span><a href="#" onClick="{{ openSettings }}">edit</a></div>
+        </sc-if>
+        <sc-if value="{{ dSettings }}" hint-placeholder-val="{{ false }}">
+          <div data-stagger="1" style="flex:none;display:flex;gap:4px;padding:4px;border-radius:14px;background:var(--hair);flex-wrap:wrap">
+            <sc-for list="{{ setTabs }}" as="t" hint-placeholder-count="6"><button onClick="{{ t.go }}" style="border:0;border-radius:10px;padding:9px 12px;font:500 12px/1 Onest;cursor:pointer;background:{{ t.bg }};color:{{ t.fg }};box-shadow:{{ t.sh }}">{{ t.l }}</button></sc-for>
+          </div>
+          <p data-stagger="1" style="flex:none;margin:0;font:400 14px/1.55 Onest;color:var(--ink2);text-wrap:pretty">{{ setIntro }}</p>
+          <div data-stagger="1" style="flex:none;border-radius:18px;border:1px solid var(--hair);overflow:hidden">
+            <sc-for list="{{ setRows }}" as="row" hint-placeholder-count="5">
+              <div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:12px;align-items:center;padding:13px 16px;border-bottom:1px solid var(--hair)">
+                <div style="display:flex;flex-direction:column;gap:4px;min-width:0"><span style="font:500 13.5px/1.3 Onest;color:var(--ink)">{{ row.k }}</span><span style="font:400 11.5px/1.4 'JetBrains Mono',monospace;color:var(--ink3)">{{ row.v }}</span></div>
+                <span style="font:500 10px/1 'JetBrains Mono',monospace;padding:5px 8px;border-radius:999px;background:{{ row.sb }};color:{{ row.sc }};white-space:nowrap">{{ row.s }}</span>
+                <button onClick="{{ row.go }}" style="border:1px solid var(--hair);background:transparent;color:var(--ink);border-radius:11px;padding:8px 11px;font:500 12px/1 Onest;cursor:pointer;white-space:nowrap">{{ row.a }}</button>
+              </div>
+            </sc-for>
+          </div>
+          <sc-if value="{{ setMeter }}" hint-placeholder-val="{{ false }}">
+            <div data-stagger="1" style="flex:none;padding:16px;border-radius:18px;background:var(--hair);display:flex;flex-direction:column;gap:10px"><div style="display:flex;justify-content:space-between;font:400 12px/1 'JetBrains Mono',monospace;color:var(--ink2)"><span>October AI spend</span><span>$62.40 / $150</span></div><span style="height:10px;border-radius:5px;background:var(--hair);overflow:hidden"><span style="display:block;height:100%;width:42%;border-radius:5px;background:var(--teal)"></span></span></div>
+          </sc-if>
+        </sc-if>
+        <sc-if value="{{ dAuto }}" hint-placeholder-val="{{ false }}">
+          <div data-stagger="1" style="flex:none;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <sc-for list="{{ autoSteps }}" as="s" hint-placeholder-count="4"><span style="padding:10px 12px;border-radius:12px;background:var(--hair);font:400 12px/1.2 'JetBrains Mono',monospace;color:var(--ink)">{{ s.n }}</span><span style="color:var(--ink3);font:400 14px/1 Onest">{{ s.arrow }}</span></sc-for>
+          </div>
+          <div data-stagger="1" style="flex:none;padding:16px 18px;border-radius:18px;border:1px solid var(--hair);display:flex;flex-direction:column;gap:10px">
+            <span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--ink3)">ALL WORKFLOWS</span>
+            <sc-for list="{{ autoList }}" as="a" hint-placeholder-count="4"><div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:12px;align-items:center;padding:6px 0;border-bottom:1px solid var(--hair)"><div style="display:flex;flex-direction:column;gap:3px;min-width:0"><span style="font:500 13px/1.3 Onest;color:var(--ink)">{{ a.title }}</span><span style="font:400 11px/1.3 'JetBrains Mono',monospace;color:var(--ink3)">{{ a.kicker }} · {{ a.meta }}</span></div><span style="width:8px;height:8px;border-radius:50%;background:{{ a.dot }}"></span><button style="border:1px solid var(--hair);background:transparent;color:var(--ink);border-radius:10px;padding:7px 10px;font:500 11.5px/1 Onest;cursor:pointer">Run now</button></div></sc-for>
+          </div>
+          <div data-stagger="1" style="flex:none;padding:16px 18px;border-radius:18px;border:1px solid var(--hair);display:flex;flex-direction:column;gap:10px">
+            <span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--ink3)">RECENT RUNS · RETRY POLICY 3× BACKOFF · NEVER REPLAYS IRREVERSIBLE ACTIONS</span>
+            <sc-for list="{{ autoRuns }}" as="x" hint-placeholder-count="4"><div style="display:grid;grid-template-columns:70px minmax(0,1fr) auto;gap:12px;font:400 12px/1.4 'JetBrains Mono',monospace"><span style="color:var(--ink3)">{{ x.t }}</span><span style="color:var(--ink)">{{ x.m }}</span><span style="color:{{ x.c }}">{{ x.s }}</span></div></sc-for>
+          </div>
+          <span data-stagger="1" style="flex:none;font:400 11px/1.5 'JetBrains Mono',monospace;color:var(--ink3)">n8n calls NEXUS through typed POST /v1/jobs with signed webhooks · Execute Command disabled · every edit versioned and audited</span>
+        </sc-if>
+        <sc-if value="{{ dQueue }}" hint-placeholder-val="{{ false }}">
+          <div data-stagger="1" style="flex:none;padding:16px 18px;border-radius:18px;border:1px solid var(--hair);display:flex;flex-direction:column;gap:10px">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap"><span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--ink3)">WORK QUEUE · HOME-STUDIO · 2/3 WORKERS BUSY</span><span style="font:400 11.5px/1 Onest;color:var(--ink3)">reorder to change what runs next</span></div>
+            <sc-for list="{{ queueRows }}" as="q" hint-placeholder-count="4"><div style="display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 12px;border-radius:14px;background:{{ q.bg }}"><span style="font:400 24px/1 'Instrument Serif',serif;color:var(--ink)">{{ q.n }}</span><div style="display:flex;flex-direction:column;gap:3px;min-width:0"><span style="font:500 13.5px/1.3 Onest;color:var(--ink)">{{ q.title }}</span><span style="font:400 11px/1.3 'JetBrains Mono',monospace;color:var(--ink3)">{{ q.meta }}</span></div><div style="display:flex;gap:4px"><button onClick="{{ q.up }}" style="width:32px;height:32px;border:1px solid var(--hair);background:transparent;color:var(--ink);border-radius:10px;cursor:pointer">↑</button><button onClick="{{ q.down }}" style="width:32px;height:32px;border:1px solid var(--hair);background:transparent;color:var(--ink);border-radius:10px;cursor:pointer">↓</button></div></div></sc-for>
+          </div>
+          <sc-for list="{{ plans }}" as="p" hint-placeholder-count="3">
+            <div data-stagger="1" style="flex:none;padding:16px 18px;border-radius:18px;border:1px solid var(--hair);display:flex;flex-direction:column;gap:10px;border-color:{{ p.bd }}">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap"><span style="font:400 22px/1.15 'Instrument Serif',serif;color:var(--ink)">{{ p.title }}</span><span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--ink3)">{{ p.kicker }}</span></div>
+              <div style="display:flex;flex-direction:column;gap:6px"><sc-for list="{{ p.steps }}" as="s" hint-placeholder-count="4"><div style="display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:10px;align-items:center;font:400 13px/1.4 Onest;color:var(--ink)"><span style="width:18px;height:18px;border-radius:50%;border:1.5px solid {{ s.c }};background:{{ s.f }}"></span><span>{{ s.t }}</span><span style="font:400 10.5px/1 'JetBrains Mono',monospace;color:var(--ink3)">{{ s.who }}</span></div></sc-for></div>
+              <div style="display:flex;gap:6px;justify-content:flex-end"><button style="border:1px solid var(--hair);background:transparent;color:var(--ink);border-radius:11px;padding:9px 12px;font:500 12px/1 Onest;cursor:pointer">Edit plan</button><button onClick="{{ p.run }}" style="border:0;background:var(--teal);color:var(--onacc);border-radius:11px;padding:9px 12px;font:500 12px/1 Onest;cursor:pointer">{{ p.runLabel }}</button></div>
+            </div>
+          </sc-for>
+        </sc-if>
+        <sc-if value="{{ dKnow }}" hint-placeholder-val="{{ false }}">
+          <div data-stagger="1" style="flex:none;display:flex;align-items:center;gap:10px;padding:0 6px 0 16px;height:50px;border-radius:16px;background:var(--hair)"><input value="{{ kq }}" onChange="{{ setKq }}" placeholder="Search runs, research, decisions, docs…" style="flex:1;min-width:0;border:0;outline:0;background:transparent;color:var(--ink);font:400 15px/1 Onest"><span style="font:400 11px/1 'JetBrains Mono',monospace;color:var(--ink3);padding-right:10px">{{ kCount }}</span></div>
+          <div data-stagger="1" style="flex:none;display:flex;gap:6px;flex-wrap:wrap"><sc-for list="{{ kFilters }}" as="f" hint-placeholder-count="5"><span style="font:400 11.5px/1 'JetBrains Mono',monospace;padding:7px 10px;border-radius:999px;border:1px solid var(--hair);color:var(--ink2)">{{ f }}</span></sc-for></div>
+          <sc-for list="{{ kResults }}" as="k" hint-placeholder-count="5">
+            <div data-stagger="1" style="flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start;padding:14px 16px;border-radius:16px;border:1px solid var(--hair)">
+              <div style="display:flex;flex-direction:column;gap:5px;min-width:0"><span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.05em;color:{{ k.c }}">{{ k.kind }}</span><span style="font:500 14px/1.35 Onest;color:var(--ink)">{{ k.t }}</span><span style="font:400 12px/1.45 Onest;color:var(--ink2)">{{ k.s }}</span></div>
+              <div style="display:flex;gap:4px"><button style="border:1px solid var(--hair);background:transparent;color:var(--ink2);border-radius:10px;padding:7px 9px;font:500 11.5px/1 Onest;cursor:pointer">Correct</button><button style="border:1px solid var(--hair);background:transparent;color:var(--coral);border-radius:10px;padding:7px 9px;font:500 11.5px/1 Onest;cursor:pointer">Forget</button></div>
+            </div>
+          </sc-for>
+        </sc-if>
+        <sc-if value="{{ dRepo }}" hint-placeholder-val="{{ false }}">
+          <div data-stagger="1" style="flex:none;display:flex;gap:4px;padding:4px;border-radius:14px;background:var(--hair);width:max-content"><span style="border-radius:10px;padding:9px 12px;font:500 12px/1 Onest;background:var(--glass2);color:var(--ink)">acme-labs</span><span style="padding:9px 12px;font:500 12px/1 Onest;color:var(--ink3)">personal</span><span style="padding:9px 12px;font:500 12px/1 Onest;color:var(--teal)">+ account</span></div>
+          <sc-for list="{{ repoRows }}" as="p" hint-placeholder-count="4"><div data-stagger="1" style="flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:12px;align-items:center;padding:14px 16px;border-radius:16px;border:1px solid var(--hair)"><div style="display:flex;flex-direction:column;gap:4px;min-width:0"><span style="font:500 14px/1.3 Onest;color:var(--ink)">{{ p.n }}</span><span style="font:400 11px/1.3 'JetBrains Mono',monospace;color:var(--ink3)">{{ p.m }}</span></div><span style="font:500 10px/1 'JetBrains Mono',monospace;padding:5px 8px;border-radius:999px;background:var(--hair);color:{{ p.c }}">{{ p.ci }}</span><span style="font:400 11px/1 'JetBrains Mono',monospace;color:var(--ink2)">{{ p.acc }}</span></div></sc-for>
+        </sc-if>
+        <sc-if value="{{ dSup }}" hint-placeholder-val="{{ false }}">
+          <sc-for list="{{ tickets }}" as="t" hint-placeholder-count="3"><div data-stagger="1" style="flex:none;padding:16px 18px;border-radius:18px;border:1px solid var(--hair);display:flex;flex-direction:column;gap:10px"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span style="font:500 10px/1 'JetBrains Mono',monospace;padding:4px 7px;border-radius:999px;background:var(--hair);color:{{ t.c }}">{{ t.sev }}</span><span style="font:400 11px/1 'JetBrains Mono',monospace;color:var(--ink3)">{{ t.meta }}</span></div><span style="font:500 14px/1.35 Onest;color:var(--ink)">{{ t.t }}</span><span style="font:400 12.5px/1.5 Onest;color:var(--ink2)">{{ t.sum }}</span></div></sc-for>
+          <div data-stagger="1" style="flex:none;padding:16px 18px;border-radius:18px;border:1px solid var(--hair);display:flex;flex-direction:column;gap:10px;background:var(--hair);border:0"><span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--ink3)">DRAFT REPLY · NOT SENT</span><span style="font:400 14px/1.6 Onest;color:var(--ink)">Hi Sara — you were not charged twice. The first attempt failed at the 3D Secure step and was never captured; only the second payment (AED 214.00) went through. Sorry for the worry.</span><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap"><button style="border:1px solid var(--hair);background:var(--bg);color:var(--ink);border-radius:11px;padding:9px 12px;font:500 12px/1 Onest;cursor:pointer">Edit</button><button style="border:1px solid var(--hair);background:var(--bg);color:var(--ink);border-radius:11px;padding:9px 12px;font:500 12px/1 Onest;cursor:pointer">Suggest GitHub issue</button><button style="border:0;background:var(--ink);color:var(--bg);border-radius:11px;padding:9px 12px;font:500 12px/1 Onest;cursor:pointer" onClick="{{ toConvBiz }}">Open in conversation →</button></div></div>
+        </sc-if>
+        <sc-if value="{{ dMkt }}" hint-placeholder-val="{{ false }}">
+          <div data-stagger="1" style="flex:none;padding:16px 18px;border-radius:18px;border:1px solid var(--hair);display:flex;flex-direction:column;gap:10px"><span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--ink3)">BRAND FACTS · APPROVED</span><span style="font:400 13px/1.55 Onest;color:var(--ink2)">Ledgerly helps small shops reconcile payments in minutes. Tone: calm, specific, no hype. Never claim “AI does your accounting”. Audience: owners of 1–10 person stores.</span></div>
+          <div data-stagger="1" style="flex:none;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px"><sc-for list="{{ cal }}" as="d" hint-placeholder-count="7"><div style="padding:10px 8px;border-radius:14px;background:var(--hair);display:flex;flex-direction:column;gap:6px;min-width:0"><span style="font:500 10.5px/1 'JetBrains Mono',monospace;color:var(--ink3)">{{ d.d }}</span><span style="font:400 11.5px/1.35 Onest;color:var(--ink)">{{ d.t }}</span><span style="font:400 10px/1 'JetBrains Mono',monospace;color:var(--teal)">{{ d.ch }}</span></div></sc-for></div>
+          <div data-stagger="1" style="flex:none;padding:16px 18px;border-radius:18px;border:1px solid var(--hair);display:flex;flex-direction:column;gap:10px"><span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--ink3)">DRAFT · WED 09:00 · LINKEDIN</span><span style="font:400 14px/1.6 Onest;color:var(--ink)">Month-end used to take our customers a full weekend. With Ledgerly 2.0, CSV export and automatic matching get it down to under an hour. Here is how one bakery in Dubai did it →</span><span style="font:400 11px/1.4 'JetBrains Mono',monospace;color:var(--ink3)">goal: 40 trial signups · KPI tracked after publish · hypothesis, not forecast</span></div>
+          <div data-stagger="1" style="flex:none;padding:16px 18px;border-radius:18px;border:1px solid var(--hair);display:flex;flex-direction:column;gap:10px"><span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--ink3)">LAST CAMPAIGN · LEDGERLY 1.9 · PUBLISHED VIA LINKEDIN API</span><div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px"><sc-for list="{{ mktStats }}" as="s" hint-placeholder-count="4"><div style="display:flex;flex-direction:column;gap:4px"><span style="font:400 24px/1 'Instrument Serif',serif;color:var(--ink)">{{ s.v }}</span><span style="font:400 10.5px/1.3 'JetBrains Mono',monospace;color:var(--ink3)">{{ s.k }}</span></div></sc-for></div><span style="font:400 12.5px/1.5 Onest;color:var(--ink2)">Customer stories beat feature posts 2.4× on clicks. Recommendation: lead with the bakery story (experiment B).</span></div>
+          <div data-stagger="1" style="flex:none;display:flex;gap:8px;justify-content:flex-end"><button onClick="{{ mktDeny }}" style="border:1px solid var(--hair);background:transparent;color:var(--ink2);border-radius:14px;padding:12px 16px;font:500 13px/1 Onest;cursor:pointer">Deny</button><button onClick="{{ mktApprove }}" style="border:0;background:var(--amber);color:var(--onacc);border-radius:14px;padding:12px 16px;font:500 13px/1 Onest;cursor:pointer">{{ mktLabel }}</button></div>
+        </sc-if>
+        <sc-if value="{{ dAgent }}" hint-placeholder-val="{{ false }}">
+          <div data-stagger="1" style="flex:none;padding:18px;border-radius:18px;border:1px solid var(--hair);display:flex;flex-direction:column;gap:14px">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap"><span style="font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.06em;color:var(--ink3)">SETTINGS · AUTONOMY</span><span style="font:400 12px/1 Onest;color:var(--ink3)">earn more autonomy after 40 clean approvals</span></div>
+            <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;padding:4px;border-radius:16px;background:var(--hair)">
+              <sc-for list="{{ dial }}" as="d" hint-placeholder-count="4"><button onClick="{{ d.go }}" style="border:0;border-radius:12px;padding:12px 8px;cursor:pointer;background:{{ d.bg }};color:{{ d.fg }};box-shadow:{{ d.sh }};display:flex;flex-direction:column;gap:5px;align-items:center"><span style="font:500 12.5px/1 Onest">{{ d.l }}</span><span style="font:400 10.5px/1.3 Onest;opacity:.75">{{ d.s }}</span></button></sc-for>
+            </div>
+          </div>
+          <div data-stagger="1" style="flex:none;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px">
+            <div style="padding:18px;border-radius:18px;border:1px solid var(--hair);display:flex;flex-direction:column;gap:10px">
+              <span style="font:500 13px/1 Onest;color:var(--ink)">Allowed tools</span>
+              <sc-for list="{{ tools }}" as="t" hint-placeholder-count="5"><div style="display:flex;justify-content:space-between;gap:10px;align-items:center;font:400 12px/1.3 'JetBrains Mono',monospace"><span style="color:var(--ink)">{{ t.n }}</span><span style="font:500 10px/1 'JetBrains Mono',monospace;padding:4px 7px;border-radius:999px;background:{{ t.bg }};color:{{ t.fg }}">{{ t.s }}</span></div></sc-for>
+            </div>
+            <div style="padding:18px;border-radius:18px;border:1px solid var(--hair);display:flex;flex-direction:column;gap:10px">
+              <span style="font:500 13px/1 Onest;color:var(--ink)">Limits & record</span>
+              <sc-for list="{{ agentFacts }}" as="f" hint-placeholder-count="5"><div style="display:flex;justify-content:space-between;gap:10px;font:400 12px/1.3 'JetBrains Mono',monospace"><span style="color:var(--ink3)">{{ f.k }}</span><span style="color:var(--ink)">{{ f.v }}</span></div></sc-for>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+  </sc-if>
+<sc-if value="{{ brief }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeBrief }}" style="position:absolute;inset:0;background:rgba(20,18,14,.28);display:flex;align-items:center;justify-content:center;padding:24px;z-index:20">
+      <div data-brief="1" onClick="{{ stop }}" style="width:min(720px,100%);max-height:calc(100vh - 48px);overflow:auto;padding:36px 40px 30px;border-radius:30px;background:var(--glass2);backdrop-filter:blur(30px) saturate(1.5);-webkit-backdrop-filter:blur(30px) saturate(1.5);border:1px solid var(--line);box-shadow:0 40px 120px -30px rgba(40,30,10,.45);display:flex;flex-direction:column;gap:22px">
+        <span style="font:500 11px/1 'JetBrains Mono',monospace;letter-spacing:.08em;color:var(--ink3)">TUESDAY 27 OCTOBER · 14:32 GST · PREPARED BY CHIEF OF STAFF</span>
+        <h1 style="margin:0;font:400 46px/1.05 'Instrument Serif',serif;letter-spacing:-.01em;color:var(--ink);text-wrap:pretty">Good afternoon. <em style="color:var(--teal)">Three decisions</em> are waiting, and one thing is on fire.</h1>
+        <div style="display:flex;flex-direction:column;gap:14px;font:400 15px/1.6 Onest;color:var(--ink2);text-wrap:pretty">
+          <p style="margin:0"><strong style="color:var(--ink);font-weight:500">Checkout is failing more than usual.</strong> 23 failed payments since 11:40, mostly 3DS timeouts, starting the same minute checkout-api v2.31 shipped. DevOps thinks the timeout was cut from 8s to 3s (62% confident).</p>
+          <p style="margin:0"><strong style="color:var(--ink);font-weight:500">Issue #42 is ready to become a PR.</strong> The cart rounding fix passed all 148 tests on your home machine. It is waiting for you to allow the push.</p>
+          <p style="margin:0"><strong style="color:var(--ink);font-weight:500">Otherwise a good day.</strong> 184 orders (+12%), AED 41.9k gross. The research brief flags an Agent SDK update that could simplify NEXUS itself.</p>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px">
+          <sc-for list="{{ briefStats }}" as="s" hint-placeholder-count="4">
+            <div style="padding:12px 14px;border-radius:16px;background:var(--hair);display:flex;flex-direction:column;gap:6px"><span style="font:400 28px/1 'Instrument Serif',serif;color:var(--ink)">{{ s.v }}</span><span style="font:400 11px/1.3 'JetBrains Mono',monospace;color:var(--ink3)">{{ s.k }}</span></div>
+          </sc-for>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+          <button onClick="{{ closeBrief }}" style="border:1px solid var(--hair);background:transparent;color:var(--ink2);border-radius:14px;padding:12px 16px;font:500 13px/1 Onest;cursor:pointer">Show me the board</button>
+          <button onClick="{{ briefGo }}" style="border:0;background:var(--ink);color:var(--bg);border-radius:14px;padding:12px 16px;font:500 13px/1 Onest;cursor:pointer">Start with the PR →</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+  <sc-if value="{{ phone }}" hint-placeholder-val="{{ false }}">
+    <div data-phone="1" style="position:absolute;right:20px;bottom:20px;width:330px;height:min(640px,calc(100vh - 100px));border-radius:46px;padding:10px;background:#111;box-shadow:0 40px 90px -20px rgba(0,0,0,.5);z-index:15">
+      <div style="width:100%;height:100%;border-radius:37px;overflow:hidden;background:var(--bg);display:flex;flex-direction:column;position:relative">
+        <div style="position:absolute;top:10px;left:50%;transform:translateX(-50%);width:96px;height:28px;border-radius:20px;background:#111"></div>
+        <div style="padding:52px 18px 12px;display:flex;justify-content:space-between;align-items:flex-end">
+          <span style="font:400 30px/1 'Instrument Serif',serif;color:var(--ink)">Approvals</span>
+          <button onClick="{{ togglePhone }}" style="border:0;background:var(--hair);color:var(--ink2);border-radius:999px;width:30px;height:30px;cursor:pointer">×</button>
+        </div>
+        <div style="flex:1;overflow:auto;padding:4px 12px 16px;display:flex;flex-direction:column;gap:10px">
+          <div onClick="{{ phoneTalk }}" style="padding:12px 14px;border-radius:20px;background:var(--ink);color:var(--bg);display:flex;flex-direction:column;gap:6px;cursor:pointer">
+            <div style="display:flex;justify-content:space-between;font:500 10px/1 'JetBrains Mono',monospace;letter-spacing:.05em;opacity:.65"><span>NEXUS · PUSH · REDACTED</span><span>now</span></div>
+            <span style="font:500 13.5px/1.3 Onest">A task is ready for review in storefront-web</span>
+            <span style="font:400 11.5px/1.4 Onest;opacity:.7">Details after Face ID · tap to open the thread and Talk</span>
+          </div>
+          <sc-for list="{{ phoneItems }}" as="a" hint-placeholder-count="3">
+            <div style="padding:14px;border-radius:22px;background:var(--glass2);border:1px solid var(--line);box-shadow:var(--shadow);display:flex;flex-direction:column;gap:8px">
+              <div style="display:flex;gap:6px;align-items:center"><span style="font:500 10px/1 'JetBrains Mono',monospace;padding:4px 7px;border-radius:999px;background:{{ a.rb }};color:{{ a.rc }}">{{ a.risk }}</span><span style="font:400 10.5px/1 'JetBrains Mono',monospace;color:var(--ink3)">{{ a.agent }} · {{ a.exp }}</span></div>
+              <span style="font:500 14.5px/1.3 Onest;color:var(--ink)">{{ a.title }}</span>
+              <span style="font:400 12px/1.4 Onest;color:var(--ink2)">{{ a.scope }}</span>
+              <sc-if value="{{ a.pending }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex;gap:6px;padding-top:2px">
+                  <button onClick="{{ a.deny }}" style="flex:1;height:44px;border:1px solid var(--hair);background:transparent;color:var(--ink2);border-radius:14px;font:500 13px/1 Onest;cursor:pointer">Deny</button>
+                  <button onClick="{{ a.approve }}" style="flex:1;height:44px;border:0;background:var(--ink);color:var(--bg);border-radius:14px;font:500 13px/1 Onest;cursor:pointer">Approve</button>
+                </div>
+              </sc-if>
+              <sc-if value="{{ a.done }}" hint-placeholder-val="{{ false }}"><span style="font:500 12px/1 'JetBrains Mono',monospace;color:{{ a.dc }}">{{ a.doneText }}</span></sc-if>
+            </div>
+          </sc-for>
+          <span style="font:400 11px/1.5 'JetBrains Mono',monospace;color:var(--ink3);text-align:center;padding-top:6px">every decision is audited · approvals expire</span>
+        </div>
+        <div style="display:flex;justify-content:space-around;padding:6px 6px 16px;border-top:1px solid var(--hair);background:var(--glass2)"><sc-for list="{{ phoneNav }}" as="t" hint-placeholder-count="5"><button onClick="{{ t.go }}" style="border:0;background:transparent;min-width:52px;height:46px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;font:500 10.5px/1 Onest;color:{{ t.c }};cursor:pointer"><span style="width:18px;height:3px;border-radius:2px;background:{{ t.b }}"></span>{{ t.l }}</button></sc-for></div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { px:40, py:90, z:0.62, drag:null, anim:false, sel:null, drawer:null, group:'domain', theme:'light', mode:'Execute', cmd:'', preview:false, voice:false, brief:true, phone:false, dec:{}, auto:{} };
+  vp = React.createRef();
+  componentDidMount(){
+    document.body.dataset.theme=this.state.theme;
+    const el=this.vp.current;
+    this._wheel=e=>{ e.preventDefault(); const r=el.getBoundingClientRect(), mx=e.clientX-r.left, my=e.clientY-r.top; this.setState(s=>{ const z=Math.min(1.8,Math.max(0.3,s.z*(e.deltaY<0?1.08:0.926))); return { z, px:mx-(mx-s.px)*z/s.z, py:my-(my-s.py)*z/s.z, anim:false }; }); };
+    el && el.addEventListener('wheel',this._wheel,{passive:false});
+    this.fitView(false,false);
+    this.motion('[data-node]',{opacity:[0,1],transform:['translateY(14px) scale(.96)','translateY(0) scale(1)']},{stagger:35,delay:150,duration:700});
+  }
+  componentWillUnmount(){ const el=this.vp.current; el&&el.removeEventListener('wheel',this._wheel); }
+  componentDidUpdate(p,s){
+    if(s.theme!==this.state.theme) document.body.dataset.theme=this.state.theme;
+        if(this.state.drawer && s.drawer!==this.state.drawer) { this.motion('[data-drawer]',{transform:['translateX(48px)','translateX(0)'],opacity:[0,1]},{spring:1,duration:620}); this.motion('[data-drawer] [data-stagger]',{opacity:[0,1],transform:['translateY(10px)','translateY(0)']},{stagger:50,delay:80,duration:500}); }
+    if(this.state.sel && s.sel!==this.state.sel) this.motion('[data-inspector]',{opacity:[0,1],transform:['scale(.96)','scale(1)']},{spring:1,duration:420});
+    if(this.state.brief && !s.brief) this.motion('[data-brief]',{opacity:[0,1],transform:['translateY(24px) scale(.98)','translateY(0) scale(1)']},{spring:1,duration:700});
+    if(this.state.phone && !s.phone) this.motion('[data-phone]',{transform:['translateY(60px) rotate(2deg)','translateY(0) rotate(0deg)'],opacity:[0,1]},{spring:1,duration:720});
+    if(this.state.vst && !s.vst) this.motion('[data-vhud]',{opacity:[0,1],transform:['translateX(-50%) translateY(-10px) scale(.97)','translateX(-50%) translateY(0) scale(1)']},{spring:1,duration:520});
+    if(this.state.toastOn && (!s.toastOn || s.drawer!==this.state.drawer && !this.state.drawer)) this.motion('[data-toast]',{opacity:[0,1],transform:['translateX(30px)','translateX(0)']},{spring:1,duration:600,stagger:90});
+    const cvk=this.state.drawer&&this.state.drawer.indexOf('conv-')===0;
+    if(cvk && (s.drawer!==this.state.drawer||s.cvx!==this.state.cvx||s.mailSent!==this.state.mailSent||s.dec!==this.state.dec)) { const go=()=>{ const el=document.querySelector('[data-dscroll]'); if(el) el.scrollTop=el.scrollHeight; }; [80,400,800].forEach(t=>setTimeout(go,t)); }
+    if(this.state.preview && !s.preview) this.motion('[data-preview]',{opacity:[0,1],transform:['translateX(-50%) translateY(-8px)','translateX(-50%) translateY(0)']},{spring:1,duration:480});
+  }
+  motion(sel,kf,o={}){ requestAnimationFrame(()=>{ const els=document.querySelectorAll(sel); const keys=Object.keys(kf); const frames=[0,1].map(i=>{ const f={}; keys.forEach(k=>f[k]=kf[k][i]); return f; }); const ease=o.spring?'linear(0, 0.22 8%, 0.6 18%, 0.92 30%, 1.04 42%, 1.06 50%, 1.02 64%, 0.995 80%, 1)':'cubic-bezier(.2,.8,.2,1)'; els.forEach((el,i)=>{ try{ el.animate(frames,{duration:o.duration||500,delay:(o.delay||0)+i*(o.stagger||0),easing:ease,fill:'backwards'}); }catch(e){} }); }); }
+  fitView(anim=true,full=true){ const el=this.vp.current; if(!el) return; const w=el.clientWidth, h=el.clientHeight-90; const fz=Math.max(0.22,Math.min(w/2120,h/2360)); if(full||fz>=0.5){ this.setState({ z:fz, px:(w-2080*fz)/2, py:84+(h-2340*fz)/2, anim }); return; } const z=Math.min(0.62,Math.max(0.45,w/1480)); this.setState({ z, px:20-20*z, py:84, anim }); }
+  data(){
+    const T='var(--teal)',A='var(--amber)',C='var(--coral)',G='var(--green)',V='var(--violet)',I='var(--ink3)',H='var(--hair)';
+    const d=this.state.dec;
+    const N=[
+      {id:'r1',z:'code',p:[80,110],ag:'DV',t:'run',kicker:d.a1==='ok'?'PR #121 opened':'Needs you · run',title:'#42 Cart total rounds wrong on multi-currency',meta:'storefront-web · 12:08 · $0.84',detail:'148/148 tests pass. Paused before git push + draft PR.',dot:d.a1==='ok'?G:A,segs:d.a1==='ok'?[G,G,G,G,G,G]:[G,G,G,G,A,H],ap:'a1'},
+      {id:'r2',z:'code',p:[330,110],ag:'DV',t:'run',kicker:'Running · implement',title:'#57 CSV export on invoices page',meta:'ledgerly-app · 04:51 · $0.31',detail:'Editing src/invoices/export.ts. Tests next.',dot:T,live:1,segs:[G,G,T,H,H,H]},
+      {id:'pr',z:'code',p:[580,110],ag:'QA',t:'run',kicker:'Ready for review',title:'PR #118 Wishlist merge on login',meta:'storefront-web · QA passed',detail:'QA ran 3 scenarios. Your GitHub review is the last step.',dot:G,segs:[G,G,G,G,G,G]},
+      {id:'i44',z:'code',p:[80,330],ag:'DV',t:'issue',kicker:'Issue · ready',title:'#44 Product page LCP over 3s on mobile',meta:'perf · 2 criteria',detail:'Hero image priority + responsive sizes. Est. 15 min.',dot:I},
+      {id:'i51',z:'code',p:[330,330],ag:'QA',t:'issue',kicker:'Issue · needs info',title:'#51 Arabic RTL layout for checkout',meta:'feature · 0 criteria',detail:'No acceptance criteria. NEXUS will ask before running.',dot:C},
+      {id:'i47',z:'code',p:[580,330],ag:'DV',t:'issue',kicker:'Issue · ready',title:'#53 Upgrade to Next 16',meta:'chore · dependabot',detail:'Build + tests must pass, no new warnings.',dot:I},
+      {id:'orders',z:'biz',p:[920,110],ag:'FA',t:'biz',kicker:'Orders today',value:'184',title:'+12% vs same time yesterday',meta:'supabase · 14:30 · partial',detail:'Peak 11:00–13:00. 61% repeat buyers.',dot:G},
+      {id:'gross',z:'biz',p:[1160,110],ag:'FA',t:'biz',kicker:'Gross sales',value:'41.9k',title:'AED · +6.4%',meta:'stripe · gross ≠ net',detail:'Refunds AED 1,240 settle later; net shown in drawer.',dot:G},
+      {id:'fails',z:'biz',p:[920,330],ag:'FA',t:'biz',kicker:'Failed payments',value:'23',title:'+9 · mostly 3DS timeouts',meta:'stripe · 11.1% fail rate',detail:'Started 11:40, same minute as checkout-api v2.31.',dot:C},
+      {id:'spend',z:'biz',p:[1160,330],ag:'FA',t:'biz',kicker:'AI spend · Oct',value:'$62',title:'of $150 budget',meta:'provider-reported · est.',detail:'Developer agent 71% of spend.',dot:I},
+      {id:'camp',z:'biz',p:[920,520],ag:'MK',t:'mkt',kicker:'Needs you · campaign',title:'7-day launch posts · Ledgerly 2.0',meta:'LinkedIn + X · no ad spend',detail:'First post Wed 09:00. Drafts reviewed by you only.',dot:d.a2?G:A,ap:'a2'},
+      {id:'inc',z:'sys',p:[1500,110],ag:'DO',t:'inc',kicker:'Incident · SEV-2',title:'checkout-api 5xx at 3.2%',meta:'prod · since v2.31 · 2h51m',detail:'Top hypothesis (62%): 3DS timeout lowered 8s→3s.',dot:C,live:1},
+      {id:'email',z:'sys',p:[1760,110],ag:'DO',t:'inc',kicker:'Needs you · degraded',title:'email-worker queue stuck',meta:'staging · 212 jobs',detail:'Restart proposed. Staging only, reversible.',dot:d.a3?G:A,ap:'a3'},
+      {id:'store',z:'sys',p:[1500,330],ag:'DO',t:'inc',kicker:'Healthy',title:'storefront-web',meta:'prod · p95 340ms · 0.1%',detail:'Last deploy v5.12 yesterday 18:20.',dot:G},
+      {id:'host',z:'sys',p:[1760,330],ag:'DO',t:'inc',kicker:'Home host',title:'home-studio online',meta:'2/3 workers · queue 4',detail:'macOS 15 · runner v0.9.2 · via Tailscale · heartbeat 2s.',dot:G,live:1},
+      {id:'f1',z:'res',p:[80,790],ag:'AR',t:'res',kicker:'Score 92 · primary',title:'Agent SDK adds session forking + permission hooks',meta:'release notes',detail:'Could replace NEXUS custom pause/resume code.',dot:T},
+      {id:'f2',z:'res',p:[330,790],ag:'AR',t:'res',kicker:'Score 84 · verified',title:'n8n ships native queue health endpoint',meta:'changelog · 2 sources',detail:'Monitor the workflow engine without a custom probe.',dot:T},
+      {id:'f3',z:'res',p:[580,790],ag:'AR',t:'res',kicker:'Score 71 · unverified',title:'SMBs link checkout drop-off to 3DS friction',meta:'1 survey · small sample',detail:'Relevant to today’s failed payments.',dot:A},
+      {id:'f4',z:'res',p:[80,1010],ag:'AR',t:'res',kicker:'Score 64 · competitor',title:'“Ledgr” launches AI reconciliation',meta:'blog + launch page',detail:'Overlaps Ledgerly 2.0. Pricing not public.',dot:I}
+    ];
+    const QD=this.state.queue||['q1','q2','q3','q4'];
+    N.push(
+      {id:'repo',z:'code',p:[80,520],ag:'DV',t:'repo',kicker:'Repositories · acme-labs',title:'4 repos · 2 accounts',meta:'GitHub App · synced 1m ago',detail:'storefront-web, ledgerly-app, checkout-api, marketing-site.',dot:G},
+      {id:'sup',z:'biz',p:[1160,520],ag:'SP',t:'support',kicker:'Support · 4 new',title:'2 tickets mention double charges',meta:'helpdesk · drafts ready',detail:'Linked to failed-payment retries. Replies are drafts only.',dot:A},
+      {id:'au1',z:'auto',p:[80,1410],ag:'AR',t:'auto',kicker:'Schedule · daily 08:00',title:'Morning research brief',meta:'n8n · last run ok 06:02',detail:'RSS + release notes + GitHub → dedupe → brief.',dot:G},
+      {id:'au2',z:'auto',p:[330,1410],ag:'DV',t:'auto',kicker:'Webhook · GitHub',title:'Label ai-ready → plan proposal',meta:'n8n · 3 runs today',detail:'Signed webhook → POST /v1/jobs (typed). No shell.',dot:G},
+      {id:'au3',z:'auto',p:[580,1410],ag:'DO',t:'auto',kicker:'Webhook · deploy',title:'Deploy failed → incident triage',meta:'n8n · fired 11:41',detail:'Opened INC-0192 and woke DevOps agent.',dot:A,live:1},
+      {id:'au4',z:'auto',p:[80,1630],ag:'FA',t:'auto',kicker:'Schedule · hourly',title:'Payment failure-rate watch',meta:'n8n · retry 3× backoff',detail:'Alert when fail rate > 8% vs 7-day baseline.',dot:C},
+      {id:'kn',z:'auto',p:[330,1630],ag:'CS',t:'know',kicker:'Knowledge · 1,284 records',title:'Search runs, research, ADRs',meta:'memory · per-project spaces',detail:'Reviewed facts only. Correct or delete anything.',dot:V}
+    );
+    const QI={q1:['Queued · next','#44 LCP fix on mobile','storefront-web · Developer · ~15 min','DV'],q2:['Queued','#53 Next 16 upgrade','storefront-web · Developer · ~40 min','DV'],q3:['Queued · waits for #57','QA pass on CSV export','ledgerly-app · QA · after r2','QA'],q4:['Queued · 18:00','Weekly revenue report','Acme Store · Finance','FA']};
+    QD.forEach((q,i)=>{ const x=QI[q]; N.push({id:q,z:'plan',p:[920+i*230,1410],ag:x[3],t:'queue',kicker:(i+1)+' · '+x[0],title:x[1],meta:x[2],detail:'Drag order in drawer. Runs on home-studio when a worker frees.',dot:i===0?T:I}); });
+    [['pl1','Plan · Chief of Staff','Ledgerly 2.0 launch','5 tasks · 3 agents · 2 approvals','PRD → issues → build → QA → posts'],['pl2','Plan · saved template','Fix bug → PR','reusable · used 14×','qualify → plan → implement → test → PR'],['pl3','Plan · draft','Checkout 3DS hardening','from INC-0192 · 3 tasks','rollback timeout → test → monitor']].forEach(([id,kicker,title,meta,detail],i)=>N.push({id,z:'plan',p:[920+i*230,1630],ag:'CS',t:'plan',kicker,title,meta,detail,dot:i===0?T:I}));
+    const AG=[['CS','Chief of Staff','Planning Ledgerly launch · 5 tasks',T,1],['DV','Developer','#42 waiting · #57 implementing',T,1],['QA','QA engineer','Reviewing PR #118',T,1],['DO','DevOps / SRE','Triaging INC-0192',C,1],['AR','AI researcher','Daily brief · 38 sources',T,1],['MK','Marketer','Drafts awaiting approval',A,0],['FA','Financial analyst','Watching payments',I,0],['SP','Support','4 tickets triaged',I,0]];
+    AG.forEach(([ini,name,doing,dot,live],i)=>N.push({id:'ag-'+ini,z:'agt',p:[920+(i%4)*230,790+Math.floor(i/4)*220],ag:ini,t:'agent',ini,kicker:live?'Active':'Idle',title:name,meta:doing,detail:'Scoped tools · budget · autonomy level in drawer.',dot,live,hub:1}));
+    [['o1',80,'DO','Risk · 62% confidence','Restore the 3DS timeout to 8 s','≈ AED 4.1k / day recovered · est.','failures began 11:40 · same minute as v2.31','var(--amber)'],['o2',470,'MK','Opportunity · 48% confidence','Win back 61 quiet repeat buyers','≈ AED 2.6k / week · est.','3+ orders · silent 45 days','var(--teal)'],['o3',860,'AR','Opportunity · 55% confidence','Make payout matching Ledgerly’s next feature','14 complaints · 9 threads','Ledgr shipped similar · pricing unknown','var(--teal)'],['o4',1250,'QA','Risk · 71% confidence','Quarantine the flaky 3DS test','CI back to ~99% · est.','checkout-api · 3 of 8 runs failed','var(--amber)'],['o5',1640,'AR','Optimize · 70% confidence','Adopt Agent SDK session forking','≈ 400 lines removed · est.','released today · fork + permission hooks','var(--violet)']].forEach(([id,x,ag,kicker,title,impact,meta,dot])=>N.push({id,z:'opp',p:[x,110],ag,t:'opp',kicker,title,impact,meta,detail:'Explain, preview, then approve. Nothing runs before your approval.',dot}));
+    return N;
+  }
+  zonesFor(group){
+    if(group==='domain') return [['opp','Noticed for you','5 opportunities · ranked by impact × confidence',40,-400,2000,400,'oklch(0.86 0.07 85 / .22)'],['code','Code','6 items · 2 running',40,40,800,640,'oklch(0.80 0.06 195 / .16)'],['biz','Business','Acme Store · today',880,40,540,640,'oklch(0.85 0.07 70 / .18)'],['sys','Systems','5 services · 1 incident',1460,40,580,640,'oklch(0.80 0.07 32 / .14)'],['res','Research','brief · 27 Oct',40,720,800,580,'oklch(0.80 0.05 290 / .14)'],['agt','Agents','8 agents · scoped tools',880,720,1160,580,'oklch(0.80 0.06 155 / .14)'],['auto','Automations','n8n · 4 workflows · knowledge',40,1340,800,520,'oklch(0.80 0.05 250 / .14)'],['plan','Plans & queue','4 queued · 3 plans',880,1340,1160,520,'oklch(0.85 0.06 95 / .18)']].map(([id,label,sub,x,y,w,h,tint])=>({id,label,sub,x,y:y+440,w,h,tint,fs:'48px'}));
+    return ['CS','DV','QA','DO','AR','MK','FA','SP'].map((a,i)=>({id:a,label:['Chief of Staff','Developer','QA','DevOps','Researcher','Marketer','Finance','Support'][i],sub:'',x:20+i*260,y:40,w:240,h:2260,tint:i%2?'rgba(127,120,105,.05)':'rgba(127,120,105,.09)',fs:'24px'}));
+  }
+  layout(N,group){
+    const pos={};
+    if(group==='domain'){ N.forEach(n=>pos[n.id]=n.t==='opp'?n.p:[n.p[0],n.p[1]+440]); return pos; }
+    const order=['CS','DV','QA','DO','AR','MK','FA','SP'], k={};
+    N.forEach(n=>{ const c=order.indexOf(n.ag); if(n.hub){ pos[n.id]=[30+c*260,100]; } else { k[n.ag]=(k[n.ag]||0)+1; pos[n.id]=[30+c*260,130+k[n.ag]*190]; } });
+    return pos;
+  }
+  openConv(k){ this.setState(s=>({drawer:'conv-'+k,sel:null,ws:k==='dev'?'dev':'biz',proj:k==='dev'?'storefront-web':'Acme Store',projMenu:false,tdis:{...(s.tdis||{}),[k]:1}})); }
+  sayTurn(k,q,a,srcs,via){ this.setState(s=>{ const cvx={...(s.cvx||{})}; cvx[k]=[...(cvx[k]||[]),{me:1,via:via||'text',t:'now',text:q},{via:'text',t:'now',text:a,srcs}]; return {cvx,cvText:''}; }); }
+  // @METHODS
+  renderVals(){
+    const S=this.state, v={}, set=o=>()=>this.setState(o);
+    const N=this.data(), pos=this.layout(N,S.group), z=S.z;
+    const far=z<0.55, near=z>=1.05;
+    this._N=N; this._pos=pos;
+    const SC={r1:'dev|storefront-web',r2:'dev|ledgerly-app',pr:'dev|storefront-web',i44:'dev|storefront-web',i51:'dev|storefront-web',i47:'dev|storefront-web',repo:'dev',inc:'dev|checkout-api',email:'dev|ledgerly-app',store:'dev|storefront-web',orders:'biz|Acme Store',gross:'biz|Acme Store',fails:'biz|Acme Store',sup:'biz|Acme Store',camp:'biz|Ledgerly SaaS',f1:'dev',f2:'dev',f3:'biz|Acme Store',f4:'biz|Ledgerly SaaS',au2:'dev',au3:'dev',au4:'biz|Acme Store',q1:'dev|storefront-web',q2:'dev|storefront-web',q3:'dev|ledgerly-app',q4:'biz|Acme Store',pl2:'dev',pl3:'dev|checkout-api','ag-DV':'dev','ag-QA':'dev','ag-DO':'dev','ag-MK':'biz','ag-FA':'biz','ag-SP':'biz'};
+    const WS=S.ws||'all';
+    const inS=id=>{ if(WS==='all') return true; const s=SC[id]; if(!s) return true; const [w,p]=s.split('|'); if(w!==WS) return false; return !(S.proj&&p&&p!==S.proj); };
+    v.nodes=N.map(n=>{ const sel=S.sel===n.id, [x,y]=pos[n.id]; return { ...n, x, y, w:n.t==='opp'&&S.group==='domain'?300:220, r:n.hub?'26px':'20px', ini:n.hub?n.ini:(S.group==='domain'?n.ag:null), value:n.value||null, segs:n.segs||null,
+      ts:far?'24px':'14px', showMeta:!far, showDetail:near||sel,
+      anim:n.live&&!n.hub?'nxp 1.6s infinite':'none',
+      shadow:sel?'0 0 0 2px var(--teal),var(--shadow)':(n.ap&&!S.dec[n.ap]?'0 0 0 1.5px var(--amber),var(--shadow)':'var(--shadow)'),
+      pick:e=>{ e.stopPropagation(); this.setState({sel:n.id}); }, open:e=>{ e.stopPropagation(); this.setState({sel:n.id,drawer:n.id}); } }; });
+    v.zones=this.zonesFor(S.group);
+    const c=id=>{ const p=pos[id]; return [p[0]+110,p[1]+56]; };
+    const L=[];
+    N.filter(n=>!n.hub).forEach(n=>{ const a='ag-'+n.ag; if(!pos[a]) return; L.push({a,b:n.id,live:n.live||(n.ap&&!S.dec[n.ap]),col:n.ap&&!S.dec[n.ap]?'var(--amber)':'var(--teal)'}); });
+    if(S.group==='agent') ['DV','QA','DO','AR','MK','FA','SP'].forEach(a=>L.push({a:'ag-CS',b:'ag-'+a,live:0,col:'var(--ink3)'}));
+    v.links=L.map(l=>{ const [x1,y1]=c(l.a),[x2,y2]=c(l.b); const my=(y1+y2)/2; const hot=S.sel===l.a||S.sel===l.b;
+      return { d:`M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`, c:hot?'var(--teal)':l.col, w:hot?2.2:1.3, dash:l.live?'5 7':'none', o:(!inS(l.a)||!inS(l.b))?0.04:(hot?0.95:(l.live?0.55:0.2)), anim:hot&&l.live?'nxdash 1.2s linear infinite':'none' }; });
+    v.vpRef=this.vp;
+    v.boardT=`translate(${S.px}px,${S.py}px) scale(${z})`;
+    v.boardTr=S.anim?'transform .6s cubic-bezier(.2,.8,.2,1)':'none';
+    v.dotSize=`${22*z}px ${22*z}px`; v.dotPos=`${S.px}px ${S.py}px`;
+    v.cursor=S.drag?'grabbing':'grab';
+    v.panStart=e=>{ if(e.target.closest('[data-node],button,input')) return; this.setState({drag:{x:e.clientX,y:e.clientY,px:S.px,py:S.py,moved:false},anim:false}); };
+    v.panMove=e=>{ const d=this.state.drag; if(!d) return; this.setState({px:d.px+e.clientX-d.x,py:d.py+e.clientY-d.y,drag:{...d,moved:true}}); };
+    v.panEnd=()=>{ const d=this.state.drag; if(!d) return; this.setState({drag:null,...(d.moved?{}:{sel:null})}); };
+    const zoomBy=f=>()=>{ const el=this.vp.current, w=el?el.clientWidth/2:600, h=el?el.clientHeight/2:400; this.setState(s=>{ const nz=Math.min(1.8,Math.max(0.3,s.z*f)); return { z:nz, px:w-(w-s.px)*nz/s.z, py:h-(h-s.py)*nz/s.z, anim:true }; }); };
+    v.zoomIn=zoomBy(1.25); v.zoomOut=zoomBy(0.8); v.fit=()=>this.fitView(true);
+    v.zoomPct=Math.round(z*100)+'%'; v.zoomLevel=far?'overview':near?'detail':'summary';
+    const pendN=['a1','a2','a3','a4'].filter(k=>!S.dec[k]).length; v.pendN=String(pendN);
+    v.hostDot=S.killed||S.offline?'var(--coral)':'var(--green)'; v.hostLabel=S.killed?'home-studio · stopped':'home-studio · online';
+    v.cmd=S.cmd; v.setCmd=e=>this.setState({cmd:e.target.value});
+    v.cmdFocus=set({cmdFocus:true}); v.cmdBlur=()=>setTimeout(()=>this.setState({cmdFocus:false}),120);
+    v.showHist=!!S.cmdFocus&&!S.cmd&&!S.preview&&!S.drawer;
+    const HI=(mode,t,m)=>({item:true,head:false,mode,t,m,use:e=>{ e.preventDefault(); this.setState({cmd:t,mode,cmdFocus:false,preview:true}); }});
+    v.hist=[{head:true,item:false,t:'FAVORITES'},HI('Execute','Fix issue #44 in storefront-web and open a draft PR','★ template'),HI('Ask','Compare today’s orders and failed payments with yesterday','★ daily'),HI('Plan','Turn the INC-0192 hypothesis into a fix plan','★'),{head:true,item:false,t:'RECENT'},HI('Ask','What is running, blocked or waiting on me?','11:02'),HI('Execute','Run daily AI research now','09:40'),HI('Plan','Draft a PRD for wishlist sync','yesterday')];
+    v.cmdPh=S.voice?'Listening… “fix issue forty-four and open a PR”':'Ask, plan or run anything on your home machine…';
+    v.cmdKey=e=>{ if(e.key==='Enter') this.setState({preview:true}); if(e.key==='Escape') this.setState({preview:false}); };
+    v.toggleVoice=()=>this.setState(s=>({voice:!s.voice,cmd:!s.voice?'':(s.cmd||'Fix issue #44 in storefront-web and open a draft PR')}));
+    v.micBg=S.voice?'var(--coral)':'var(--hair)'; v.micFg=S.voice?'#fff':'var(--ink2)';
+    v.micBars=[.5,1,.7,.4].map((s,i)=>({s:S.voice?1:s,anim:S.voice?`nxbar ${0.6+i*0.15}s ease-in-out infinite`:'none'}));
+    v.modes=['Ask','Plan','Execute'].map(m=>({label:m,go:set({mode:m}),bg:S.mode===m?'var(--glass2)':'transparent',fg:S.mode===m?'var(--ink)':'var(--ink3)',sh:S.mode===m?'0 1px 3px rgba(0,0,0,.12)':'none'}));
+    v.submitLabel=S.mode==='Execute'?'Preview':S.mode==='Plan'?'Plan':'Ask';
+    v.submit=set({preview:true});
+    v.groups=[['domain','Domains'],['agent','Agents']].map(([id,label])=>({label,go:()=>this.setState({group:id},()=>this.fitView(true)),bg:S.group===id?'var(--glass2)':'transparent',fg:S.group===id?'var(--ink)':'var(--ink3)',sh:S.group===id?'0 1px 3px rgba(0,0,0,.12)':'none'}));
+    v.openBrief=set({brief:true}); v.togglePhone=()=>this.setState(s=>({phone:!s.phone}));
+    v.toggleTheme=()=>this.setState(s=>({theme:s.theme==='light'?'dark':'light'}));
+    const PV={Execute:['Here’s exactly what will happen.',[['Intent','Implement issue → draft PR'],['Target','storefront-web · #44 · base main'],['Runs on','home-studio · container · worktree'],['Agent','Developer · Claude Code SDK · $3 cap'],['Pauses for','git push + PR · you approve']]],Plan:['A plan, nothing changes.',[['Intent','Propose steps only'],['Target','storefront-web'],['Agent','Chief of Staff'],['Risk','None · read-only']]],Ask:['Answering from connected sources.',[['Sources','supabase:shop-prod (read-only) · stripe'],['Agent','Financial analyst'],['Freshness','14:30 · partial day'],['Risk','None · read-only']]]}[S.mode];
+    v.preview=S.preview; v.previewTitle=PV[0]; v.previewRows=PV[1].map(([k,v2])=>({k,v:v2}));
+    v.cancelPreview=set({preview:false});
+    v.confirmPreview=()=>this.setState({preview:false,cmd:'',sel:'r1',drawer:'r1'});
+    const decide=(ap,val)=>e=>{ e&&e.stopPropagation(); this.setState(s=>({dec:{...s.dec,[ap]:val}})); };
+    this._decide=decide;
+    const sn=N.find(n=>n.id===S.sel);
+    if(sn && !S.drawer){
+      const [nx,ny]=pos[sn.id], el=this.vp.current, W=el?el.clientWidth:1200, Hh=el?el.clientHeight:800;
+      let x=S.px+(nx+232)*z, y=S.py+ny*z; if(x+300>W) x=S.px+nx*z-302; x=Math.max(12,Math.min(W-302,x)); y=Math.max(80,Math.min(Hh-380,y));
+      const factsBy={run:[['engine','Claude Code SDK'],['host','home-studio'],['budget','$3.00 cap']],issue:[['repo','storefront-web'],['base','main @ a91c3e2'],['agent','Developer']],biz:[['source','read-only connector'],['window','00:00–14:30 GST'],['currency','AED']],inc:[['env','production'],['owner','DevOps agent'],['observer','same failure domain']],res:[['fetched','06:02 GST'],['dedup','11 merged'],['cites','primary first']],mkt:[['channels','LinkedIn · X'],['ad spend','none'],['publish','owner approval']],repo:[['accounts','acme-labs · personal'],['access','selected repos'],['token','short-lived']],support:[['source','helpdesk · read'],['send','owner approval'],['pii','masked']],auto:[['engine','n8n self-hosted'],['calls','typed /v1/jobs'],['shell','disabled']],know:[['spaces','4 projects'],['retention','owner-managed'],['search','semantic + filters']],queue:[['position',sn.kicker.split(' ')[0]],['host','home-studio'],['workers','2/3 busy']],plan:[['owner','Chief of Staff'],['gates','approval per write'],['status','reviewable']],agent:[['autonomy',(S.auto[sn.ag]||'Act with approval')],['budget','$2/run'],['memory','own namespace']],opp:[['confidence',sn.kicker.split('· ')[1]||'—'],['impact','estimate, not promise'],['runs','only after approval']]};
+      const quick={run:['Explain','r'],issue:['Plan only','i'],biz:['Ask why','b'],inc:['View logs','x'],res:['Create issue','f'],agent:['Message','a'],mkt:['Preview posts','x'],repo:['Sync now','x'],support:['Draft reply','x'],auto:['Run now','x'],know:['Search','x'],queue:['Move up','x'],plan:['Run plan','x'],opp:['Explain','x']}[sn.t];
+      v.insp={ x, y, kicker:sn.kicker, title:sn.title, detail:sn.detail, facts:factsBy[sn.t].map(([k,v2])=>({k,v:v2})), pending:!!(sn.ap&&!S.dec[sn.ap]), approve:sn.ap?decide(sn.ap,'ok'):null, deny:sn.ap?decide(sn.ap,'no'):null, quickLabel:quick[0], quick:()=>this.setState({drawer:sn.id}), open:()=>this.setState({drawer:sn.id}) };
+    } else v.insp=null;
+    v.closeInsp=set({sel:null});
+    v.brief=S.brief; v.closeBrief=set({brief:false}); v.stop=e=>e.stopPropagation();
+    v.briefGo=()=>this.setState({brief:false,sel:'r1',drawer:'r1'});
+    v.briefStats=[['184','orders · +12%'],['41.9k','AED gross'],['23','failed payments'],['$62','AI spend · Oct']].map(([v2,k])=>({v:v2,k}));
+    v.phone=S.phone;
+    const RK={HIGH:['var(--coral)','oklch(0.62 0.15 32 / .15)'],MED:['var(--amber)','oklch(0.70 0.13 65 / .17)'],LOW:['var(--green)','oklch(0.60 0.10 155 / .15)']};
+    v.phoneItems=[['a1','HIGH','Developer','42m','Push branch + open draft PR for #42','storefront-web · 6 files · 148 tests pass · never merges'],['a2','MED','Marketer','18:00','Schedule 7-day launch posts','LinkedIn + X · no ad spend'],['a3','LOW','DevOps','3h','Restart email-worker on staging','staging only · reversible'],['a4','HIGH','Developer','2h','Apply migration 0042 to shop-prod','tested on dev branch · reversible']].map(([id,risk,agent,exp,title,scope])=>{ const d=S.dec[id]; return {risk,agent,exp:'expires '+exp,title,scope,rc:RK[risk][0],rb:RK[risk][1],pending:!d,done:!!d,doneText:d==='ok'?'✓ approved · audited':'denied',dc:d==='ok'?'var(--green)':'var(--ink3)',approve:decide(id,'ok'),deny:decide(id,'no')}; });
+    const SP={'conv-dev':{id:'conv-dev',t:'conv',kicker:'Conversation · bound to run r_8f21 · issue #42',title:'#42 is ready — talk it through'},'conv-biz':{id:'conv-biz',t:'conv',kicker:'Conversation · bound to ticket T-5531 · Acme Store',title:'“Was I charged twice?”'},inbox:{id:'inbox',t:'inbox',kicker:'Inbox · everything waiting',title:'What needs your attention'},settings:{id:'settings',t:'settings',kicker:'Settings · home-studio',title:'Access, connections, limits'}};
+    const dn=S.drawer?(SP[S.drawer]||N.find(n=>n.id===S.drawer)):null;
+    v.dr=dn?{kicker:dn.kicker+(dn.ag?' · '+(dn.hub?'agent':dn.ag+' agent'):''),title:dn.value?dn.kicker+' · '+dn.value:dn.title}:null;
+    v.openInbox=set({drawer:'inbox',sel:null}); v.openSettings=set({drawer:'settings',sel:null}); v.openKnow=set({drawer:'kn',sel:null});
+    v.inboxN=String(pendN+4);
+    v.toggleKill=()=>this.setState(s=>({killed:!s.killed,drawer:null,sel:null}));
+    v.killBg=S.killed?'var(--ink)':'oklch(0.62 0.15 32 / .14)'; v.killFg=S.killed?'var(--bg)':'var(--coral)'; v.killLabel=S.killed?'RESUME':'STOP ALL';
+    v.banner=S.killed?{bg:'oklch(0.52 0.15 32)',title:'Emergency stop engaged — nothing is running.',sub:'cancelled r_8f21, r_8f22 · write connectors off · push, voice & watch rules paused · queued email not sent',actLabel:'Resume safely',act:set({killed:false})}:S.offline?{bg:'oklch(0.45 0.03 70)',title:'home-studio is offline. 4 queued jobs are held, not lost.',sub:'last heartbeat 14:32:18 · r_8f22 will need recovery review before retry',actLabel:'Simulate return',act:set({offline:false,recovery:true})}:S.recovery?{bg:'oklch(0.50 0.09 195)',title:'home-studio is back. 1 run needs recovery review.',sub:'r_8f22 interrupted at Implement · no external side effects found',actLabel:'Review',act:set({recovery:false,drawer:'r2',sel:'r2'})}:null;
+    v.closeDrawer=set({drawer:null});
+    if(!this._esc){ this._esc=e=>{ if(e.key==='Escape') this.setState({drawer:null,brief:false,preview:false}); }; window.addEventListener('keydown',this._esc); }
+    v.dRun=!!dn&&dn.t==='run'; v.dIssue=!!dn&&dn.t==='issue';
+    const ok=S.dec.a1==='ok', no=S.dec.a1==='no';
+    const G='var(--green)',A='var(--amber)',H='var(--hair)';
+    v.stages=['Qualify','Plan','Implement','Test','Review','Draft PR'].map((label,i)=>({label,t:['0:14','1:02','6:40','2:10','0:40',ok?'0:12':'—'][i],c:ok||i<4?G:i===4?A:H,tc:i<5||ok?'var(--ink)':'var(--ink3)'}));
+    v.runLog=[['14:20:02','system','#78746b','job accepted · runner home-studio · key nx-42-7c1'],['14:20:05','worktree','#78746b','git worktree add /nx/wt/8f21 origin/main'],['14:20:16','qualify','oklch(0.78 0.09 195)','#42 ok · 3 acceptance criteria'],['14:21:18','plan','oklch(0.78 0.09 195)','src/cart/total.ts, src/lib/money.ts, tests'],['14:24:03','edit','oklch(0.76 0.08 290)','money.ts → round per currency minor unit'],['14:27:58','edit','oklch(0.76 0.08 290)','+ tests/cart/total.multi-currency.test.ts'],['14:28:20','test','oklch(0.78 0.10 155)','pnpm test → 148 passed · 31.2s · cov 84.1%'],['14:30:31','scan','oklch(0.78 0.10 155)','lint clean · secrets 0 · policy ok'],['14:31:12','gate','oklch(0.82 0.12 70)',ok?'approved by owner · pushing nx/42-cart-rounding':no?'denied by owner · branch kept locally':'waiting: git push + draft PR (HIGH)']].concat(ok?[['14:33:40','github','oklch(0.78 0.10 155)','draft PR #121 opened · links #42']]:[]).map(([t,k,kc,m])=>({t,k,kc,m}));
+    v.files=[['src/lib/money.ts',48,12],['src/cart/total.ts',31,19],['tests/cart/total.multi-currency.test.ts',54,0],['src/cart/types.ts',4,2],['CHANGELOG.md',5,0]].map(([p,a,d])=>({p,a,d}));
+    v.runStats=[['tokens','412k / 38k'],['cost est.','$0.84 / $3'],['branch','nx/42-cart…'],['elapsed','12m 08s']].map(([k,v2])=>({k,v:v2}));
+    v.gatePending=!S.dec.a1; v.gateApprove=decide('a1','ok'); v.gateDeny=decide('a1','no');
+    v.gateKicker=ok?'APPROVED · AUDITED':no?'DENIED':'APPROVAL GATE · HIGH';
+    v.gateTitle=ok?'Draft PR #121 is open on GitHub.':no?'Nothing was pushed.':'Push nx/42-cart-rounding and open a draft PR?';
+    v.gateBg=ok?'oklch(0.60 0.10 155 / .12)':'oklch(0.70 0.13 65 / .13)'; v.gateBd=ok?'var(--green)':'var(--amber)'; v.gateFg=ok?'var(--green)':'var(--amber)';
+    const IS={i44:['Hero image is not priority-loaded and ships at 2400px to mobile; LCP p75 is 3.4s on 4G.',['LCP p75 under 2.5s on Lighthouse mobile','No layout shift regression']],i51:['Checkout should support RTL for Arabic.',[]],i47:['Framework upgrade, flagged by dependabot.',['Build and tests pass','No new console warnings']]}[S.drawer]||['',[]];
+    v.issueBody=IS[0]; v.issueAC=IS[1].length?IS[1]:['No criteria yet — NEXUS will ask you before it runs.'];
+    v.launch=[['engine','Claude Code · SDK'],['agent','Developer'],['base','main @ a91c3e2'],['branch','nx/auto-'+(S.drawer||'')],['budget','$3 · 30 min'],['tests','pnpm test && lint']].map(([k,v2])=>({k,v:v2}));
+    v.startRun=()=>this.setState({drawer:'r2',sel:'r2'});
+    v.dBiz=!!dn&&dn.t==='biz'; v.dInc=!!dn&&dn.t==='inc'; v.dRes=!!dn&&dn.t==='res'; v.dAgent=!!dn&&dn.t==='agent';
+    const yd=[8,5,3,2,2,4,9,18,30,42,55,61,58,64,60], td=[10,6,4,2,3,5,11,22,35,48,62,70,52,74,38];
+    v.hours=td.map((t,i)=>({t,y:yd[i],o:i===14?0.45:1}));
+    v.fails=[['3DS timeout',11,'var(--coral)'],['Insufficient funds',6,'var(--amber)'],['Card declined',4,'var(--amber)'],['Gateway error',2,'var(--ink3)']].map(([r,n,c])=>({r,n,c,w:n/11*100}));
+    v.toInc=set({drawer:'inc',sel:'inc'}); v.toIssue=set({drawer:'i44',sel:'i44'});
+    v.incStats=[['3.2%','5xx rate','var(--coral)'],['880ms','p95 latency','var(--ink)'],['v2.31','deployed 11:38','var(--ink)'],['2h51m','open','var(--ink)']].map(([v2,k,c])=>({v:v2,k,c}));
+    v.hypos=[['62%','v2.31 lowered the 3DS provider timeout from 8s to 3s (commit e41b0a7).'],['24%','Provider latency spike — EU region shows degraded.'],['14%','Connection pool exhaustion at lunch peak.']].map(([p,t])=>({p,t}));
+    v.findings=N.filter(n=>n.t==='res').map(n=>({...n,score:n.kicker.match(/\d+/)[0],bd:n.id===S.drawer?'var(--teal)':'var(--hair)',bg:n.id===S.drawer?'oklch(0.60 0.08 195 / .08)':'transparent'}));
+    const ag=dn&&dn.t==='agent'?dn.ag:null, cur=(ag&&S.auto[ag])||'Act with approval';
+    v.dial=[['Suggest','recommend only'],['Draft','prepare, never run'],['Act with approval','runs after you OK'],['Autonomous','low-risk only']].map(([l,s])=>({l,s,go:()=>this.setState(st=>({auto:{...st.auto,[ag]:l}})),bg:cur===l?'var(--glass2)':'transparent',fg:cur===l?'var(--ink)':'var(--ink3)',sh:cur===l?'0 2px 8px rgba(0,0,0,.12)':'none'}));
+    const TL={DV:[['repo.read','allowed'],['repo.write · opted-in repos','approval'],['tests.run · sandbox','allowed'],['git.push','approval'],['git.merge','blocked']],DO:[['logs.read','allowed'],['health.read','allowed'],['service.restart · staging','approval'],['deploy · prod','blocked']],FA:[['supabase.read · ro role','allowed'],['stripe.read','allowed'],['refunds.create','blocked']]}[ag]||[['docs.write','allowed'],['web.search','allowed'],['publish · external','approval'],['spend money','blocked']];
+    const TS={allowed:['oklch(0.60 0.10 155 / .15)','var(--green)'],approval:['oklch(0.70 0.13 65 / .17)','var(--amber)'],blocked:['oklch(0.62 0.15 32 / .14)','var(--coral)']};
+    v.tools=TL.map(([n,s])=>({n,s,bg:TS[s][0],fg:TS[s][1]}));
+    v.agentFacts=[['engine','Claude · Agent SDK'],['budget','$2 / run · $10 / day'],['timeout','30 min'],['memory','own namespace'],['eval','v5 · 88% pass'],['approvals','37 / 40 clean']].map(([k,v2])=>({k,v:v2}));
+    v.dInbox=!!dn&&dn.t==='inbox'; v.dSettings=!!dn&&dn.t==='settings';
+    const it=(cat,kind,c,t,s,a,go,ap)=>({cat,kind,c,t,s,a,go,ap});
+    const INB=[
+      !S.dec.a1&&it('approval','APPROVAL · HIGH','var(--coral)','Push branch + open draft PR for #42','storefront-web · expires 42m · params 7f3a…c91',null,null,'a1'),
+      !S.dec.a2&&it('approval','APPROVAL · MED','var(--amber)','Schedule 7-day launch posts','Marketer · LinkedIn + X · no ad spend',null,null,'a2'),
+      !S.dec.a3&&it('approval','APPROVAL · LOW','var(--green)','Restart email-worker on staging','DevOps · reversible',null,null,'a3'),
+      !S.dec.a4&&it('approval','APPROVAL · HIGH · PROD MIGRATION','var(--coral)','Apply migration 0042_add_refund_reason to shop-prod','tested on dev branch · 0 rows rewritten · reversible down-migration',null,null,'a4'),
+      it('security','SECURITY','var(--coral)','New sign-in attempt from unknown device','Chrome on Windows · Abu Dhabi · blocked by 2FA · 14:05','Review','settings'),
+      it('failure','FAILURE','var(--coral)','INC-0192 checkout-api 5xx at 3.2%','since v2.31 · 23 failed payments linked','Triage','inc'),
+      it('blocked','BLOCKED · NEEDS INFO','var(--amber)','#51 RTL checkout has no acceptance criteria','Developer will not guess — add criteria to run','Add criteria','i51'),
+      it('connection','STALE CONNECTION','var(--amber)','Stripe restricted key expires in 6 days','rotate without exposing it to prompts or logs','Rotate','settings'),
+      !S.dec.a1&&it('notice','TASK_DONE · TALK','var(--teal)','#42 is ready for review — 148 tests passed, no PR yet','storefront-web · opens the thread bound to run r_8f21','Talk','conv-dev'),
+      !S.mailSent&&it('business','BUSINESS_EXCEPTION · ACME STORE','var(--amber)','Customer asks about a double charge on order #8812','draft v2 ready · nothing sent · PII hidden from push','Talk','conv-biz'),
+      it('notice','TASK_DONE','var(--teal)','PR #118 passed QA — your GitHub review is last','storefront-web · 3 scenarios','Open','pr'),
+      it('notice','NOTICE','var(--ink3)','Support: 2 tickets mention double charges','drafts ready · nothing sent','Review','sup')
+    ].filter(Boolean);
+    const itab=S.itab||'all';
+    v.inboxTabs=[['all','All'],['approval','Approvals'],['failure','Failures'],['blocked','Blocked'],['business','Business'],['security','Security'],['connection','Connections'],['notice','Done & notices']].map(([id,l])=>({l,n:id==='all'?INB.length:INB.filter(x=>x.cat===id).length,go:set({itab:id}),bg:itab===id?'var(--glass2)':'transparent',fg:itab===id?'var(--ink)':'var(--ink3)',sh:itab===id?'0 1px 3px rgba(0,0,0,.12)':'none'}));
+    v.inboxItems=INB.filter(x=>itab==='all'||x.cat===itab).map(x=>({...x,ap:!!x.ap,other:!x.ap,approve:x.ap?decide(x.ap,'ok'):null,deny:x.ap?decide(x.ap,'no'):null,go:x.go?(x.go.indexOf('conv-')===0?()=>this.openConv(x.go.slice(5)):set({drawer:x.go,sel:x.go==='settings'?null:x.go})):null}));
+    const stab=S.stab||'conn';
+    const SB={ok:['oklch(0.60 0.10 155 / .15)','var(--green)'],warn:['oklch(0.70 0.13 65 / .17)','var(--amber)'],off:['var(--hair)','var(--ink3)'],bad:['oklch(0.62 0.15 32 / .14)','var(--coral)']};
+    const row=(k,v2,s,st,a,go)=>({k,v:v2,s,sb:SB[st][0],sc:SB[st][1],a,go:go||(()=>{})});
+    const ST={
+      conn:['Every connection is opt-in, scoped, and testable with a harmless read. Secrets stay in the home vault — never in prompts, logs or the browser.',[row('GitHub · acme-labs','GitHub App · 4 selected repos · contents+PR write on 2','connected','ok','Test'),row('GitHub · personal','fine-grained token · read only','connected','ok','Test'),row('Supabase · shop-prod','MCP · project_ref set · read_only=true','read-only','ok','Test'),row('Stripe','restricted key · read · expires 6d','rotate soon','warn','Rotate'),row('n8n · home-studio','service auth · typed /v1/jobs only','connected','ok','Test'),row('Helpdesk','tickets read · drafts only','connected','ok','Test'),row('Add connection','PostgreSQL, MySQL, REST, GraphQL, MCP server','new','off','Add')]],
+      sec:['Who and what can act. Agents never inherit your permissions — each tool call is checked at the API and the worker.',[row('Two-factor login','passkey + TOTP fallback','on','ok','Manage'),row('This browser · office Mac','Dubai · active now','current','ok','—'),row('iPhone 16 · NEXUS PWA','last seen 9m ago','active','ok','Revoke'),row('Old laptop','last seen 41 days ago','stale','warn','Revoke'),row('Secret vault','macOS keychain · encrypted at rest · logs redacted','sealed','ok','Audit'),row('Job sandbox','non-root container · workspace-only mount · no docker socket','enforced','ok','View')]],
+      remote:['The office browser only supervises. Code, CLI and credentials never leave the home machine.',[row('Tailscale Serve','private tailnet · MFA via identity provider','active','ok','Test'),row('Public ports','app listens on loopback only','none open','ok','—'),row('Cloudflare Tunnel + Access','alternate route','off','off','Enable'),row('Home host','home-studio · macOS 15 · sleep disabled · UPS','online','ok','Simulate offline',()=>this.setState({offline:true,drawer:null}))]],
+      limits:['Hard ceilings so nothing runs away while you are not looking.',[row('Monthly AI budget','$150 · alert at 80%','42% used','ok','Edit'),row('Per-run cap','$3 · 30 min · 600k tokens','default','ok','Edit'),row('Parallel workers','3 total · 1 coding run per repo','2 busy','ok','Edit'),row('Disk for worktrees','auto-clean after 7 days','38 GB free','ok','Clean'),row('Autonomy defaults','per agent · Act with approval','set per agent','off','Agents')]],
+      backup:['Durable state survives reboots, and is restorable on a fresh machine.',[row('Database backup','nightly 03:00 · encrypted · offsite copy','ok 03:00','ok','Run now'),row('Restore test','fresh instance · last passed 12 Oct','15 days ago','warn','Test now'),row('Run log retention','90 days · redacted','policy','ok','Edit'),row('Memory retention','reviewed facts kept · raw chat 30 days','policy','ok','Edit'),row('Crash recovery','interrupted jobs → RECOVERY_REQUIRED, never auto-retried','on','ok','View')]],
+      audit:['Tamper-evident trail of every human and agent action. Hash-chained, append-only, survives revocation.',[row('14:33:40 · owner approved a1','git push + draft PR · storefront-web · hash 7f3a…c91','chained','ok','Verify'),row('14:31:12 · Developer requested approval','risk HIGH · params hash 7f3a…c91','chained','ok','View'),row('13:02:05 · DevOps denied by policy','tried service.restart on prod · blocked before call','denied','bad','View'),row('11:41:00 · n8n created INC-0192','typed POST /v1/jobs · signed webhook','chained','ok','View'),row('14:40:12 · context switch → Business › Acme Store','storefront-web tools unbound · Acme connectors bound · profile biz v2','chained','ok','View'),row('Export audit','JSONL · redacted payloads · sequence proof','ready','off','Export')]],
+      privacy:['What data may leave the home machine, and to whom. Nothing private goes to a model or connector without consent.',[row('Source code → Claude','opted-in repos only · company repos excluded','consented','ok','Edit'),row('Customer PII → any agent','emails, addresses, cards masked before prompts','masked','ok','Edit'),row('Order data → researcher','aggregates only · no raw rows','blocked raw','ok','Edit'),row('Metric dictionary','order, gross, net, refund, failed payment, conversion · Asia/Dubai','v3 · reviewed','ok','Open'),row('Prod DB migrations','proposal → test on dev branch → separate approval','gated','ok','Policy'),row('Crawl policy','rate-limited · honors robots/terms · no login bypass','enforced','ok','Edit')]],
+      system:['NEXUS itself — versions, health and cost.',[row('NEXUS v0.9.2','released 21 Oct · last-known-good v0.9.1','current','ok','Rollback'),row('Update available · v0.9.3','2 migrations · tested on snapshot','ready','warn','Review'),row('Storage','worktrees 22 GB · logs 3.1 GB · db 840 MB','38 GB free','ok','Clean'),row('Backlog','4 queued · oldest 6 min','healthy','ok','Queue'),row('Provider failures · 24h','Anthropic 0 · GitHub 1 rate-limit · Stripe 0','1 retry','warn','View'),row('Component decisions','ADR-001: Agent SDK + n8n + Tailscale over OpenHands','recorded','off','Read')]],
+      notif:['NEXUS only speaks up on verified, timestamped source events. Each category maps to channels; duplicates collapse into one alert.',[row('TASK_DONE','in-app + phone push · voice only if a session is open','on','ok','Edit'),row('TASK_FAILED','in-app + push · failed step + evidence link','on','ok','Edit'),row('APPROVAL_REQUIRED','push → opens the exact request, never a blank chat','on','ok','Edit'),row('BUSINESS_EXCEPTION','push · per product · redacted preview','on','ok','Edit'),row('SECURITY_CRITICAL','urgent push · may break quiet hours','on','ok','Edit'),row('INFORMATIONAL','email digest 08:00 · grouped per issue/order','digest','off','Edit'),row('Quiet hours','22:00–07:00 Asia/Dubai · security + SEV-1 only','on','ok','Edit'),row('Lock-screen previews','no customer names, amounts, code or secrets','redacted','ok','Edit'),row('Phone call escalation','opt-in · allowlisted number · charged per minute','off','off','Enable'),row('Delivery · 24h','41 delivered · 2 retried · 0 failed · 0 duplicates','healthy','ok','Log')]],
+      ws:['Two workspaces, one Chief of Staff. Each project brings its own connectors, timezone, currency and agent profile — nothing crosses over without an explicit switch.',[row('Dev · storefront-web','GitHub acme-labs · home-studio runner · profile dev-cos v4','active','ok','Open',()=>this.setState({ws:'dev',proj:'storefront-web',drawer:null})),row('Dev · ledgerly-app','GitHub acme-labs · PR write · profile dev-cos v4','ready','ok','Open',()=>this.setState({ws:'dev',proj:'ledgerly-app',drawer:null})),row('Dev · checkout-api','GitHub acme-labs · read only','read-only','off','Open',()=>this.setState({ws:'dev',proj:'checkout-api',drawer:null})),row('Business · Acme Store','Supabase ro · Stripe · Gmail support@ · AED · Asia/Dubai · biz-cos v2','active','ok','Open',()=>this.setState({ws:'biz',proj:'Acme Store',drawer:null})),row('Business · Ledgerly SaaS','Stripe billing · LinkedIn · USD · UTC · biz-cos v2','ready','ok','Open',()=>this.setState({ws:'biz',proj:'Ledgerly SaaS',drawer:null})),row('Cross-project briefing','only on request · per-project citations kept','on request','off','Edit'),row('New project','pick mode, connectors, metric definitions, timezone','new','off','Add')]],
+      profiles:['Agent profiles are versioned. A conversation pins the version it started with; publishing a new one only affects new sessions. No profile can loosen the global safety ceiling.',[row('dev-chief-of-staff · v4','Claude · concise · tests → draft PR · $3/job · published 21 Oct','published','ok','View'),row('dev-chief-of-staff · v5','tone: more technical · read tests aloud by default','draft','warn','Publish'),row('biz-chief-of-staff · v2','plain language · draft-first email · AED · no refunds','published','ok','View'),row('Pinned sessions','#42 thread → dev v4 · #8812 thread → biz v2','2 pinned','ok','View'),row('Resolution order','account → workspace → project → task → channel','fixed','off','—'),row('Autonomy caps','Dev: prepare → approve · Business: draft only','enforced','ok','Edit')]],
+      voice:['Voice is a channel, not a bypass. The mic opens only when you press Talk, and spoken “yes” never approves a push, send, merge or deploy on its own.',[row('Push-to-talk · this Mac','browser mic · permission granted · released on End','ready','ok','Test'),row('Speech provider','OpenAI Realtime · audio leaves the home network · ~$0.06/min','consented','warn','Change'),row('Retention','transcript kept · audio discarded after turn','transcript-only','ok','Edit'),row('Speak in an open session','courteous interjections for TASK_DONE / TASK_FAILED','on','ok','Edit'),row('Wake word · desktop companion','local detection only · visible mic indicator','off','off','Enable'),row('Privacy mode','auto on shared devices · no sensitive spoken summaries','auto','ok','Edit'),row('Voice minutes · Oct','38 of 300 · hard cap','13%','ok','Edit'),row('Languages','English · Arabic · IDs and code read exactly','2','ok','Edit')]]
+    };
+    v.setTabs=[['conn','Connections'],['ws','Workspaces'],['profiles','Agent profiles'],['sec','Security & devices'],['remote','Remote access'],['limits','Budgets & limits'],['backup','Backups'],['notif','Notifications'],['voice','Voice & consent'],['audit','Audit log'],['privacy','Data & privacy'],['system','System health']].map(([id,l])=>({l,go:set({stab:id}),bg:stab===id?'var(--glass2)':'transparent',fg:stab===id?'var(--ink)':'var(--ink3)',sh:stab===id?'0 1px 3px rgba(0,0,0,.12)':'none'}));
+    v.setIntro=ST[stab][0]; v.setRows=ST[stab][1]; v.setMeter=stab==='limits';
+    v.dAuto=!!dn&&dn.t==='auto'; v.dQueue=!!dn&&(dn.t==='queue'||dn.t==='plan'); v.dKnow=!!dn&&dn.t==='know';
+    const autoSteps={au1:['schedule 08:00','fetch 38 sources','dedupe + verify','brief → inbox'],au2:['GitHub webhook','verify HMAC','POST /v1/jobs plan','owner review'],au3:['deploy webhook','open incident','wake DevOps','notify phone'],au4:['hourly cron','read stripe','compare baseline','alert if > 8%']}[S.drawer]||[];
+    v.autoSteps=autoSteps.map((n,i)=>({n,arrow:i<autoSteps.length-1?'→':''}));
+    v.autoList=N.filter(n=>n.t==='auto');
+    v.autoRuns=[['14:00','payment watch · fail rate 11.1%','alerted','var(--amber)'],['11:41','deploy failed → INC-0192 opened','ok','var(--green)'],['09:12','#57 labeled ai-ready → plan proposed','ok','var(--green)'],['06:02','morning brief · 38 sources · 11 dupes','ok','var(--green)'],['03:00','email digest · retry 2/3 · smtp timeout','recovered','var(--amber)']].map(([t,m,s,c])=>({t,m,s,c}));
+    const Q=S.queue||['q1','q2','q3','q4'];
+    const mv=(i,d)=>()=>this.setState(s=>{ const q=[...(s.queue||['q1','q2','q3','q4'])], j=i+d; if(j<0||j>=q.length) return null; [q[i],q[j]]=[q[j],q[i]]; return {queue:q}; });
+    v.queueRows=Q.map((id,i)=>{ const n=N.find(x=>x.id===id); return {n:i+1,title:n.title,meta:n.meta,up:mv(i,-1),down:mv(i,1),bg:id===S.drawer?'oklch(0.60 0.08 195 / .10)':'var(--hair)'}; });
+    const stp=(t,who,st)=>({t,who,c:st==='done'?'var(--green)':st==='now'?'var(--teal)':'var(--ink3)',f:st==='done'?'var(--green)':'transparent'});
+    v.plans=[
+      {id:'pl1',title:'Ledgerly 2.0 launch',kicker:'CHIEF OF STAFF · 2 APPROVALS',steps:[stp('Write PRD + acceptance criteria','PM','done'),stp('Open 3 GitHub issues','PM','done'),stp('Build CSV export (#57)','Developer','now'),stp('QA pass on export','QA','next'),stp('7-day launch posts (needs approval)','Marketer','next')],runLabel:'Continue plan'},
+      {id:'pl2',title:'Fix bug → PR',kicker:'SAVED TEMPLATE · USED 14×',steps:[stp('Qualify issue + criteria','Developer','next'),stp('Plan files and steps','Developer','next'),stp('Implement in sandbox + test','Developer','next'),stp('Push + draft PR (approval)','Developer','next')],runLabel:'Use template'},
+      {id:'pl3',title:'Checkout 3DS hardening',kicker:'DRAFT · FROM INC-0192',steps:[stp('Restore 8s 3DS timeout on branch','Developer','next'),stp('Load test checkout','QA','next'),stp('Deploy (manual approval)','DevOps','next')],runLabel:'Queue plan'}
+    ].map(p=>({...p,bd:p.id===S.drawer?'var(--teal)':'var(--hair)',run:()=>this.setState({drawer:'r2',sel:'r2'})}));
+    v.kq=S.kq||''; v.setKq=e=>this.setState({kq:e.target.value});
+    const KR=[['DECISION · ADR-007','var(--teal)','Money is rounded once, at cart total, per currency minor unit','from run_8f21 · #42 · today'],['RUN · run_8e90','var(--ink3)','Wishlist merge on login — PR #118','storefront-web · QA passed · yesterday'],['RESEARCH · saved','var(--violet)','Agent SDK session forking could replace pause/resume','release notes · 27 Oct'],['FACT · metric dictionary','var(--amber)','Gross sales ≠ net receipts ≠ profit; refunds settle later','Acme Store · reviewed by owner'],['INCIDENT · INC-0177','var(--coral)','3DS provider timeouts in March — fixed by raising timeout','checkout-api · resolved'],['DOC · PRD v1.0','var(--ink3)','NEXUS Home AI Command Center PRD','project knowledge · versioned']];
+    const q=(S.kq||'').toLowerCase();
+    v.kResults=KR.filter(([k,c,t,s])=>!q||(t+s+k).toLowerCase().includes(q)).map(([kind,c,t,s])=>({kind,c,t,s}));
+    v.kCount=v.kResults.length+' of 1,284';
+    v.kFilters=['project: all','type: any','agent: any','last 30 days','my permissions'];
+    v.dRepo=!!dn&&dn.t==='repo'; v.dSup=!!dn&&dn.t==='support'; v.dMkt=!!dn&&dn.t==='mkt';
+    v.repoRows=[['storefront-web','TypeScript · main · 14 open issues · synced 1m','CI passing','var(--green)','PR write'],['ledgerly-app','TypeScript · main · 9 open · synced 1m','CI passing','var(--green)','PR write'],['checkout-api','Go · main · 6 open · synced 2m','CI failing','var(--coral)','read only'],['marketing-site','Astro · main · 3 open · synced 5m','no CI','var(--ink3)','read only']].map(([n,m,ci,c,acc])=>({n,m,ci,c,acc}));
+    v.tickets=[['HIGH','var(--coral)','Sara K. · 12:14 · email','“I was charged twice for order #8812”','Payment attempt 1 failed at 3DS (not captured); attempt 2 succeeded. Customer frustrated, not angry.'],['MED','var(--amber)','Omar R. · 12:52 · chat','“Card keeps failing at checkout”','3 attempts, all 3DS timeout. Matches INC-0192.'],['LOW','var(--ink3)','4 others · today','Shipping time questions','Answered from approved FAQ drafts.']].map(([sev,c,meta,t,sum])=>({sev,c,meta,t,sum}));
+    v.cal=[['WED','Launch post','LinkedIn'],['THU','CSV export demo','X'],['FRI','Customer story','LinkedIn'],['SAT','—',''],['SUN','—',''],['MON','How matching works','X'],['TUE','Recap + offer','LinkedIn']].map(([d,t,ch])=>({d,t,ch}));
+    v.mktApprove=decide('a2','ok'); v.mktDeny=decide('a2','no'); v.mktLabel=S.dec.a2==='ok'?'Approved · scheduled':'Approve schedule';
+    const RD={r2:{title:'#57',log:[['14:27:40','system','#78746b','job accepted · runner home-studio'],['14:27:44','worktree','#78746b','git worktree add /nx/wt/8f22 origin/main'],['14:28:02','qualify','oklch(0.78 0.09 195)','#57 ok · 2 acceptance criteria'],['14:28:57','plan','oklch(0.78 0.09 195)','src/invoices/export.ts, api route, test'],['14:30:31','edit','oklch(0.76 0.08 290)','add toCSV() with RFC 4180 escaping'],['14:32:10','edit','oklch(0.76 0.08 290)','wire Export button on invoices page']],files:[['src/invoices/export.ts',62,0],['app/api/invoices/csv/route.ts',28,0],['src/invoices/Page.tsx',9,2]],explain:'Developer is adding a CSV export: a toCSV helper with proper escaping and an API route are written; tests run next. Nothing has left the home machine.'},pr:{title:'#118',log:[['yesterday','qa','oklch(0.78 0.10 155)','scenario 1 · anonymous wishlist persists after login · pass'],['yesterday','qa','oklch(0.78 0.10 155)','scenario 2 · duplicate items merged · pass'],['yesterday','qa','oklch(0.78 0.10 155)','scenario 3 · 200-item list · pass · 140ms'],['yesterday','github','oklch(0.78 0.09 195)','draft PR #118 marked ready for review']],files:[['src/wishlist/merge.ts',41,6],['src/auth/onLogin.ts',7,1],['tests/wishlist.merge.test.ts',58,0]],explain:'QA verified the wishlist merge with three scenarios and found no defects. The PR is ready; only your GitHub review remains — NEXUS will not merge it.'}}[S.drawer];
+    if(RD){ v.runLog=RD.log.map(([t,k,kc,m])=>({t,k,kc,m})); v.files=RD.files.map(([p,a,d])=>({p,a,d})); }
+    v.explain=RD?RD.explain:'Developer read 2 files, changed rounding to happen once per currency minor unit, added a regression test, and passed 148 tests and a secret scan. It stopped before pushing because that needs you.';
+    v.watch=['AI models & SDKs','Agent orchestration','GitHub releases','Competitors','Customer problems','Payments & 3DS'];
+    v.weights=[['credibility','25%'],['relevance','25%'],['novelty','20%'],['impact','15%'],['opportunity','15%']].map(([k,p])=>({k,p}));
+    v.findings=v.findings.map((f,i)=>({...f,read:i<2?'READ':'NEW',rc:i<2?'var(--ink3)':'var(--teal)'}));
+    v.mktStats=[['18.4k','impressions'],['3.1%','click rate'],['27','trial signups'],['ids ✓','post IDs kept']].map(([v2,k])=>({v:v2,k}));
+    v.wsModes=[['all','All'],['dev','Dev'],['biz','Business']].map(([id,label])=>({label,go:()=>this.setState({ws:id,proj:null,projMenu:false,sel:null}),bg:WS===id?'var(--glass2)':'transparent',fg:WS===id?'var(--ink)':'var(--ink3)',sh:WS===id?'0 1px 3px rgba(0,0,0,.12)':'none'}));
+    v.nodes=v.nodes.map(n=>({...n,op:inS(n.id)?1:0.16,pe:inS(n.id)?'auto':'none'}));
+    const ZW={code:'dev',biz:'biz',DV:'dev',QA:'dev',DO:'dev',MK:'biz',FA:'biz',SP:'biz'};
+    v.zones=v.zones.map(zn=>({...zn,op:(WS!=='all'&&ZW[zn.id]&&ZW[zn.id]!==WS)?0.35:1}));
+    const PJ={dev:[['storefront-web','GitHub acme-labs · 14 open issues'],['ledgerly-app','GitHub acme-labs · 9 open issues'],['checkout-api','GitHub acme-labs · read only']],biz:[['Acme Store','Supabase ro · Stripe · Gmail · AED'],['Ledgerly SaaS','Stripe billing · LinkedIn · USD']]};
+    v.scopeMode={all:'All workspaces',dev:'Dev',biz:'Business'}[WS];
+    v.scopeProj=S.proj||{all:'cross-project',dev:'all repos',biz:'all products'}[WS];
+    v.scopeEnv=WS==='all'?'read-only aggregate':WS==='dev'?'main · home-studio':'production · read-only';
+    v.scopeSrc=WS==='all'?'per-project citations':WS==='dev'?'GitHub + runner':(S.proj==='Ledgerly SaaS'?'USD · UTC':'AED · Asia/Dubai');
+    v.projMenu=!!S.projMenu; v.toggleProj=()=>this.setState(s=>({projMenu:!s.projMenu}));
+    const pItem=(w,n,m)=>({item:true,head:false,n,m,mark:WS===w&&S.proj===n?'● active':'',go:()=>this.setState({ws:w,proj:n,projMenu:false,sel:null})});
+    v.projList=[{head:true,item:false,t:'DEV · REPOSITORIES'},...PJ.dev.map(([n,m])=>pItem('dev',n,m)),{head:true,item:false,t:'BUSINESS · PRODUCTS'},...PJ.biz.map(([n,m])=>pItem('biz',n,m)),{head:true,item:false,t:'CHIEF OF STAFF'},{item:true,head:false,n:'All workspaces',m:'cross-project aggregate · on request',mark:WS==='all'?'● active':'',go:()=>this.setState({ws:'all',proj:null,projMenu:false})}];
+    if(!S.voice) v.cmdPh=WS==='dev'?`Ask, plan or run on ${S.proj||'any repo'} — executes on home-studio…`:WS==='biz'?`Ask about ${S.proj||'your products'} — read-only unless you approve…`:v.cmdPh;
+    clearTimeout(this._noop);
+    v.toggleVoice=()=>{ clearTimeout(this._vt1); clearTimeout(this._vt2); if(this.state.vst){ this.setState({vst:null,voice:false}); return; } this.setState({vst:'listening',voice:true,cmd:'',preview:false}); this._vt1=setTimeout(()=>this.setState({vst:'thinking'}),2400); this._vt2=setTimeout(()=>this.setState({vst:null,voice:false,cmd:'Fix issue #44 in storefront-web and open a draft PR',mode:'Execute',preview:true,heard:true,ws:'dev',proj:'storefront-web'}),4300); };
+    const VB=S.vst==='listening'?[0.5,0.8,0.65,0.95,0.55].map(d=>`nxbar ${d}s ease-in-out infinite`):[0,1,2,3,4].map(i=>`nxp 1.2s ${i*0.12}s infinite`);
+    v.vhud=S.vst?{bars:VB,c:S.vst==='listening'?'var(--coral)':'var(--teal)',state:S.vst==='listening'?'LISTENING · YOU’RE SPEAKING':'THINKING · DELEGATING',mic:'mic on · this Mac',caption:S.vst==='listening'?'“Fix issue forty-four in storefront web and open a draft PR…”':'Checking scope — Dev › storefront-web · Developer agent · home-studio online. You’ll see exactly what runs before anything starts.',disc:'audio → OpenAI Realtime · transcript kept, audio discarded · say “stop” anytime · pushes need on-screen confirm'}:null;
+    if(S.heard&&S.preview) v.previewRows=[{k:'Heard (voice)',v:'“fix issue forty-four…” → #44'}].concat(v.previewRows);
+    v.cancelPreview=set({preview:false,heard:false});
+    v.confirmPreview=()=>this.setState({preview:false,heard:false,cmd:'',sel:'r1',drawer:'r1'});
+    v.closeBrief=()=>{ this.setState({brief:false}); clearTimeout(this._tt); this._tt=setTimeout(()=>this.setState({toastOn:true}),1400); };
+    v.briefGo=()=>{ this.setState({brief:false,sel:'r1',drawer:'r1',toastOn:true}); };
+    const tdis=S.tdis||{};
+    const TT={dev:{cat:'TASK_DONE',c:'var(--teal)',meta:'storefront-web · 14:31',title:'Issue #42 is ready for review',sub:'5 files changed · 148 tests passed · no PR opened yet · nothing deployed'},biz:{cat:'BUSINESS_EXCEPTION',c:'var(--amber)',meta:'Acme Store · 14:12',title:'A customer asks about a double charge',sub:'order #8812 · customer details shown after you open it · nothing sent'}};
+    const tl=['dev','biz'].filter(k=>!tdis[k]&&!(k==='dev'&&S.dec.a1)&&!(k==='biz'&&S.mailSent));
+    v.toasts=S.toastOn&&!S.brief&&!S.drawer&&!S.vst&&!S.killed&&!S.preview&&tl.length?tl.map(k=>({...TT[k],later:()=>this.setState(s=>({tdis:{...(s.tdis||{}),[k]:1}})),open:()=>this.setState(s=>({tdis:{...(s.tdis||{}),[k]:1},drawer:k==='dev'?'r1':'sup',sel:k==='dev'?'r1':'sup'})),talk:()=>this.openConv(k)})):null;
+    v.openTalk=()=>this.openConv(WS==='biz'?'biz':'dev'); v.toConvBiz=()=>this.openConv('biz'); v.phoneTalk=()=>this.setState({phone:false},()=>this.openConv('dev'));
+    v.phoneNav=['Home','Inbox','Talk','Workspaces','Settings'].map(l=>({l,c:l==='Inbox'?'var(--ink)':'var(--ink3)',b:l==='Inbox'?'var(--teal)':'transparent',go:l==='Talk'?v.phoneTalk:l==='Workspaces'?()=>this.setState({phone:false,projMenu:true}):l==='Settings'?()=>this.setState({phone:false,drawer:'settings',stab:'notif'}):l==='Home'?()=>this.setState({phone:false}):()=>{}}));
+    const convK=dn&&dn.t==='conv'?dn.id.slice(5):null;
+    v.dConv=!!convK;
+    v.cvText=S.cvText||''; v.setCvText=e=>this.setState({cvText:e.target.value});
+    if(convK){
+      const cOk=S.dec.a1==='ok', cNo=S.dec.a1==='no', sent=!!S.mailSent;
+      const src=(k,l)=>({k,l,c:k==='observed'?'var(--green)':k==='inferred'?'var(--amber)':'var(--ink3)'});
+      const nx=(via,t,text,srcs,x)=>({via,t,text,srcs:srcs||null,...(x||{})});
+      const me=(via,t,text)=>({me:1,via,t,text});
+      const kv=a=>a.map(([k,v2])=>({k,v:v2}));
+      const lad=a=>a.map(([l,s])=>({l,c:s===1||s===true?'var(--green)':s==='run'?'var(--teal)':'var(--hair)',tc:s?'var(--ink)':'var(--ink3)',st:s===1||s===true?'✓ verified':s==='run'?'running':'not yet'}));
+      let C;
+      if(convK==='dev'){
+        const prop={kicker:cOk?'CONFIRMED ON SCREEN · AUDITED':cNo?'DECLINED':'ACTION PROPOSAL · R2 EXTERNAL WRITE',title:'Open a draft PR for #42',rows:kv([['action','github.create_draft_pr'],['repo','acme-labs/storefront-web'],['branch','nx/42-cart-rounding → main'],['reviewer','@lina-k · your default'],['hash','7f3a…c91 · expires 14:58']]),pending:!S.dec.a1,done:!!S.dec.a1,approve:decide('a1','ok'),deny:decide('a1','no'),doneText:cOk?'✓ confirmed 14:33:38 · same approval as the run gate':'nothing pushed · branch kept on home-studio',bg:cOk?'oklch(0.60 0.10 155 / .10)':'oklch(0.70 0.13 65 / .11)',bd:cOk?'var(--green)':cNo?'var(--hair)':'var(--amber)',fg:cOk?'var(--green)':cNo?'var(--ink3)':'var(--amber)'};
+        C={crumbs:['Dev','storefront-web','main','home-studio'],profile:'dev-chief-of-staff v4 · pinned',subject:'#42 Cart total rounds wrong on multi-currency',subMeta:'run r_8f21 · started from push',
+          ladder:lad([['Announced',1],['Ready for review',1],['Tests passed',1],['PR opened',cOk?1:0],['CI green',cOk?'run':0],['Merged',0],['Deployed',0]]),ladderNote:'each step needs its own source event — NEXUS never rounds these up to “done”',
+          turns:[nx('push','14:31','Issue #42 is ready for review. 5 files changed and 148 tests passed. No pull request has been opened yet.',[src('observed','run r_8f21 · test report'),src('observed','PR · NOT_CREATED')]),me('voice','14:32','Yes. Anything risky?'),nx('voice + text','14:32','Rounding now happens once per currency minor unit, so JPY and KWD carts can shift by one minor unit. No payment code changed and nothing was deployed.',[src('observed','diff · src/lib/money.ts'),src('inferred','JPY / KWD impact'),src('observed','deploy · NOT_STARTED')]),me('voice','14:33','Okay, create the PR. Assign my default reviewer.'),nx('text','14:33','I’ll open a draft PR for #42 with your default reviewer. Confirm on screen — a spoken yes can’t approve a push.',null,{prop})]
+            .concat(cOk?[nx('voice + text','14:33','Draft PR #121 is open and review is pending. CI is running — I’ll tell you when it finishes.',[src('observed','GitHub API 201 · PR #121'),src('pending','CI · 2 of 5 checks')])]:cNo?[nx('text','14:33','Understood. Nothing was pushed; the branch stays on home-studio.',[src('observed','audit · declined')])]:[]),
+          chips:[['Two sentences','Two sentences.',`#42 rounds money once at cart total, per currency. 148 tests pass and the PR is ${cOk?'open as draft #121':'not opened yet'}.`,[src('observed','run r_8f21')]],['Read the tests','Read me the new tests.','One new file, total.multi-currency.test.ts, with 6 cases: AED, USD, JPY, KWD, a mixed cart and zero-decimal. All 148 tests pass in 31.2s.',[src('observed','test report · artifact-test')]],['Notify me when CI finishes','Notify me when CI finishes.',`Watch rule saved: when CI on ${cOk?'PR #121':'the #42 branch'} finishes → phone push, and voice if a session is open. Expires in 24h, one alert max.`,[src('observed','watch rule wr_19 · active')]],['Switch to Acme Store','sw']],
+          ph:'Reply, or ask a follow-up about #42…',foot:'mic opens only while you Talk · audio → OpenAI Realtime · transcript-only · pushes and merges need on-screen confirm'};
+      } else {
+        const mail=(ver,hash,subj,body,sup)=>({kicker:sup?`DRAFT ${ver} · SUPERSEDED`:sent?'SENT · PROVIDER-CONFIRMED':`DRAFT ${ver} · NOT SENT`,hash:'hash '+hash,rows:kv([['from','support@acmestore.ae · Gmail'],['to','sara.khalid@gmail.com'],['subject',subj]]),body,pending:!sup&&!sent,done:!sup&&sent,op:sup?0.55:1,bd:sup?'var(--hair)':sent?'var(--green)':'var(--amber)',fg:sup?'var(--ink3)':sent?'var(--green)':'var(--amber)',send:()=>this.setState({mailSent:true}),doneText:'✓ sent 14:41 · Gmail message 18c2f…a9 · approval bound to c4d9…3b'});
+        C={crumbs:['Business','Acme Store','production · read-only','Gmail support@'],profile:'biz-chief-of-staff v2 · pinned',subject:'Sara K. · order #8812 · AED 214.00',subMeta:'ticket T-5531 · started from push',
+          ladder:lad([['Reported',1],['Investigated',1],['Draft ready',1],['Approved',sent],['Sent · confirmed',sent]]),ladderNote:'“sent” only after Gmail returns a message ID — a timeout stays UNKNOWN until checked',
+          turns:[nx('push','14:12','Acme Store: a customer is asking about a double charge on order #8812.',[src('observed','helpdesk · T-5531')]),me('text','14:36','What happened with the payment?'),nx('text','14:36','Stripe shows two attempts. The first failed at 3D Secure and was never captured; the second captured AED 214.00. She was charged once.',[src('observed','Stripe · pi_3Q…41'),src('inferred','bank hold drops ≤ 7 days')]),me('voice','14:37','Draft an email telling her she was charged once. Don’t send yet.'),nx('text','14:37','Draft v1 is ready for the customer on order #8812. It doesn’t promise a refund. Nothing has been sent.',null,{mail:mail('v1','a12e…07','Your payment','Hi Sara, thank you for reaching out. We looked into your payment and can confirm you were only charged once. Your first attempt did not complete at the 3D Secure step, so it was never captured. The second attempt of AED 214.00 went through. Any temporary hold should be released by your bank. We’re sorry for the worry. Best, Acme Store',1)}),me('text','14:38','Shorter, and add the order number.'),nx('text','14:38','Revised to v2. The content hash changed, so any earlier approval no longer applies.',null,{mail:mail('v2','c4d9…3b','Order #8812 — you were charged once','Hi Sara — about order #8812: you were charged once, AED 214.00. The first attempt stopped at 3D Secure and was never captured; any hold from it will drop off on its own. Sorry for the worry. — Acme Store support',0)})]
+            .concat(sent?[nx('text','14:41','Sent. Gmail confirmed message 18c2f…a9 at 14:41, and I’ve linked it to ticket T-5531.',[src('observed','Gmail API · 18c2f…a9')])]:[]),
+          chips:[['Read it aloud','Read the draft aloud.','Reading v2 aloud. This Mac is a private device, so I’ll include the customer’s name.',[src('observed','device · office Mac · private')]],['Notify me if she replies','Tell me if she replies.','Watch rule saved: a reply on T-5531 → phone push with a redacted preview. Expires in 7 days.',[src('observed','watch rule wr_20 · active')]],['Send it from Ledgerly SaaS','Send that email from Ledgerly SaaS.','That draft belongs to Acme Store. I won’t reuse it in another product without an explicit switch and a fresh preview of sender and recipient.',[src('observed','policy · cross-project deny')]],['Switch to storefront-web','sw']],
+          ph:'Reply, or ask about order #8812…',foot:'customer details shown in-app only · lock-screen pushes are redacted · a send needs approval of the exact content hash'};
+      }
+      const other=convK==='dev'?'biz':'dev';
+      v.cv={...C,crumbs:C.crumbs.map((t,i)=>({t,c:i===0?'var(--teal)':'var(--ink)',sep:i<C.crumbs.length-1?'›':''})),
+        turns:C.turns.concat((S.cvx&&S.cvx[convK])||[]).map(m=>({...m,srcs:m.srcs||null,prop:m.prop||null,mail:m.mail||null,who:m.me?'You':'NEXUS',al:m.me?'flex-end':'flex-start',r:m.me?'18px 18px 6px 18px':'18px 18px 18px 6px',bg:m.me?'var(--ink)':'var(--hair)',fg:m.me?'var(--bg)':'var(--ink)'})),
+        chips:C.chips.map(([l,q,a,srcs])=>({l,go:q==='sw'?()=>{ this.openConv(other); this.sayTurn(other,`Switch to ${other==='biz'?'Acme Store':'storefront-web'}.`,other==='biz'?'Switched to Business › Acme Store. Its connectors, timezone and profile apply now; storefront-web tools left this session.':'Switched to Dev › storefront-web. Acme Store customer data left this session.',[src('observed','context switch · audited')],'voice'); }:()=>this.sayTurn(convK,q,a,srcs)})),
+        ph:S.cvMic?'Listening — captions appear here…':C.ph};
+      const firstChip=C.chips.find(c=>c[1]!=='sw');
+      v.cvTalk=()=>{ if(this.state.cvMic) return; this.setState({cvMic:true}); clearTimeout(this._cm); this._cm=setTimeout(()=>{ this.setState({cvMic:false}); this.sayTurn(convK,firstChip[1],firstChip[2],firstChip[3],'voice'); },1700); };
+      v.cvSend=()=>{ const t=(this.state.cvText||'').trim(); if(!t) return; this.sayTurn(convK,t,`On it — answering from ${convK==='dev'?'storefront-web':'Acme Store'} sources only. I’ll mark anything I infer.`,[src('pending','working · home-studio')]); };
+      v.cvKey=e=>{ if(e.key==='Enter') v.cvSend(); };
+      v.cvMicBg=S.cvMic?'var(--coral)':'var(--glass2)'; v.cvMicFg=S.cvMic?'#fff':'var(--ink)'; v.cvMicL=S.cvMic?'Listening':'Talk'; v.cvMicAnim=S.cvMic?'nxp 1s infinite':'none';
+    } else v.cv=null;
+    const OD={o1:['Approve fix',[['does','revert timeout · run tests · open draft PR'],['runs on','home-studio · isolated container'],['budget','$3 cap · ~20 min'],['won’t do','deploy — separate approval'],['success','fail rate < 5% within 2 h of deploy']],'Failed payments jumped from about 4% to 11.1% at 11:40, and 11 of 23 are 3DS timeouts. checkout-api v2.31 shipped at 11:38 and commit e41b0a7 cut the timeout from 8 s to 3 s. Strong correlation with a clear mechanism — not yet proof. The fix is reversible.',[['observed','Stripe · 23 failures'],['observed','commit e41b0a7'],['inferred','causal link · 62%']]],o2:['Approve drafts',[['does','draft one personal email · no discount'],['to','61 customers · Acme Store only'],['sends','never on its own — you approve final copy'],['success','orders from this group over 14 days']],'Your most valuable customers — 4.2 orders and AED 690 lifetime on average — went quiet when delivery times slipped in September. A short personal note usually beats a discount. I’ll measure orders from exactly this group for 14 days.',[['observed','Supabase · 61 customers'],['inferred','9–14% benchmark']]],o3:['Approve PRD',[['does','short PRD + 3 GitHub issues in ledgerly-app'],['risk','none · docs and issues only'],['next','you review before any build starts']],'The same complaint shows up in 14 tickets and 9 forum threads: matching Stripe payouts to orders by hand. Ledgr’s launch confirms demand but targets accountants; you target owners. Worth a 1-week validation, not a bet.',[['observed','helpdesk · 14 tickets'],['observed','Ledgr launch page'],['inferred','demand signal']]],o4:['Approve fix',[['does','tag test flaky · add retry · open issue'],['scope','checkout-api tests only'],['won’t do','touch payment logic'],['success','3 green runs in a row']],'The test calls the real 3DS sandbox with a 3 s timeout — the same setting hurting production. It fails when the sandbox is slow, not when code is wrong. Quarantining unblocks CI; the real fix is the timeout itself.',[['observed','CI · 3 of 8 failed'],['inferred','sandbox latency · 71%']]],o5:['Approve spike',[['does','2-hour spike on a branch · write findings'],['budget','$2 cap'],['won’t do','change the running NEXUS'],['success','pause/resume tests pass on SDK']],'NEXUS keeps ~400 lines to pause agents at approval gates and resume them. The new SDK does this natively with permission hooks — fewer edge cases, if the hooks behave as documented. A spike will tell.',[['observed','SDK release notes'],['inferred','line estimate']]]};
+    const opv=S.opv||{}, oIds=['o1','o2','o3','o4','o5'];
+    const oApprove=id=>this.setState(s=>({dec:{...s.dec,[id]:'ok'}}));
+    const srcC=a=>a.map(([k,l])=>({k,l,c:k==='observed'?'var(--green)':k==='inferred'?'var(--amber)':'var(--ink3)'}));
+    v.nodes=v.nodes.map(n=>{ if(n.t!=='opp') return n; const o=OD[n.id], dd=S.dec[n.id], pv=!!opv[n.id]; return {...n,opp:!far,rows:o[1].map(([k,v2])=>({k,v:v2})),pvOpen:pv&&!dd,pvBg:pv?'var(--hair)':'transparent',oPending:!dd,oDone:!!dd,oDoneText:dd==='ok'?`approved · queued r_8f3${oIds.indexOf(n.id)+1} on home-studio`:'not now · kept in Noticed',oApproveL:pv?'Confirm':'Approve',oExplain:e=>{ e.stopPropagation(); this.setState({drawer:n.id,sel:n.id}); },oPreview:e=>{ e.stopPropagation(); this.setState(s=>({opv:{...(s.opv||{}),[n.id]:!(s.opv||{})[n.id]},sel:n.id})); },oApprove:e=>{ e.stopPropagation(); if(!pv) this.setState(s=>({opv:{...(s.opv||{}),[n.id]:true},sel:n.id})); else oApprove(n.id); }}; });
+    v.dOpp=!!dn&&dn.t==='opp';
+    if(v.dOpp){ const o=OD[dn.id], dd=S.dec[dn.id]; v.op={impact:dn.impact,conf:dn.kicker,explain:o[2],srcs:srcC(o[3]),rows:o[1].map(([k,v2])=>({k,v:v2})),approveL:o[0],pending:!dd,done:!!dd,approve:()=>oApprove(dn.id),deny:()=>this.setState(s=>({dec:{...s.dec,[dn.id]:'no'}})),doneText:dd==='ok'?`✓ approved · queued r_8f3${oIds.indexOf(dn.id)+1} on home-studio · audited`:'not now · NEXUS won’t raise it again unless the evidence changes',dc:dd==='ok'?'var(--green)':'var(--ink3)',bd:dd==='ok'?'var(--green)':'var(--amber)'}; } else v.op=null;
+    const hh=React.createElement, live=!!S.vst;
+    v.orb=hh('span',{style:{position:'relative',width:40,height:40,display:'inline-block',borderRadius:'50%'}},hh('span',{style:{position:'absolute',inset:0,borderRadius:'50%',background:'conic-gradient(from 0deg,var(--teal),var(--amber),var(--violet),var(--teal))',animation:`nxspin ${live?2.2:7}s linear infinite`,filter:'blur(1.5px)'}}),hh('span',{style:{position:'absolute',inset:6,borderRadius:'50%',background:'var(--bg)'}}),hh('span',{style:{position:'absolute',inset:14,borderRadius:'50%',background:'var(--teal)',animation:`nxbreath ${live?1.1:3.6}s ease-in-out infinite`}}));
+    v.modesDisp=(typeof window!=='undefined'&&window.innerWidth<1180)?'none':'flex';
+    v.orbOn=!S.drawer&&!S.brief&&!S.phone&&!S.killed;
+    const openPending=oIds.filter(id=>!S.dec[id]).length;
+    const flyOpp=()=>{ const el=this.vp.current, w=el?el.clientWidth:1200; const zz=Math.min(0.9,Math.max(0.4,(w-40)/2080)); this.setState(s=>({wdis:true,group:'domain',z:zz,px:(w-2080*zz)/2,py:96,anim:true,sel:'o1'})); };
+    v.whisper=S.toastOn&&!v.toasts&&!S.wdis&&openPending&&!S.vst&&!S.preview?{text:WS==='dev'?'checkout-api CI keeps failing on one flaky test — and I found 4 more things worth your time.':`Checkout failures tripled after the 11:38 deploy. I found ${openPending} things worth your time — want the short version?`,later:set({wdis:true}),go:flyOpp}:null;
+    v.orbClick=()=>{ if(v.whisper) flyOpp(); else this.openConv(WS==='biz'?'biz':'dev'); };
+    // @VALS
+    return v;
+  }
+}
+</script>
+</body>
+</html>

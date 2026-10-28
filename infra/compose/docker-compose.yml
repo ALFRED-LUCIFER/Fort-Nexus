@@ -1,0 +1,20 @@
+name: nexus
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: nexus # local-only dev credential; bound to loopback below
+      POSTGRES_DB: nexus
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus -d nexus"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+volumes:
+  pgdata:

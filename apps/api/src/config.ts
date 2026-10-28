@@ -1,0 +1,62 @@
+import { z } from "zod";
+import { RUNNER_LEASE_POLL_MS } from "@nexus/contracts";
+
+const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
+const origin = z.url({ protocol: /^https?$/ }).transform((u) => new URL(u).origin);
+
+const Env = z.object({
+  NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
+  DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
+  // shortcut: loopback is enforced, so a containerised API needs this relaxed with a published-port guard (Compose step).
+  // DEC-03: the API is reached through Tailscale Serve / a local proxy, never bound to a LAN interface.
+  API_HOST: z
+    .string()
+    .default("127.0.0.1")
+    .refine((h) => LOOPBACK.has(h), "API_HOST must be a loopback address"),
+  API_PORT: z.coerce.number().int().min(1).max(65535).default(8787),
+  PUBLIC_ORIGIN: origin.default("http://127.0.0.1:8787"),
+  TRUSTED_ORIGINS: z
+    .string()
+    .default("")
+    .transform((s) =>
+      s
+        .split(",")
+        .map((o) => o.trim())
+        .filter(Boolean),
+    )
+    .pipe(z.array(origin)),
+  BETTER_AUTH_SECRET: z.string().min(32, "BETTER_AUTH_SECRET must be at least 32 characters"),
+  RUNNER_LEASE_POLL_MS: z.coerce.number().int().min(0).max(60_000).default(RUNNER_LEASE_POLL_MS),
+});
+
+export type Config = {
+  env: "development" | "production" | "test";
+  logLevel: z.infer<typeof Env>["LOG_LEVEL"];
+  databaseUrl: string;
+  host: string;
+  port: number;
+  publicOrigin: string;
+  trustedOrigins: string[];
+  authSecret: string;
+  leasePollMs: number;
+};
+
+/** Parses env once at startup; throws with every problem listed so the process fails fast. */
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  const parsed = Env.safeParse(env);
+  if (!parsed.success) throw new Error(`Invalid configuration:\n${z.prettifyError(parsed.error)}`);
+  const e = parsed.data;
+  const devOrigins = e.NODE_ENV === "production" ? [] : ["http://localhost:5173"];
+  return {
+    env: e.NODE_ENV,
+    logLevel: e.LOG_LEVEL,
+    databaseUrl: e.DATABASE_URL,
+    host: e.API_HOST,
+    port: e.API_PORT,
+    publicOrigin: e.PUBLIC_ORIGIN,
+    trustedOrigins: [...new Set([e.PUBLIC_ORIGIN, ...e.TRUSTED_ORIGINS, ...devOrigins])],
+    authSecret: e.BETTER_AUTH_SECRET,
+    leasePollMs: e.RUNNER_LEASE_POLL_MS,
+  };
+}
