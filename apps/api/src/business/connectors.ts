@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type {
   ConnectionTestResult,
   Connector,
@@ -8,20 +8,24 @@ import type {
   UpdateConnectorRequest,
 } from "@nexus/contracts";
 import { audit } from "../audit.ts";
-import type { Db } from "../db/index.ts";
+import type { Db, Tx } from "../db/index.ts";
 import { HttpError, notFound } from "../errors.ts";
-import type { ProjectScope } from "../scope.ts";
+import { ownerWorkspaceIds, resolveProject } from "../workspaces.ts";
 import { CredentialError, loadConnectionString } from "./credentials.ts";
 import { ConnectError, IdentifierError, isTimeout, quoteTable, readOnly } from "./gateway.ts";
 import { businessConnectors, type BusinessConnectorRow } from "./schema.ts";
 
-/** Who is calling, for which project, and how to reach connector credentials. Every query filters on the scope. */
-export type BusinessScope = ProjectScope & {
+/** Who is calling, for which Business project, and how to reach connector credentials (wave 2 pinned signature). */
+export type BusinessScope = {
   db: Db;
   connectorsDir: string;
   actor: string;
   correlationId: string;
+  ownerId: string;
+  projectId: string;
 };
+/** Calls by connector id: the project comes from the connector's own row. */
+export type OwnerScope = Omit<BusinessScope, "projectId">;
 
 type Check = ConnectionTestResult["checks"][number];
 
@@ -41,51 +45,85 @@ export const toConnectorDto = (r: BusinessConnectorRow): Connector => ({
   createdAt: r.createdAt.toISOString(),
 });
 
-const inScope = (s: ProjectScope, id: string) =>
-  and(
-    eq(businessConnectors.id, id),
-    eq(businessConnectors.workspaceId, s.workspaceId),
-    eq(businessConnectors.projectId, s.projectId),
-  );
+/** Only connectors in the owner's workspaces exist for this caller; another owner's id reads as missing. */
+const owned = async (db: Db | Tx, ownerId: string) =>
+  inArray(businessConnectors.workspaceId, await ownerWorkspaceIds(db, ownerId));
 
+/** The connector if it is in `s.projectId`; one of another project counts as missing (NFR-CNV-05). */
 export async function findConnector(s: BusinessScope, id: string): Promise<BusinessConnectorRow | undefined> {
-  const [row] = await s.db.select().from(businessConnectors).where(inScope(s, id));
+  const [row] = await s.db
+    .select()
+    .from(businessConnectors)
+    .where(
+      and(
+        eq(businessConnectors.id, id),
+        eq(businessConnectors.projectId, s.projectId),
+        await owned(s.db, s.ownerId),
+      ),
+    );
   return row;
 }
 
-async function requireConnector(s: BusinessScope, id: string) {
-  const row = await findConnector(s, id);
+/** The owner's connector by id, in any of their projects. */
+export async function findOwnedConnector(
+  s: OwnerScope,
+  id: string,
+): Promise<BusinessConnectorRow | undefined> {
+  const [row] = await s.db
+    .select()
+    .from(businessConnectors)
+    .where(and(eq(businessConnectors.id, id), await owned(s.db, s.ownerId)));
+  return row;
+}
+
+async function requireConnector(s: OwnerScope, id: string) {
+  const row = await findOwnedConnector(s, id);
   if (!row) throw notFound("Connector");
   return row;
 }
 
-const auditMeta = (s: BusinessScope, extra: Record<string, unknown> = {}) => ({
-  workspaceId: s.workspaceId,
-  projectId: s.projectId,
+/** Locks the owner's connector, then share-locks its project: 404 unknown, 409 archived project. */
+async function lockForWrite(tx: Tx, s: OwnerScope, id: string) {
+  const [row] = await tx
+    .select()
+    .from(businessConnectors)
+    .where(and(eq(businessConnectors.id, id), await owned(tx, s.ownerId)))
+    .for("update");
+  if (!row) throw notFound("Connector");
+  await resolveProject(tx, s.ownerId, row.projectId, { write: true, mode: "BUSINESS" });
+  return row;
+}
+
+const auditMeta = (r: BusinessConnectorRow, extra: Record<string, unknown> = {}) => ({
+  workspaceId: r.workspaceId,
+  projectId: r.projectId,
   ...extra,
 });
 
-export async function listConnectors(s: BusinessScope): Promise<Connector[]> {
+/** One project's connectors; without `projectId`, the read-only "All" view across the owner's projects. */
+export async function listConnectors(
+  s: OwnerScope & { projectId?: string | undefined },
+): Promise<Connector[]> {
   const rows = await s.db
     .select()
     .from(businessConnectors)
     .where(
-      and(eq(businessConnectors.workspaceId, s.workspaceId), eq(businessConnectors.projectId, s.projectId)),
+      and(
+        await owned(s.db, s.ownerId),
+        s.projectId === undefined ? undefined : eq(businessConnectors.projectId, s.projectId),
+      ),
     )
     .orderBy(desc(businessConnectors.id));
   return rows.map(toConnectorDto);
 }
 
-export async function createConnector(s: BusinessScope, body: CreateConnectorRequest): Promise<Connector> {
+/** FR-BIZ-01: a connector belongs to one active Business project of the owner (404 / 409 archived / 403 Dev). */
+export async function createConnector(s: OwnerScope, body: CreateConnectorRequest): Promise<Connector> {
   return s.db.transaction(async (tx) => {
+    const p = await resolveProject(tx, s.ownerId, body.projectId, { write: true, mode: "BUSINESS" });
     const [row] = await tx
       .insert(businessConnectors)
-      .values({
-        ...body,
-        workspaceId: s.workspaceId,
-        projectId: s.projectId, // shortcut: placeholder scope wins over body.projectId until wave 2 S2 lands
-        status: "UNTESTED",
-      })
+      .values({ ...body, workspaceId: p.workspaceId, projectId: p.projectId, status: "UNTESTED" })
       .returning();
     await audit(tx, {
       actor: s.actor,
@@ -93,7 +131,7 @@ export async function createConnector(s: BusinessScope, body: CreateConnectorReq
       resourceType: "connector",
       resourceId: row!.id,
       correlationId: s.correlationId,
-      metadata: auditMeta(s, { provider: body.provider, environment: body.environment }),
+      metadata: auditMeta(row!, { provider: body.provider, environment: body.environment }),
     });
     return toConnectorDto(row!);
   });
@@ -101,13 +139,12 @@ export async function createConnector(s: BusinessScope, body: CreateConnectorReq
 
 /** Changing what or how the connector reads needs a fresh test before a PROD connector serves tools again. */
 export async function updateConnector(
-  s: BusinessScope,
+  s: OwnerScope,
   id: string,
   u: UpdateConnectorRequest,
 ): Promise<Connector> {
   return s.db.transaction(async (tx) => {
-    const [row] = await tx.select().from(businessConnectors).where(inScope(s, id)).for("update");
-    if (!row) throw notFound("Connector");
+    const row = await lockForWrite(tx, s, id);
     const { disabled, ...fields } = u;
     let status: ConnectorStatus = row.status;
     if (disabled === true) status = "DISABLED";
@@ -125,13 +162,13 @@ export async function updateConnector(
       resourceType: "connector",
       resourceId: id,
       correlationId: s.correlationId,
-      metadata: auditMeta(s, { fields: Object.keys(u), status }),
+      metadata: auditMeta(row, { fields: Object.keys(u), status }),
     });
     return toConnectorDto(updated!);
   });
 }
 
-export async function getDictionary(s: BusinessScope, id: string): Promise<MetricDictionary> {
+export async function getDictionary(s: OwnerScope, id: string): Promise<MetricDictionary> {
   const row = await requireConnector(s, id);
   if (!row.dictionary) throw notFound("Metric dictionary");
   return row.dictionary;
@@ -140,13 +177,12 @@ export async function getDictionary(s: BusinessScope, id: string): Promise<Metri
 const dictionaryTables = (d: MetricDictionary) => [d.orders.table, ...(d.payments ? [d.payments.table] : [])];
 
 export async function putDictionary(
-  s: BusinessScope,
+  s: OwnerScope,
   id: string,
   dictionary: MetricDictionary,
 ): Promise<MetricDictionary> {
   return s.db.transaction(async (tx) => {
-    const [row] = await tx.select().from(businessConnectors).where(inScope(s, id)).for("update");
-    if (!row) throw notFound("Connector");
+    const row = await lockForWrite(tx, s, id);
     try {
       for (const t of dictionaryTables(dictionary)) quoteTable(t, row.schemaAllowlist);
     } catch (err) {
@@ -164,7 +200,7 @@ export async function putDictionary(
       resourceType: "connector",
       resourceId: id,
       correlationId: s.correlationId,
-      metadata: auditMeta(s, { tables: dictionaryTables(dictionary), payments: !!dictionary.payments }),
+      metadata: auditMeta(row, { tables: dictionaryTables(dictionary), payments: !!dictionary.payments }),
     });
     return dictionary;
   });
@@ -176,8 +212,9 @@ const sqlState = (err: unknown) => {
 };
 
 /** FR-CON-02: credential → network → auth → read_only → schema_allowlist → dictionary, stopping at the first failure. */
-export async function testConnector(s: BusinessScope, id: string): Promise<ConnectionTestResult> {
+export async function testConnector(s: OwnerScope, id: string): Promise<ConnectionTestResult> {
   const row = await requireConnector(s, id);
+  await resolveProject(s.db, s.ownerId, row.projectId, { write: true, mode: "BUSINESS" });
   if (row.status === "DISABLED")
     throw new HttpError(409, "CONFLICT", "Enable the connector before testing it");
   const checks: Check[] = [];
@@ -309,7 +346,7 @@ export async function testConnector(s: BusinessScope, id: string): Promise<Conne
       resourceId: id,
       correlationId: s.correlationId,
       outcome: ok ? "SUCCEEDED" : "FAILED",
-      metadata: auditMeta(s, {
+      metadata: auditMeta(row, {
         environment: row.environment,
         checks: Object.fromEntries(checks.map((c) => [c.name, c.ok])),
       }),

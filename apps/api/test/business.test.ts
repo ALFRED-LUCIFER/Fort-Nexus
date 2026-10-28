@@ -13,16 +13,18 @@ import type {
   MetricDictionary,
   MetricQuery,
   PaymentFailuresResponse,
+  Project,
   SalesSummaryResponse,
+  WorkspaceList,
 } from "@nexus/contracts";
+import { listConnectors } from "../src/business/connectors.ts";
 import { businessConnectors } from "../src/business/schema.ts";
 import { readOnly } from "../src/business/gateway.ts";
 import { getPaymentFailures, getSalesSummary, type ToolScope } from "../src/business/metrics.ts";
 import { answer } from "../src/conversations/tools.ts";
 import { createDb } from "../src/db/index.ts";
 import { auditRecords } from "../src/db/schema.ts";
-import { projectScope } from "../src/scope.ts";
-import { createTestApp, ownerSession, type TestApp } from "./helpers/owner-session.ts";
+import { createTestApp, homeProjectId, ownerSession, type TestApp } from "./helpers/owner-session.ts";
 
 // A second Postgres plays the business source: a read-only role, a write-capable role and orders/payments seeded across
 // the Asia/Dubai (UTC+4) day boundary. "Now" is 14:30 in Dubai on 28 Oct 2026.
@@ -93,6 +95,10 @@ let dir: string;
 let roUrl: string;
 let rwUrl: string;
 let appDb: ReturnType<typeof createDb>;
+let ownerId: string;
+let bizWorkspaceId: string;
+/** The Business project every connector here lives in, unless a test says otherwise. */
+let shop: Project;
 
 const roleUrl = (user: string, password: string) => {
   const u = new URL(source.getConnectionUri());
@@ -125,6 +131,10 @@ beforeAll(async () => {
   t = await createTestApp({ NEXUS_CONNECTORS_DIR: dir });
   cookie = await ownerSession(t);
   appDb = createDb(t.databaseUrl);
+  ownerId = (await call("GET", "/v1/me")).json<{ id: string }>().id;
+  const ws = (await call("GET", "/v1/workspaces")).json<WorkspaceList>();
+  bizWorkspaceId = ws.items.find((w) => w.mode === "BUSINESS")!.id;
+  shop = await businessProject("shop");
 });
 
 afterAll(async () => {
@@ -142,6 +152,12 @@ const call = (method: "GET" | "POST" | "PATCH" | "PUT", url: string, payload?: u
     headers: { cookie, origin: t.config.publicOrigin },
   });
 
+async function businessProject(slug: string) {
+  const res = await call("POST", `/v1/workspaces/${bizWorkspaceId}/projects`, { name: slug, slug });
+  expect(res.statusCode, res.body).toBe(201);
+  return res.json<Project>();
+}
+
 /** Secrets must never show up in a response body, a stored row or an audit record. */
 const expectNoSecrets = (text: string) => {
   expect(text).not.toContain(RO_PASSWORD);
@@ -155,6 +171,7 @@ async function connector(
   dictionary: MetricDictionary | null = DICTIONARY,
 ) {
   const res = await call("POST", "/v1/business/connectors", {
+    projectId: shop.id,
     name: `shop ${randomBytes(3).toString("hex")}`,
     provider: "POSTGRES",
     environment: "DEV",
@@ -192,13 +209,15 @@ const payments = async (q: Record<string, string>) => {
 };
 
 /** The exported tools at a fixed "now", as the conversations module calls them. */
-const toolScope = (): ToolScope => ({
-  ...projectScope(),
+const toolScope = (over: Partial<ToolScope> = {}): ToolScope => ({
   db: appDb.db,
   connectorsDir: dir,
   actor: "user:test",
   correlationId: randomUUID(),
+  ownerId,
+  projectId: shop.id,
   now: NOW,
+  ...over,
 });
 const query = (connectorId: string, over: Partial<MetricQuery> = {}): MetricQuery => ({
   connectorId,
@@ -234,19 +253,18 @@ describe("business connector registry", () => {
   it("registers a connector by credential reference; the secret is never stored, logged in audit or returned", async () => {
     const c = await connector({ environment: "STAGING" }, null);
     expect(c).toMatchObject({ status: "UNTESTED", hasDictionary: false, statementTimeoutMs: 5000 });
-    const list = await call("GET", "/v1/business/connectors");
+    expect(c.projectId).toBe(shop.id);
+    const list = await call("GET", `/v1/business/connectors?projectId=${shop.id}`);
     expect(list.json<{ items: Connector[] }>().items.map((i) => i.id)).toContain(c.id);
     expect(await runTest(c.id)).toMatchObject({ ok: true });
     const [row] = await appDb.db.select().from(businessConnectors).where(eq(businessConnectors.id, c.id));
-    expect(row).toMatchObject({
-      workspaceId: projectScope().workspaceId,
-      projectId: projectScope().projectId,
-    });
+    expect(row).toMatchObject({ workspaceId: bizWorkspaceId, projectId: shop.id });
     expectNoSecrets(JSON.stringify(row));
     const records = await appDb.db.select().from(auditRecords).where(eq(auditRecords.resourceId, c.id));
     expect(records.map((r) => r.action).sort()).toEqual(["connector.create", "connector.test"]);
     expectNoSecrets(JSON.stringify(records));
-    expect(records[0]!.metadata).toMatchObject({ workspaceId: projectScope().workspaceId });
+    for (const r of records)
+      expect(r.metadata).toMatchObject({ workspaceId: bizWorkspaceId, projectId: shop.id });
   });
 
   it("credential files must be private, valid and are never echoed", async () => {
@@ -507,20 +525,95 @@ describe("read-only metric tools", () => {
   });
 });
 
-// Last in the file: it disables every other connector in the project.
-describe("Talk answers business questions from the gateway (FR-BIZ-07)", () => {
-  const ask = (compare = false) =>
-    answer(
-      { kind: "BUSINESS_METRIC", metric: "SALES_SUMMARY", day: "2026-10-27", compare },
-      {
-        db: appDb.db,
-        github: null,
-        ownerId: "owner",
-        subjectJobId: null,
-        connectorsDir: dir,
-        correlationId: randomUUID(),
-      },
+describe("project scope (decoy project B, NFR-CNV-05)", () => {
+  const ids = async (q: string) =>
+    (await call("GET", `/v1/business/connectors${q}`)).json<{ items: Connector[] }>().items.map((i) => i.id);
+  const body = {
+    name: "decoy",
+    provider: "POSTGRES",
+    environment: "DEV",
+    credentialRef: "shop-ro",
+    schemaAllowlist: ["shop"],
+  };
+
+  it("B's list never contains A's connectors; All lists both", async () => {
+    const decoy = await businessProject(`decoy-${randomBytes(3).toString("hex")}`);
+    const a = await connector();
+    const b = await connector({ projectId: decoy.id });
+    expect(await ids(`?projectId=${decoy.id}`)).toEqual([b.id]);
+    expect(await ids(`?projectId=${shop.id}`)).toEqual(expect.arrayContaining([a.id]));
+    expect(await ids(`?projectId=${shop.id}`)).not.toContain(b.id);
+    expect(await ids("")).toEqual(expect.arrayContaining([a.id, b.id]));
+    expect((await listConnectors(toolScope({ projectId: decoy.id }))).map((c) => c.id)).toEqual([b.id]);
+  });
+
+  it("a tool scoped to B, or to another owner, treats A's connector as missing", async () => {
+    const decoy = await businessProject(`decoy-${randomBytes(3).toString("hex")}`);
+    const a = await connector();
+    for (const s of [toolScope({ projectId: decoy.id }), toolScope({ ownerId: "someone-else" })]) {
+      expect((await getSalesSummary(s, query(a.id, { day: "2026-10-27" }))).current).toMatchObject({
+        status: "UNAVAILABLE",
+        reason: "NO_CONNECTOR",
+      });
+      expect((await getPaymentFailures(s, query(a.id))).current).toMatchObject({ reason: "NO_CONNECTOR" });
+    }
+    const stranger = { db: appDb.db, connectorsDir: dir, actor: "user:x", correlationId: randomUUID() };
+    expect(await listConnectors({ ...stranger, ownerId: "someone-else" })).toEqual([]);
+    expect(await listConnectors({ ...stranger, ownerId: "someone-else", projectId: shop.id })).toEqual([]);
+  });
+
+  it("connectors need a Business project: a Dev project is 403, an unknown one 404", async () => {
+    const home = await homeProjectId(t, cookie);
+    const before = await ids("");
+    expect((await call("POST", "/v1/business/connectors", { ...body, projectId: home })).statusCode).toBe(
+      403,
     );
+    expect((await call("GET", `/v1/business/connectors?projectId=${home}`)).statusCode).toBe(403);
+    const unknown = randomUUID();
+    expect((await call("POST", "/v1/business/connectors", { ...body, projectId: unknown })).statusCode).toBe(
+      404,
+    );
+    expect((await call("GET", `/v1/business/connectors?projectId=${unknown}`)).statusCode).toBe(404);
+    expect(await ids("")).toEqual(before);
+  });
+
+  it("an archived project's connectors stay readable, but can't be created, changed or tested (409)", async () => {
+    const p = await businessProject(`old-${randomBytes(3).toString("hex")}`);
+    const c = await connector({ projectId: p.id });
+    expect((await call("PATCH", `/v1/projects/${p.id}`, { archived: true })).statusCode).toBe(200);
+    for (const res of [
+      await call("POST", "/v1/business/connectors", { ...body, projectId: p.id }),
+      await call("PATCH", `/v1/business/connectors/${c.id}`, { disabled: true }),
+      await call("PUT", `/v1/business/connectors/${c.id}/dictionary`, DICTIONARY),
+      await call("POST", `/v1/business/connectors/${c.id}/test`),
+    ])
+      expect(res.statusCode, res.body).toBe(409);
+    expect(await ids(`?projectId=${p.id}`)).toEqual([c.id]);
+    expect((await call("GET", `/v1/business/connectors/${c.id}/dictionary`)).statusCode).toBe(200);
+    expect((await sales({ connectorId: c.id, day: "2026-10-27" })).current).toMatchObject({
+      status: "AVAILABLE",
+      paidOrders: 3,
+    });
+    const [row] = await appDb.db.select().from(businessConnectors).where(eq(businessConnectors.id, c.id));
+    expect(row).toMatchObject({ status: "UNTESTED", lastTestedAt: null });
+  });
+});
+
+// Last in the file: it disables every other connector in the shop project.
+describe("Talk answers business questions from the gateway (FR-BIZ-07)", () => {
+  const ask = (compare = false) => {
+    // A variable, not a literal: `projectId` is the thread's project once Talk is project-scoped (wave 2 S3).
+    const ctx = {
+      db: appDb.db,
+      github: null,
+      ownerId,
+      projectId: shop.id,
+      subjectJobId: null,
+      connectorsDir: dir,
+      correlationId: randomUUID(),
+    };
+    return answer({ kind: "BUSINESS_METRIC", metric: "SALES_SUMMARY", day: "2026-10-27", compare }, ctx);
+  };
 
   it("quotes the gateway's figures with a METRIC source, and never picks between several sources", async () => {
     const c = await connector();
@@ -529,7 +622,10 @@ describe("Talk answers business questions from the gateway (FR-BIZ-07)", () => {
       text: expect.stringMatching(/Several business sources/),
     });
 
-    for (const other of await appDb.db.select().from(businessConnectors))
+    for (const other of await appDb.db
+      .select()
+      .from(businessConnectors)
+      .where(eq(businessConnectors.projectId, shop.id)))
       if (other.id !== c.id)
         expect(
           (await call("PATCH", `/v1/business/connectors/${other.id}`, { disabled: true })).statusCode,

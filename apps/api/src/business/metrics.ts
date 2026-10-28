@@ -68,10 +68,9 @@ type Ready = { row: BusinessConnectorRow; dict: MetricDictionary; connectionStri
 /** Everything that must hold before a tool may touch the source; otherwise the reason it is unavailable. */
 async function resolveSource(
   s: ToolScope,
-  connectorId: string,
+  row: BusinessConnectorRow | undefined,
   needs: "orders" | "payments",
 ): Promise<Ready | Unavailable> {
-  const row = await findConnector(s, connectorId);
   if (!row) return unavailable("NO_CONNECTOR", "No business source is connected for this request");
   if (row.status === "DISABLED") return unavailable("CONNECTOR_DISABLED", `${row.name} is disabled`);
   if (row.status === "FAILED")
@@ -143,7 +142,8 @@ async function runTool<R>(
 ): Promise<{ current: R | Unavailable; previous: R | Unavailable | null }> {
   const started = performance.now();
   const now = s.now ?? new Date();
-  const ready = await resolveSource(s, query.connectorId, needs);
+  const row = await findConnector(s, query.connectorId);
+  const ready = await resolveSource(s, row, needs);
   let result: { current: R | Unavailable; previous: R | Unavailable | null };
   if ("status" in ready) {
     result = { current: ready, previous: query.compare ? ready : null };
@@ -183,7 +183,7 @@ async function runTool<R>(
     correlationId: s.correlationId,
     outcome: c.status === "UNAVAILABLE" ? "FAILED" : "SUCCEEDED",
     metadata: {
-      workspaceId: s.workspaceId,
+      workspaceId: row?.workspaceId ?? null,
       projectId: s.projectId,
       tool,
       environment: "status" in ready ? null : ready.row.environment,

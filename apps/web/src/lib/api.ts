@@ -186,7 +186,11 @@ export const api = {
       Project,
       post({}, undefined, bound ? "PUT" : "DELETE"),
     ),
-  connectors: () => request("/v1/business/connectors", ConnectorList).then((l) => l.items),
+  connectors: (projectId?: string) =>
+    request(
+      `/v1/business/connectors${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`,
+      ConnectorList,
+    ).then((l) => l.items),
   createConnector: (body: CreateConnectorRequest) =>
     request("/v1/business/connectors", Connector, post({}, body)),
   updateConnector: (id: string, body: UpdateConnectorRequest) =>
@@ -267,6 +271,7 @@ export const keys = {
   notifications: ["notifications"] as const,
   notificationsOf: (projectId: string | undefined) => ["notifications", projectId ?? "all"] as const,
   connectors: ["business", "connectors"] as const,
+  connectorsOf: (projectId: string | undefined) => ["business", "connectors", projectId ?? "all"] as const,
   dictionary: (id: string) => ["business", "dictionary", id] as const,
   metric: (name: "sales" | "payments", connectorId: string) =>
     ["business", "metric", name, connectorId] as const,
