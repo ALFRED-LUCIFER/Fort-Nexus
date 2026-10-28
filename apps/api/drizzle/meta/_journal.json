@@ -22,6 +22,13 @@
       "when": 1793166912948,
       "tag": "0002_issue_to_pr",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793176794734,
+      "tag": "0003_business_connectors",
+      "breakpoints": true
     }
   ]
 }
