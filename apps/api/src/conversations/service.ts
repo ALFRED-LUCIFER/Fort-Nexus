@@ -38,6 +38,7 @@ const toThreadDto = (t: ThreadRow): Thread => ({
   projectId: t.projectId,
   title: t.title,
   subjectJobId: t.subjectJobId,
+  profileVersionId: null, // wave 3 agent A stores and returns the pinned Chief of Staff profile version
   createdAt: t.createdAt.toISOString(),
   updatedAt: t.updatedAt.toISOString(),
 });

@@ -204,3 +204,21 @@ export type FindingSearchQuery = z.infer<typeof FindingSearchQuery>;
 
 export const FindingList = z.object({ items: z.array(Finding), nextCursor: z.string().nullable() });
 export type FindingList = z.infer<typeof FindingList>;
+
+// Labelled confidence of an AI-written inference; never a probability (PRD §9 RES, §15.3 truth hierarchy).
+export const AiConfidence = z.enum(["LOW", "MEDIUM", "HIGH"]);
+export type AiConfidence = z.infer<typeof AiConfidence>;
+
+// FR-RES-08 "why it matters / recommended action": AI inference shown labelled, citing only the finding's own sources.
+// POST /v1/research/findings/:id/explain creates it once (cached); GET …/explanation returns it or 404.
+export const FindingExplanation = z.object({
+  findingId: z.uuid(),
+  whyItMatters: z.string().max(1000),
+  recommendedAction: z.string().max(500),
+  confidence: AiConfidence,
+  citedUrls: z.array(z.url()).min(1),
+  model: z.string(),
+  profileVersionId: z.uuid().nullable(),
+  createdAt: z.iso.datetime({ offset: true }),
+});
+export type FindingExplanation = z.infer<typeof FindingExplanation>;

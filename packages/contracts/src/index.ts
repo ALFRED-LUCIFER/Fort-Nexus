@@ -13,3 +13,5 @@ export * from "./business.ts";
 export * from "./conversations.ts";
 export * from "./monitoring.ts";
 export * from "./automations.ts";
+export * from "./agents.ts";
+export * from "./plans.ts";

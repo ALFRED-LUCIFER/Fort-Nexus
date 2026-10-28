@@ -80,29 +80,56 @@ export const ConnectionTestResult = z.object({
 export type ConnectionTestResult = z.infer<typeof ConnectionTestResult>;
 
 // FR-DATA-06 metric dictionary: what an order / payment / gross sale is, per connector.
-export const MetricDictionary = z.strictObject({
-  reportingTimezone: TimeZone,
-  currency: z.string().regex(/^[A-Z]{3}$/),
-  orders: z.strictObject({
-    table: QualifiedTable,
-    createdAtColumn: SqlIdentifier,
-    statusColumn: SqlIdentifier,
-    amountColumn: SqlIdentifier,
-    // MINOR = integer cents; MAJOR = decimal units.
-    amountUnit: z.enum(["MINOR", "MAJOR"]),
-    // Rows with these statuses count as sales; every other status is listed as excluded, never silently dropped.
-    paidStatuses: z.array(z.string().min(1).max(64)).min(1).max(20),
-  }),
-  payments: z
-    .strictObject({
+export const MetricDictionary = z
+  .strictObject({
+    reportingTimezone: TimeZone,
+    currency: z.string().regex(/^[A-Z]{3}$/),
+    orders: z.strictObject({
       table: QualifiedTable,
       createdAtColumn: SqlIdentifier,
       statusColumn: SqlIdentifier,
-      reasonColumn: SqlIdentifier,
-      failedStatuses: z.array(z.string().min(1).max(64)).min(1).max(20),
-    })
-    .optional(),
-});
+      amountColumn: SqlIdentifier,
+      // MINOR = integer cents; MAJOR = decimal units.
+      amountUnit: z.enum(["MINOR", "MAJOR"]),
+      // Rows with these statuses count as sales; every other status is listed as excluded, never silently dropped.
+      paidStatuses: z.array(z.string().min(1).max(64)).min(1).max(20),
+      // Needed to join order items (FR-BIZ-05).
+      idColumn: SqlIdentifier.optional(),
+    }),
+    payments: z
+      .strictObject({
+        table: QualifiedTable,
+        createdAtColumn: SqlIdentifier,
+        statusColumn: SqlIdentifier,
+        reasonColumn: SqlIdentifier,
+        failedStatuses: z.array(z.string().min(1).max(64)).min(1).max(20),
+      })
+      .optional(),
+    // FR-BIZ-04: refunds counted on the day they were issued (not the order day); net = gross − refunds.
+    refunds: z
+      .strictObject({
+        table: QualifiedTable,
+        createdAtColumn: SqlIdentifier,
+        amountColumn: SqlIdentifier,
+        amountUnit: z.enum(["MINOR", "MAJOR"]),
+      })
+      .optional(),
+    // FR-BIZ-05: line items of paid orders, joined on orders.idColumn.
+    orderItems: z
+      .strictObject({
+        table: QualifiedTable,
+        orderIdColumn: SqlIdentifier,
+        productColumn: SqlIdentifier,
+        quantityColumn: SqlIdentifier,
+        amountColumn: SqlIdentifier,
+        amountUnit: z.enum(["MINOR", "MAJOR"]),
+      })
+      .optional(),
+  })
+  .refine((d) => !d.orderItems || d.orders.idColumn, {
+    message: "orders.idColumn is required to join order items",
+    path: ["orders", "idColumn"],
+  });
 export type MetricDictionary = z.infer<typeof MetricDictionary>;
 
 // FR-DATA-07 provenance on every metric value.
@@ -189,3 +216,47 @@ export const PaymentFailuresResponse = z.object({
   previous: PaymentFailuresResult.nullable(),
 });
 export type PaymentFailuresResponse = z.infer<typeof PaymentFailuresResponse>;
+
+// FR-BIZ-04: gross, refunds and net with the exact formula; refunds and orders each carry their own provenance.
+export const RevenueSummary = z.object({
+  status: z.literal("AVAILABLE"),
+  grossSales: Decimal,
+  refunds: Decimal,
+  netSales: Decimal,
+  currency: z.string(),
+  formula: z.string(), // e.g. "net = gross (paid orders by order time) − refunds (by refund time)"
+  provenance: MetricProvenance, // orders
+  refundsProvenance: MetricProvenance,
+});
+export type RevenueSummary = z.infer<typeof RevenueSummary>;
+
+export const RevenueSummaryResult = z.discriminatedUnion("status", [RevenueSummary, Unavailable]);
+export type RevenueSummaryResult = z.infer<typeof RevenueSummaryResult>;
+
+export const RevenueSummaryResponse = z.object({
+  current: RevenueSummaryResult,
+  previous: RevenueSummaryResult.nullable(),
+});
+export type RevenueSummaryResponse = z.infer<typeof RevenueSummaryResponse>;
+
+export const TOP_PRODUCTS_LIMIT = 10;
+
+// FR-BIZ-05: top products of paid orders by revenue. Product names are masked like payment reasons (FR-DATA-09).
+export const TopProducts = z.object({
+  status: z.literal("AVAILABLE"),
+  currency: z.string(),
+  items: z
+    .array(z.object({ product: z.string(), quantity: z.int().nonnegative(), revenue: Decimal }))
+    .max(TOP_PRODUCTS_LIMIT),
+  provenance: MetricProvenance, // order items joined to paid orders
+});
+export type TopProducts = z.infer<typeof TopProducts>;
+
+export const TopProductsResult = z.discriminatedUnion("status", [TopProducts, Unavailable]);
+export type TopProductsResult = z.infer<typeof TopProductsResult>;
+
+export const TopProductsResponse = z.object({
+  current: TopProductsResult,
+  previous: TopProductsResult.nullable(),
+});
+export type TopProductsResponse = z.infer<typeof TopProductsResponse>;

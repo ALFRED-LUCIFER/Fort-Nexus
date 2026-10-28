@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ConnectorEnvironment } from "./business.ts";
 import { RepoId } from "./github.ts";
+import { AiConfidence } from "./research.ts";
 
 // EPIC MON (FR-MON-01/02/04/06/09, MON-G01/G02). Checks run on the home host: when it is offline, external health is
 // UNKNOWN, never assumed healthy (FR-MON-09).
@@ -125,3 +126,24 @@ export type ListIncidentsQuery = z.infer<typeof ListIncidentsQuery>;
 
 export const SetIncidentStatusRequest = z.strictObject({ status: IncidentStatus.exclude(["OPEN"]) });
 export type SetIncidentStatusRequest = z.infer<typeof SetIncidentStatusRequest>;
+
+// FR-MON-07 agent-assisted triage: hypotheses only, each citing the incident's own checks; never a remediation.
+// POST /v1/incidents/:id/triage creates it once (cached); GET …/triage returns it or 404.
+export const IncidentTriage = z.object({
+  incidentId: z.uuid(),
+  hypotheses: z
+    .array(
+      z.object({
+        text: z.string().max(500),
+        confidence: AiConfidence,
+        evidenceCheckIds: z.array(z.uuid()).min(1),
+      }),
+    )
+    .min(1)
+    .max(5),
+  suggestedNextStep: z.string().max(500),
+  model: z.string(),
+  profileVersionId: z.uuid().nullable(),
+  createdAt: z.iso.datetime({ offset: true }),
+});
+export type IncidentTriage = z.infer<typeof IncidentTriage>;

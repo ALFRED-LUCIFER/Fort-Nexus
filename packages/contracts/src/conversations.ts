@@ -11,6 +11,8 @@ export const Thread = z.object({
   title: z.string(),
   // The job the thread is currently about (FR-CWV-04 follow-ups); set only from a verified source, never by the model.
   subjectJobId: z.uuid().nullable(),
+  // FR-WKS-05: the Chief of Staff profile version pinned at creation; null = built-in default.
+  profileVersionId: z.uuid().nullable(),
   createdAt: z.iso.datetime({ offset: true }),
   updatedAt: z.iso.datetime({ offset: true }),
 });
@@ -51,7 +53,7 @@ export const Intent = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     kind: z.literal("BUSINESS_METRIC"),
-    metric: z.enum(["SALES_SUMMARY", "PAYMENT_FAILURES"]),
+    metric: z.enum(["SALES_SUMMARY", "PAYMENT_FAILURES", "REVENUE", "TOP_PRODUCTS"]),
     day: z.union([z.enum(["today", "yesterday"]), z.iso.date()]),
     compare: z.boolean(),
   }),

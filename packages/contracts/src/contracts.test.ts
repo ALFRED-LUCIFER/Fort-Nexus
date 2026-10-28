@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  AgentProfileSettings,
+  MetricDictionary,
+  toolForAction,
   HealthUrl,
   TriggerRequest,
   BriefSchedule,
@@ -166,5 +169,57 @@ describe("P1 wave 2 contracts", () => {
     expect(
       TriggerRequest.safeParse({ ...base, action: { type: "research.run", watchlistId: PID } }).success,
     ).toBe(true);
+  });
+});
+
+describe("P1 wave 3 contracts", () => {
+  it("each plan action maps to exactly one registry tool", () => {
+    expect(toolForAction({ type: "research.run", watchlistId: PID })).toBe("research.run");
+    expect(
+      toolForAction({
+        type: "jobs.create",
+        request: { jobType: "RUNNER_DIAGNOSTIC", preset: "host-info", projectId: PID },
+      }),
+    ).toBe("jobs.create.diagnostic");
+  });
+
+  it("agent settings are a closed set of typed tools", () => {
+    const base = {
+      engine: "MESSAGES_API",
+      autonomy: "DRAFT",
+      maxCostUsdPerTask: 1,
+      maxTurns: 5,
+      responseDetail: "BRIEF",
+    };
+    expect(AgentProfileSettings.safeParse({ ...base, tools: ["research.search"] }).success).toBe(true);
+    expect(AgentProfileSettings.safeParse({ ...base, tools: ["shell.exec"] }).success).toBe(false);
+    expect(
+      AgentProfileSettings.safeParse({ ...base, tools: [], model: "https://evil.example" }).success,
+    ).toBe(false);
+  });
+
+  it("order items need an order id column to join on", () => {
+    const d = {
+      reportingTimezone: "UTC",
+      currency: "EUR",
+      orders: {
+        table: "s.o",
+        createdAtColumn: "c",
+        statusColumn: "s",
+        amountColumn: "a",
+        amountUnit: "MINOR",
+        paidStatuses: ["paid"],
+      },
+      orderItems: {
+        table: "s.i",
+        orderIdColumn: "o",
+        productColumn: "p",
+        quantityColumn: "q",
+        amountColumn: "a",
+        amountUnit: "MINOR",
+      },
+    };
+    expect(MetricDictionary.safeParse(d).success).toBe(false);
+    expect(MetricDictionary.safeParse({ ...d, orders: { ...d.orders, idColumn: "id" } }).success).toBe(true);
   });
 });
