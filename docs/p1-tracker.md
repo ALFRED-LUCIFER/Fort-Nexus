@@ -1,5 +1,7 @@
 # P1 tracker — start here when resuming the P1 session
 
+> **Merged to `main` (2026-10-28):** PR #1 (P1 waves 1–3) at `87bbc5f`, plus test follow-ups PR #2 (`96ffa2b`, ordered audit lookups, web test timeout, test Postgres `max_connections`) and PR #3 (`13b0c8f`, runner verify-tail ordering). `main` CI green on `13b0c8f`. Next P1 work branches from `main` again.
+
 Branch `p1` in the worktree `/Volumes/Dev-Zone/Fort-Nexus-p1`. Never edit `/Volumes/Dev-Zone/Fort-Nexus` (MVP session on `main`). Push `p1` only; merge to `main` by PR after the MVP gates in `docs/mvp-tracker.md` are green.
 
 ## How we work
