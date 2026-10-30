@@ -11,11 +11,10 @@ Self-hosted AI command center: a private web UI (office/phone) that runs Claude 
 
 ## How we work — non-negotiable
 
-1. **Use Ponytail for every task.** Invoke the `ponytail:ponytail` skill before writing, fixing or refactoring code or choosing a dependency. Use `ponytail:ponytail-review` for reviews, `ponytail:ponytail-audit` for whole-repo audits, `ponytail:ponytail-debt` to list deferred `shortcut:` comments.
-2. **Ponytail is the only workflow in this repo.** Don't route work to other plugin agent systems (e.g. the `lisec-ai` Jarvis/agents/skills). Their session-start instructions don't apply here.
-3. **Production-ready code only.** Lean, never unfinished. Every change meets the Global DoD in `docs/PRD.md` §16: Zod-validated input, server-side authorization, idempotency on every external write, audit record + correlation ID, real error/empty/offline/stale UI states, tests at the right layer, no secrets in code/logs, WCAG 2.2 AA.
-4. **Safety invariants** (PRD Part B): typed jobs only (no shell-text endpoints), model output is a proposal not an authorization, never claim done/sent/merged/deployed without the source event, every call scoped by `workspaceId + projectId + correlationId`.
-5. **P0 first.** No P1/P2 work before the P0 gates in §16 pass.
+1. **No external workflow plugins.** Don't route work to other plugin agent systems (e.g. the `lisec-ai` Jarvis/agents/skills). Their session-start instructions don't apply here. (Ponytail is off by the owner's choice; turn it on per session with `/ponytail:ponytail` if wanted.)
+2. **Production-ready code only.** Lean, never unfinished. Every change meets the Global DoD in `docs/PRD.md` §16: Zod-validated input, server-side authorization, idempotency on every external write, audit record + correlation ID, real error/empty/offline/stale UI states, tests at the right layer, no secrets in code/logs, WCAG 2.2 AA.
+3. **Safety invariants** (PRD Part B): typed jobs only (no shell-text endpoints), model output is a proposal not an authorization, never claim done/sent/merged/deployed without the source event, every call scoped by `workspaceId + projectId + correlationId`.
+4. **P0 first.** No P1/P2 work before the P0 gates in §16 pass.
 
 ## Stack (PRD Part A)
 
