@@ -36,12 +36,13 @@ const STANDARD = {
 /** Built-in defaults: conservative tools per role; Product drafts only. */
 export const DEFAULT_AGENT_SETTINGS: Record<AgentKey, AgentProfileSettings> = {
   CHIEF_OF_STAFF: { ...STANDARD, tools: [...AgentTool.options] },
-  // A coding run needs the issue-run defaults (CreateJobRequest budget); plan steps are capped to these.
+  // A coding run needs the issue-run defaults (CreateJobRequest budget); plan steps are capped to these. The issue a
+  // job draft creates is R2: always the owner's click on its exact preview (ACT_WITH_APPROVAL at most).
   DEVELOPER: {
     ...STANDARD,
     maxCostUsdPerTask: 5,
     maxTurns: 60,
-    tools: ["jobs.read", "jobs.create.issue_run", "github.read"],
+    tools: ["jobs.read", "jobs.create.issue_run", "github.read", "github.issues.create"],
   },
   QA: { ...STANDARD, tools: ["jobs.read", "github.read", "jobs.create.diagnostic"] },
   DEVOPS: { ...STANDARD, tools: ["monitoring.read", "jobs.read", "jobs.create.diagnostic"] },
@@ -63,7 +64,8 @@ export const AGENT_ROSTER: Record<AgentKey, { label: string; description: string
   },
   DEVELOPER: {
     label: "Developer",
-    description: "Works on a scoped GitHub issue in a sandbox and returns branch, diff and test evidence.",
+    description:
+      "Works on a scoped GitHub issue in a sandbox and returns branch, diff and test evidence. Turns a job you describe in plain words into an issue you approve before it is created.",
   },
   QA: {
     label: "QA",

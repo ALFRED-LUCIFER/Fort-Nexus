@@ -32,6 +32,7 @@ import { HttpError } from "./errors.ts";
 import { loadGithubAppConfig } from "./github/app-config.ts";
 import { createGithubCatalog, type GithubCatalog } from "./github/catalog.ts";
 import { createExecutor, expireApprovals, type Executor } from "./issue-to-pr.ts";
+import { jobDraftRoutes } from "./job-drafts/routes.ts";
 import { reapExpiredLeases } from "./jobs.ts";
 import { monitoringRoutes } from "./monitoring/routes.ts";
 import { createMonitoring, type Monitoring } from "./monitoring/service.ts";
@@ -300,7 +301,8 @@ export async function buildApp(config: Config) {
       .then(() => automationRoutes(scope, deps))
       .then(() => monitoringRoutes(scope, deps))
       .then(() => agentRoutes(scope, deps))
-      .then(() => planRoutes(scope, deps)),
+      .then(() => planRoutes(scope, deps))
+      .then(() => jobDraftRoutes(scope, deps, github)),
   );
   // n8n's signed trigger: its own scope, outside the owner session (like the runner routes).
   await app.register(async (scope) => automationTriggerRoute(scope, deps));

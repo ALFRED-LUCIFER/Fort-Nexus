@@ -178,7 +178,13 @@ describe("registry (FR-AGT-07)", () => {
     }
     const by = (k: AgentKey) => items.find((a) => a.agent === k)!.effective.settings;
     expect(by("CHIEF_OF_STAFF").tools).toEqual([...AgentTool.options]);
-    expect(by("DEVELOPER").tools).toEqual(["jobs.read", "jobs.create.issue_run", "github.read"]);
+    // Jobs wave: the Developer may create the issue a job draft proposes (R2, the owner's click on its preview).
+    expect(by("DEVELOPER").tools).toEqual([
+      "jobs.read",
+      "jobs.create.issue_run",
+      "github.read",
+      "github.issues.create",
+    ]);
     expect(by("FINANCIAL_ANALYST").tools).toEqual(["business.metrics"]);
     // P1 wave 5: the researcher deep-dives within its own caps; the issue it may propose is an R2 owner click.
     expect(by("AI_RESEARCHER")).toMatchObject({
