@@ -116,6 +116,9 @@ function transcribeProblem(e: unknown): TalkProblem {
   return { kind: e.status === 403 || e.status === 409 ? "settings" : "failed", message: e.message };
 }
 
+// One microphone at a time: Home shows two mics (command bar and Cofounder panel), and pressing one ends the other.
+let activeMic: { owner: object; cancel: () => void } | null = null;
+
 export function usePushToTalk(projectId: string | undefined): PushToTalk {
   const queryClient = useQueryClient();
   const [phase, setPhase] = useState<TalkPhase>("idle");
@@ -124,8 +127,10 @@ export function usePushToTalk(projectId: string | undefined): PushToTalk {
   const session = useRef<Recording | null>(null);
   // Bumped by End and unmount: a permission prompt or transcription that settles later is dropped.
   const generation = useRef(0);
+  const owner = useRef({});
 
   const release = (rec: Recording) => {
+    if (activeMic?.owner === owner.current) activeMic = null;
     stopTracks(rec.stream);
     window.clearTimeout(rec.timer);
     cancelAnimationFrame(rec.frame);
@@ -212,6 +217,8 @@ export function usePushToTalk(projectId: string | undefined): PushToTalk {
       });
       return;
     }
+    if (activeMic && activeMic.owner !== owner.current) activeMic.cancel();
+    activeMic = { owner: owner.current, cancel: () => cancelRef.current() };
     const gen = ++generation.current;
     setPhase("requesting");
     let stream: MediaStream;
@@ -259,6 +266,7 @@ export function usePushToTalk(projectId: string | undefined): PushToTalk {
   };
 
   const drop = () => {
+    if (activeMic?.owner === owner.current) activeMic = null;
     generation.current++;
     const rec = session.current;
     session.current = null;

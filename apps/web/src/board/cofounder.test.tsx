@@ -266,6 +266,36 @@ describe("Cofounder panel", () => {
     expect(v.tracks.every((t) => t.stopped)).toBe(true);
   });
 
+  it("one microphone at a time: the panel's mic ends the command bar's recording, which is never sent", async () => {
+    const v = installVoiceFakes();
+    const calls = mockFetch({
+      ...base,
+      "GET /v1/conversations": () => json({ items: [thread(LATEST, T0)], nextCursor: null }),
+      [`GET /v1/conversations/${LATEST}`]: () => json(detail()),
+      "POST /v1/voice/transcribe": () =>
+        json({ text: "What failed?", durationMs: 900, provider: "AZURE_OPENAI", deployment: "d" }),
+    });
+    renderApp(IN_PROJECT, { view: "home" });
+    const p = await panel();
+    const user = userEvent.setup();
+    const bar = screen.getByRole("banner");
+    await user.click(await within(bar).findByRole("button", { name: /^Talk: press to record/ }));
+    await within(bar).findByRole("button", { name: "Recording: press to stop" });
+
+    await user.click(p.getByRole("button", { name: /^Talk: press to record/ }));
+    await p.findByRole("button", { name: "Recording: press to stop" });
+    expect(v.tracks[0]!.stopped).toBe(true);
+    expect(v.tracks[1]!.stopped).toBe(false);
+    expect(within(bar).getByRole("button", { name: /^Talk: press to record/ })).toBeTruthy();
+
+    await user.click(p.getByRole("button", { name: "Recording: press to stop" }));
+    const input = p.getByRole("textbox", { name: "Message your cofounder" }) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("What failed?"));
+    // Only the panel's recording was transcribed; the ended one was dropped.
+    expect(calls.filter((c) => c.path === "/v1/voice/transcribe")).toHaveLength(1);
+    expect((screen.getByRole("textbox", { name: "Command" }) as HTMLInputElement).value).toBe("");
+  });
+
   it("an archived project's conversation is read-only", async () => {
     mockFetch({
       ...base,
