@@ -15,6 +15,7 @@ import {
 import { createDb, type Db } from "../src/db/index.ts";
 import { auditRecords, projectRepositories } from "../src/db/schema.ts";
 import { canonical, sha256 } from "../src/jobs.ts";
+import { researchDeepDives } from "../src/research/deep/schema.ts";
 import { opportunityIssueRequests, researchOpportunities } from "../src/research/opportunities/schema.ts";
 import { recordOpportunity } from "../src/research/opportunities/service.ts";
 import { createTestApp, ownerSession, type TestApp } from "./helpers/owner-session.ts";
@@ -224,9 +225,33 @@ async function seed(
   claims?: Claim[],
   diveId = randomUUID(),
 ) {
-  return db.transaction((tx) =>
-    recordOpportunity(tx, { id: diveId, workspaceId: p.workspaceId, projectId: p.id }, report(opp, claims)),
-  );
+  return db.transaction(async (tx) => {
+    // The completed dive the engine records it from (research_opportunities.deep_dive_id references it).
+    await tx
+      .insert(researchDeepDives)
+      .values({
+        id: diveId,
+        workspaceId: p.workspaceId,
+        projectId: p.id,
+        ownerId: "owner",
+        idempotencyKey: diveId,
+        requestHash: "0".repeat(64),
+        correlationId: diveId,
+        question: "What do small shops struggle with at month end?",
+        depth: "STANDARD",
+        findingIds: [],
+        status: "COMPLETED",
+        limits: { maxCostUsd: 2, maxTurns: 30, maxSearches: 10, maxFetches: 16 },
+        searchEnabled: true,
+        model: "claude-opus-5-5",
+      })
+      .onConflictDoNothing();
+    return recordOpportunity(
+      tx,
+      { id: diveId, workspaceId: p.workspaceId, projectId: p.id },
+      report(opp, claims),
+    );
+  });
 }
 const seedId = async (...args: Parameters<typeof seed>) => (await seed(...args))!;
 

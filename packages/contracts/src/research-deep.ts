@@ -187,6 +187,8 @@ export const DeepDive = z.object({
   model: z.string(),
   profileVersionId: z.uuid().nullable(),
   report: DeepDiveReport.nullable(),
+  // Set in the transaction that completed the dive, when its report yielded an opportunity with verified evidence.
+  opportunityId: z.uuid().nullable(),
   // Fixed server text when FAILED/CANCELLED; never provider or exception detail.
   error: z.string().nullable(),
   createdAt: z.iso.datetime({ offset: true }),

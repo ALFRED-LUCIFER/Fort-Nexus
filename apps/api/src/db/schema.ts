@@ -380,6 +380,10 @@ export const notifications = pgTable(
     incidentId: uuid("incident_id"),
     // EPIC AGT plan (plans/schema.ts); no FK for the same reason.
     planId: uuid("plan_id"),
+    // EPIC RES run, deep dive and opportunity (research/*); no FK for the same reason.
+    researchRunId: uuid("research_run_id"),
+    deepDiveId: uuid("deep_dive_id"),
+    opportunityId: uuid("opportunity_id"),
     dedupKey: text("dedup_key").notNull().unique(),
     status: text("status").$type<NotificationStatus>().notNull().default("UNREAD"),
     statusChangedAt: ts("status_changed_at"),
@@ -395,5 +399,35 @@ export const notifications = pgTable(
       sql`${t.category} in ('INFORMATIONAL', 'TASK_DONE', 'TASK_FAILED', 'APPROVAL_REQUIRED', 'BUSINESS_EXCEPTION', 'SECURITY_CRITICAL')`,
     ),
     check("notifications_status_valid", sql`${t.status} in ('UNREAD', 'READ', 'ACKNOWLEDGED')`),
+  ],
+);
+
+// FR-CSP-08 / GATE-09 spend ledger for direct model calls (jobs carry their own estimate). A row reserves its cap
+// against the owner's day when the work is created and settles to the cost measured from provider usage; until then
+// the reservation counts as spent. `source_id` is the object that spent it (no FK: it lives in its module's schema).
+export const aiSpend = pgTable(
+  "ai_spend",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    source: text("source").$type<"DEEP_DIVE">().notNull(),
+    sourceId: uuid("source_id").notNull(),
+    reservedUsd: numeric("reserved_usd", { precision: 12, scale: 6, mode: "number" }).notNull(),
+    // null until settled: the measured cost, or the whole reservation when the outcome is unknown (restart).
+    costUsd: numeric("cost_usd", { precision: 12, scale: 6, mode: "number" }),
+    createdAt: ts("created_at").notNull().defaultNow(),
+    settledAt: ts("settled_at"),
+  },
+  (t) => [
+    uniqueIndex("ai_spend_source_uq").on(t.source, t.sourceId),
+    index("ai_spend_created_idx").on(t.createdAt),
+    check("ai_spend_source_valid", sql`${t.source} in ('DEEP_DIVE')`),
+    check("ai_spend_reserved_positive", sql`${t.reservedUsd} > 0`),
+    check("ai_spend_cost_nonnegative", sql`${t.costUsd} is null or ${t.costUsd} >= 0`),
   ],
 );

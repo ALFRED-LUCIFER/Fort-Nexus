@@ -29,6 +29,9 @@ type Draft = {
   jobId?: string | null;
   approvalId?: string | null;
   planId?: string | null;
+  researchRunId?: string | null;
+  deepDiveId?: string | null;
+  opportunityId?: string | null;
   /** Unique per logical event: a retried or replayed write of the same event inserts nothing. */
   dedupKey: string;
 };
@@ -46,12 +49,15 @@ export const toNotificationDto = (n: Row): Notification => ({
   category: n.category,
   title: n.title,
   body: n.body,
-  // incidentId / planId are optional in the contract: present only for incident / plan notifications.
+  // The P1 subjects are optional in the contract: present only on the notifications they belong to.
   subject: {
     jobId: n.jobId,
     approvalId: n.approvalId,
     ...(n.incidentId ? { incidentId: n.incidentId } : {}),
     ...(n.planId ? { planId: n.planId } : {}),
+    ...(n.researchRunId ? { researchRunId: n.researchRunId } : {}),
+    ...(n.deepDiveId ? { deepDiveId: n.deepDiveId } : {}),
+    ...(n.opportunityId ? { opportunityId: n.opportunityId } : {}),
   },
   status: n.status,
   createdAt: n.createdAt.toISOString(),
@@ -87,6 +93,64 @@ export const notifyPlan = (
       body: d.body,
     },
   ]);
+
+/** FR-RES-08: a research run finished with new findings. Once per run; nothing when it found nothing new. */
+export async function notifyResearchBrief(
+  tx: Tx,
+  d: { ownerId: string; projectId: string; runId: string; newFindings: number; top: string | null },
+) {
+  if (d.newFindings < 1) return;
+  const n = d.newFindings;
+  await insert(tx, [
+    {
+      ownerId: d.ownerId,
+      projectId: d.projectId,
+      researchRunId: d.runId,
+      category: "INFORMATIONAL",
+      dedupKey: `research_run:${d.runId}:BRIEF`,
+      title: `Research brief ready · ${n} new ${n === 1 ? "finding" : "findings"}`,
+      // The top title is feed text: quoted and labelled as the source's words, never NEXUS's.
+      body: d.top
+        ? `Top finding (as its source titles it, unverified): “${clip(d.top, 200)}”. Open the brief to see every finding with its sources.`
+        : "Open the brief to see every finding with its sources.",
+    },
+  ]);
+}
+
+/**
+ * A deep dive finished: COMPLETED or FAILED, from its recorded status (never from model text). CANCELLED never
+ * notifies: only the owner (or their emergency stop) cancels.
+ */
+export async function notifyDeepDive(
+  tx: Tx,
+  d: {
+    ownerId: string;
+    projectId: string;
+    deepDiveId: string;
+    status: "COMPLETED" | "FAILED" | "CANCELLED";
+    question: string;
+    opportunityId: string | null;
+  },
+) {
+  if (d.status === "CANCELLED") return;
+  const done = d.status === "COMPLETED";
+  await insert(tx, [
+    {
+      ownerId: d.ownerId,
+      projectId: d.projectId,
+      deepDiveId: d.deepDiveId,
+      opportunityId: done ? d.opportunityId : null,
+      category: done ? "TASK_DONE" : "TASK_FAILED",
+      dedupKey: `deep_dive:${d.deepDiveId}:${d.status}`,
+      title: `${done ? "Deep dive finished" : "Deep dive failed"} · ${clip(d.question, 120)}`,
+      body: !done
+        ? "Nothing was published. Open the deep dive to see what happened."
+        : d.opportunityId
+          ? "The report is ready, and the AI researcher noticed an opportunity backed by verified evidence. Review it before acting."
+          : "The report is ready. Open it to review each claim and its evidence.",
+    },
+  ]);
+}
 
 // ── Job and approval events ──
 

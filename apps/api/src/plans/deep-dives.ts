@@ -1,6 +1,6 @@
 import type { CreateDeepDiveRequest, DeepDive, DeepDiveDetail } from "@nexus/contracts";
 import type { Ctx } from "../research/service.ts";
-import { cancelDeepDive, createDeepDive, getDeepDive, type DeepDeps } from "./deep-dive-adapter.ts";
+import { cancelDeepDive, createDeepDive, getDeepDive, type DeepDeps } from "../research/deep/service.ts";
 
 /**
  * The deep-dive operations Talk and plans use, bound to the research deep-dive service. Everything goes through its

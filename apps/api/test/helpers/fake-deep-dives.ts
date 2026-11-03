@@ -61,6 +61,7 @@ export function fakeDeepDives() {
         model: "claude-test-model",
         profileVersionId: null,
         report: null,
+        opportunityId: null,
         error: null,
         createdAt: new Date().toISOString(),
         startedAt: null,

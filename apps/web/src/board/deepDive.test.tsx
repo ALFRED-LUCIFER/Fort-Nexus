@@ -120,6 +120,7 @@ const dive = (over: Partial<DeepDiveDetail> = {}): DeepDiveDetail => ({
   model: "claude-test-model",
   profileVersionId: null,
   report: null,
+  opportunityId: null,
   error: null,
   createdAt: NOW,
   startedAt: NOW,
@@ -393,7 +394,7 @@ describe("deep dive list and report", () => {
   it("is live while running (2 s refetch) and then shows the report with both evidence states", async () => {
     dives = [dive()];
     let reads = 0;
-    const calls = board({
+    board({
       [`GET /v1/research/deep-dives/${DIVE}`]: () => {
         if (++reads >= 2)
           dives = [
@@ -401,6 +402,7 @@ describe("deep dive list and report", () => {
               status: "COMPLETED",
               finishedAt: NOW,
               report: report(),
+              opportunityId: OPP,
               usage: { costUsd: 0.84, turns: 9, searches: 3, fetches: 4 },
               steps: [
                 ...dive().steps,
@@ -477,9 +479,6 @@ describe("deep dive list and report", () => {
     );
     expect(navigate).toHaveBeenCalledWith(
       expect.objectContaining({ search: expect.objectContaining({ drawer: `opp:${OPP}` }) }),
-    );
-    expect(calls.find((c) => c.path === "/v1/research/opportunities")!.query.get("projectId")).toBe(
-      PROJECT_ID,
     );
   });
 

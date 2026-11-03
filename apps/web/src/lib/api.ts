@@ -39,6 +39,8 @@ import {
   NotificationList,
   Opportunity,
   OpportunityList,
+  ResearchDomain,
+  ResearchDomainList,
   OwnerSessionList,
   PairingCodeResponse,
   PaymentFailuresResponse,
@@ -73,6 +75,7 @@ import {
   type CreateMonitoredAppRequest,
   type CreateOpportunityIssueRequest,
   type CreatePlanRequest,
+  type PutResearchDomainRequest,
   type CreateProjectRequest,
   type CreateThreadRequest,
   type CreateWatchlistRequest,
@@ -308,6 +311,16 @@ export const api = {
   cancelDeepDive: (id: string) =>
     request(`/v1/research/deep-dives/${encodeURIComponent(id)}/cancel`, DeepDive, post()),
   searchProvider: () => request("/v1/research/search-provider", SearchProviderStatus),
+  // Research → Sources: the workspace's domain rules (owner policy for the researcher's web reading).
+  domains: (workspaceId: string) =>
+    request(`/v1/research/domains?${new URLSearchParams({ workspaceId })}`, ResearchDomainList).then(
+      (l) => l.items,
+    ),
+  putDomain: (body: PutResearchDomainRequest) =>
+    request("/v1/research/domains", ResearchDomain, post({}, body, "PUT")),
+  // 204: no body.
+  deleteDomain: (id: string) =>
+    request(`/v1/research/domains/${encodeURIComponent(id)}`, z.null(), post({}, undefined, "DELETE")),
   // projectId omitted = the read-only "All" view.
   automationClients: (projectId?: string) =>
     request(
@@ -426,6 +439,7 @@ export const keys = {
   deepDivesOf: (projectId: string | undefined) => ["research", "deep-dives", projectId ?? "all"] as const,
   deepDive: (id: string) => ["research", "deep-dive", id] as const,
   searchProvider: ["research", "search-provider"] as const,
+  researchDomains: (workspaceId: string) => ["research", "domains", workspaceId] as const,
   automations: ["automations"] as const,
   automationClients: (projectId: string | undefined) =>
     ["automations", "clients", projectId ?? "all"] as const,

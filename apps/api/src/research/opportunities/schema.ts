@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { researchDeepDives } from "../deep/schema.ts";
 import type {
   AgentKey,
   AiConfidence,
@@ -30,7 +31,9 @@ export const researchOpportunities = pgTable(
     id: id(),
     ...scope(),
     // The deep dive it came from (module B's research_deep_dives; one opportunity per dive at most).
-    deepDiveId: uuid("deep_dive_id").notNull(),
+    deepDiveId: uuid("deep_dive_id")
+      .notNull()
+      .references(() => researchDeepDives.id),
     kind: text("kind").$type<OpportunityKind>().notNull(),
     title: text("title").notNull(),
     problem: text("problem").notNull(),

@@ -36,12 +36,14 @@ import { reapExpiredLeases } from "./jobs.ts";
 import { monitoringRoutes } from "./monitoring/routes.ts";
 import { createMonitoring, type Monitoring } from "./monitoring/service.ts";
 import { createHub, type Hub } from "./notify.ts";
-import { createDeepDiver } from "./plans/deep-dive-adapter.ts";
 import { deepDiveOps, type DeepDives } from "./plans/deep-dives.ts";
 import { createPlanExecutor } from "./plans/executor.ts";
 import { planRoutes } from "./plans/routes.ts";
 import { researchDomainRoutes } from "./research/domain-routes.ts";
 import { opportunityRoutes } from "./research/opportunities/routes.ts";
+import { engineDeps } from "./research/deep/loop.ts";
+import { deepDiveRoutes } from "./research/deep/routes.ts";
+import { createDeepDiver, type DeepDiver } from "./research/deep/service.ts";
 import { researchRoutes } from "./research/routes.ts";
 import { createResearch, type Research } from "./research/service.ts";
 import { githubRoutes } from "./routes/github.ts";
@@ -62,6 +64,7 @@ export type Deps = {
   github: GithubCatalog | null;
   executor: Executor;
   research: Research;
+  diver: DeepDiver;
   monitoring: Monitoring;
   /** The researcher's deep dives, as Talk proposals and plan steps run them. */
   deepDives: DeepDives;
@@ -156,8 +159,8 @@ export async function buildApp(config: Config) {
   const catalog = github ? createGithubCatalog(github, app.log) : null;
   const executor = createExecutor(db, catalog, app.log);
   const research = createResearch(db, app.log, shutdown.signal);
+  const diver = createDeepDiver(db, engineDeps(config), app.log, shutdown.signal);
   const monitoring = createMonitoring(db, app.log, shutdown.signal);
-  const diver = createDeepDiver(db, { config }, app.log, shutdown.signal);
   const deps: Deps = {
     config,
     db,
@@ -167,6 +170,7 @@ export async function buildApp(config: Config) {
     github: catalog,
     executor,
     research,
+    diver,
     monitoring,
     deepDives: deepDiveOps({ db, config, diver }),
   };
@@ -292,6 +296,7 @@ export async function buildApp(config: Config) {
       .then(() => researchRoutes(scope, deps))
       .then(() => researchDomainRoutes(scope, deps))
       .then(() => opportunityRoutes(scope, deps, github))
+      .then(() => deepDiveRoutes(scope, deps))
       .then(() => automationRoutes(scope, deps))
       .then(() => monitoringRoutes(scope, deps))
       .then(() => agentRoutes(scope, deps))
@@ -327,6 +332,7 @@ export async function buildApp(config: Config) {
     ]).catch((err: unknown) => app.log.error({ err }, "reaper failed"));
   app.addHook("onReady", async () => {
     await reap();
+    await diver.reconcile(); // dives a restart interrupted fail (reservation kept); queued ones start
     reaper = setInterval(reap, REAPER_INTERVAL_MS);
     // Approved pushes a crash interrupted; in the background so GitHub latency never blocks startup.
     // Held while the emergency stop is engaged: releasing it reconciles them (routes/system.ts).
@@ -344,6 +350,7 @@ export async function buildApp(config: Config) {
   });
   app.addHook("onClose", async () => {
     await research.close(); // in-flight runs record their outcome before the pool closes
+    await diver.close();
     await monitoring.drain();
     await hub.close();
     await pool.end();

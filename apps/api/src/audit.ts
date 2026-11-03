@@ -17,6 +17,7 @@ export type AuditEntry = {
     | "research_run"
     | "research_domain"
     | "research_opportunity"
+    | "research_deep_dive"
     | "connector"
     | "conversation"
     | "action_proposal"

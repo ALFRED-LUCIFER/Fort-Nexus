@@ -50,13 +50,23 @@ Checks on the merged tree: typecheck, lint, prettier, tests (api 215, web 114, r
 Coordinator: contracts first; adapters removed (real `resolveAgentProfile` everywhere); agent records count plan steps; plan issue-run budgets narrowed to the agent's caps before hashing (and re-checked before running); Developer default caps $5 / 60 turns; return lines → NOT_DEFINED; shortcut comments for known limits; one squashed `0006_p1.sql` with the conversation and agent-profile triggers re-appended.
 Checks on the merged tree: typecheck, lint, prettier, tests (api 258, web 141, runner 165+1 skipped, contracts 19), web build.
 
-## Wave 5 — the researcher (in progress; spec: `docs/specs/p1-wave-5-researcher.md`)
+## Wave 5 — the researcher (done on `main`, not pushed; spec: `docs/specs/p1-wave-5-researcher.md`)
 
 Owner decisions (2026-11-03): web search = **Brave Search API** (NEXUS calls and audits it itself); the **NEXUS Cofounder** design (`docs/design/NEXUS-Cofounder.dc.html`, PRD §D.4) is the target Home, so opportunities render as Cofounder cards.
 
-Base on `main`: `9082f97` (contracts `research-deep.ts`, new tools/intent/plan action, stubs marked `shortcut: wave 5 agent D`). Builders in their own worktrees: **A** safe web access (SSRF guard on all research fetches, page reading, Brave client, domain registry), **B** deep-dive engine (bounded search→read→cite loop, claim verification, `ai_spend` ledger), **C** opportunities + approved GitHub issue (Cofounder cards, `opp` drawer), **D** UI/Talk/plans/agent defaults. Coordinator merges A→B→C→D, deletes adapters, squashes one `0007_researcher.sql`.
+| Builder | Delivered | Tests |
+|---|---|---|
+| A — Safe web access | `net-guard.ts` (vetted-address dispatcher on every hop, robots and Brave included), charset, `readPage` (Readability + linkedom), Brave client + `~/.nexus/search.json`, per-workspace domain registry + Sources tab, `docs/runbooks/web-search.md`. **Fixed a live bug:** `BLOCKED` refused every public IPv4 (`::ffff:0:0/96` in a BlockList), so monitoring probes could never reach an IPv4 app | RES-G05, rebind, charset, Brave mapping, decoy |
+| B — Deep-dive engine | `ai_spend` ledger (reserve before the first call, settle after; budget counts it), `ai-cost.ts` (claude-api skill prices), `runToolLoop` (cached, fenced, cost/turn/time/stop limits), `research/deep/**` (≤2 running, reconcile at boot, quote verification, labels, notifications) | RES-G06..G11, restart, decoy |
+| C — Opportunities + issue | `research/opportunities/**`, server-built issue preview (mentions/links neutralised, marker), R2 create with a claim row + marker adoption (no duplicates), `github/issues.ts`, `issues: write` in `github:setup`, Noticed zone + `opp:` drawer | RES-G12, hash/permission/decoy |
+| D — UI, Talk, plans, agents | AI researcher defaults ($2 / 30 turns, deep-dive + issue tools), Talk `RESEARCH_DEEP_DIVE` → R1 proposal, plan step succeeds only on COMPLETED, Research drawer tabs (Findings · Deep dives · Sources) with live dives and reports | Talk/plans/web a11y |
 
-Owner setup after merge: `~/.nexus/search.json` (Brave key, mode 600), GitHub App permission **Issues: read & write** accepted on the installation.
+Coordinator: adapters removed and modules wired; `DeepDive.opportunityId` (set in the completing transaction) replaces the list lookup; FK `research_opportunities.deep_dive_id → research_deep_dives`; Sources calls moved into `lib/api.ts`; one migration `0007_researcher.sql` with the step-log append-only triggers appended by hand (keep them when regenerating); Brave error-mapping test de-flaked.
+Checks on the merged tree: typecheck, lint, prettier, tests (api 332, web 172, runner 165+1 skipped, contracts 23), web build, secret scan.
+
+Owner setup: `~/.nexus/search.json` (`{"provider":"brave","apiKey":"…"}`, mode 600, `docs/runbooks/web-search.md`); GitHub App permission **Issues: read & write**, accepted on the installation (`docs/runbooks/github-setup.md` §6). Then one live deep dive (owner check).
+
+Known follow-ups: `Opportunity` doesn't carry the report's contradiction notes (drawer flags CONTESTED only); issues are created without labels (GitHub drops them for apps without push); ai_spend not yet applied to Explain/Triage/Talk/plan drafting; single-process assumptions in the diver (marked `shortcut:`).
 
 ## Next
 

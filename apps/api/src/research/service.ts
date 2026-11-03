@@ -14,8 +14,9 @@ import type {
 } from "@nexus/contracts";
 import { audit, type AuditEntry } from "../audit.ts";
 import type { Db, Tx } from "../db/index.ts";
-import { projects } from "../db/schema.ts";
+import { projects, workspaces } from "../db/schema.ts";
 import { notFound } from "../errors.ts";
+import { notifyResearchBrief } from "../notifications.ts";
 import { ownerWorkspaceIds, resolveProject } from "../workspaces.ts";
 import { fetchSession, hostLimiter } from "./fetch.ts";
 import { parseFeed, type FeedItem } from "./feed.ts";
@@ -554,6 +555,26 @@ export function createResearch(db: Db, log: FastifyBaseLogger, shutdown: AbortSi
         .update(researchRuns)
         .set({ status, finishedAt: new Date(), newFindings, skippedSources: skipped })
         .where(eq(researchRuns.id, runId));
+      if (newFindings > 0) {
+        const fresh = await tx
+          .select({ title: researchFindings.title, breakdown: researchFindings.scoreBreakdown })
+          .from(researchFindings)
+          .where(eq(researchFindings.firstRunId, runId));
+        const top = fresh.reduce((a, b) =>
+          score(b.breakdown, w!.weights) > score(a.breakdown, w!.weights) ? b : a,
+        );
+        const [ws] = await tx
+          .select({ ownerId: workspaces.ownerId })
+          .from(workspaces)
+          .where(eq(workspaces.id, w!.workspaceId));
+        await notifyResearchBrief(tx, {
+          ownerId: ws!.ownerId,
+          projectId: w!.projectId,
+          runId,
+          newFindings,
+          top: top.title,
+        });
+      }
       await record(tx, system(runId), w!, {
         action: "research.run.finish",
         resourceType: "research_run",

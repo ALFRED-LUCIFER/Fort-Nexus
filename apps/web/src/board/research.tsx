@@ -31,7 +31,7 @@ import {
   type SeedFinding,
 } from "./deepDive.tsx";
 import { Drawer, DrawerHeader } from "./Drawer.tsx";
-import { ResearchSources } from "./researchSourcesAdapter.tsx";
+import { ResearchSources } from "./researchSources.tsx";
 import { PICK_PROJECT, useScope, type Scope } from "./scope.tsx";
 import { EmptyZone } from "./zones.tsx";
 

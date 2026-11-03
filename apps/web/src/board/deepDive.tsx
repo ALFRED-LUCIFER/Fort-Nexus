@@ -510,7 +510,7 @@ function Report({ d, report }: { d: DeepDiveDetail; report: NonNullable<DeepDive
         <p className="m-0 break-words whitespace-pre-wrap text-ink">{report.summary}</p>
       </div>
       {report.opportunity && d.status === "COMPLETED" && (
-        <OpportunityLink deepDiveId={d.id} projectId={d.projectId} title={report.opportunity.title} />
+        <OpportunityLink opportunityId={d.opportunityId} title={report.opportunity.title} />
       )}
       <div className="flex flex-col gap-2">
         <h4 className="kicker m-0">Claims · checked against the pages NEXUS read</h4>
@@ -597,25 +597,10 @@ function ClaimItem({ c }: { c: Claim }) {
 }
 
 /** The opportunity NEXUS recorded from this dive (only when its claims have verified evidence). */
-function OpportunityLink({
-  deepDiveId,
-  projectId,
-  title,
-}: {
-  deepDiveId: string;
-  projectId: string;
-  title: string;
-}) {
+function OpportunityLink({ opportunityId, title }: { opportunityId: string | null; title: string }) {
   const navigate = route.useNavigate();
   const { keep } = useScope();
-  const opps = useQuery({
-    queryKey: keys.opportunitiesOf(projectId),
-    queryFn: () => api.opportunities({ projectId }),
-  });
-  if (!opps.data) return opps.error ? <Pending error={opps.error} /> : null;
-  // shortcut: DeepDive carries no opportunity id, so it is found among the project's newest 50 opportunities.
-  const opp = opps.data.find((o) => o.deepDiveId === deepDiveId);
-  if (!opp)
+  if (!opportunityId)
     return (
       <p className="m-0 text-[12.5px] leading-snug text-ink2">
         The researcher drafted an opportunity (“{title}”), but NEXUS records one only when its claims have
@@ -625,10 +610,10 @@ function OpportunityLink({
   return (
     <button
       type="button"
-      onClick={() => void navigate({ search: { ...keep, drawer: `opp:${opp.id}` } })}
+      onClick={() => void navigate({ search: { ...keep, drawer: `opp:${opportunityId}` } })}
       className="self-start text-[13px] font-medium text-teal underline"
     >
-      Opportunity noticed → {opp.title}
+      Opportunity noticed → {title}
     </button>
   );
 }

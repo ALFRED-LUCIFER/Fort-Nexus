@@ -1,75 +1,11 @@
 import { useId, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { z } from "zod";
-import {
-  ApiError,
-  PutResearchDomainRequest,
-  ResearchDomain,
-  ResearchDomainList,
-  SearchProviderStatus,
-  SourceTier,
-} from "@nexus/contracts";
-import { ApiRequestError, UNREACHABLE } from "../lib/api.ts";
+import { PutResearchDomainRequest, SourceTier, type ResearchDomain } from "@nexus/contracts";
+import { api, keys } from "../lib/api.ts";
 import { DrawerState } from "./Drawer.tsx";
 
 // Research → Sources (PRD §9 RES source allowlist): the workspace's domain rules and the web-search provider status.
 // Rules are owner policy: a blocked domain is never fetched and its search results never reach the model.
-
-// Wave-5 adapter (docs/specs/p1-wave-5-researcher.md): these calls mirror lib/api.ts `request`; the coordinator moves
-// them into `api`/`keys` there at merge and deletes this block.
-async function call<T>(path: string, schema: z.ZodType<T> | null, init?: RequestInit): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(path, { credentials: "same-origin", ...init });
-  } catch {
-    throw new ApiRequestError(UNREACHABLE, 0, "UNREACHABLE");
-  }
-  const body: unknown = res.status === 204 ? null : await res.json().catch(() => null);
-  if (!res.ok) {
-    const err = ApiError.safeParse(body);
-    if (err.success)
-      throw new ApiRequestError(
-        err.data.error.message,
-        res.status,
-        err.data.error.code,
-        err.data.error.details,
-      );
-    throw new ApiRequestError(
-      res.status >= 500 ? UNREACHABLE : `Request failed (HTTP ${res.status}).`,
-      res.status,
-      "HTTP",
-    );
-  }
-  if (!schema) return undefined as T;
-  const parsed = schema.safeParse(body);
-  if (!parsed.success)
-    throw new ApiRequestError(
-      "The API sent a response NEXUS doesn't understand.",
-      res.status,
-      "BAD_RESPONSE",
-    );
-  return parsed.data;
-}
-const sourcesApi = {
-  domains: (workspaceId: string) =>
-    call(`/v1/research/domains?${new URLSearchParams({ workspaceId })}`, ResearchDomainList).then(
-      (l) => l.items,
-    ),
-  putDomain: (body: PutResearchDomainRequest) =>
-    call("/v1/research/domains", ResearchDomain, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-  deleteDomain: (id: string) =>
-    call(`/v1/research/domains/${encodeURIComponent(id)}`, null, { method: "DELETE" }),
-  searchProvider: () => call("/v1/research/search-provider", SearchProviderStatus),
-};
-const sourceKeys = {
-  domains: (workspaceId: string) => ["research", "domains", workspaceId] as const,
-  searchProvider: ["research", "search-provider"] as const,
-};
-// End of the wave-5 adapter.
 
 const TIER_TEXT: Record<SourceTier, string> = {
   PRIMARY: "Primary: the vendor's own docs and release notes",
@@ -100,14 +36,14 @@ const OFFLINE = "You're offline. NEXUS will load this when the connection is bac
 /** The Sources tab of the Research drawer, for one workspace. */
 export function ResearchSources({ workspaceId }: { workspaceId: string }) {
   const domains = useQuery({
-    queryKey: sourceKeys.domains(workspaceId),
-    queryFn: () => sourcesApi.domains(workspaceId),
+    queryKey: keys.researchDomains(workspaceId),
+    queryFn: () => api.domains(workspaceId),
   });
   const [editing, setEditing] = useState<ResearchDomain | null>(null);
   const rulesId = useId();
 
   return (
-    <div className="flex flex-col gap-4">
+    <section aria-label="Sources" className="flex flex-col gap-4">
       <SearchProviderLine />
       <p className="m-0 text-[13.5px] leading-[1.55] text-ink2">
         How much each web domain counts when the AI researcher checks a claim. A rule covers the domain and
@@ -158,12 +94,12 @@ export function ResearchSources({ workspaceId }: { workspaceId: string }) {
         editing={editing}
         onDone={() => setEditing(null)}
       />
-    </div>
+    </section>
   );
 }
 
 function SearchProviderLine() {
-  const status = useQuery({ queryKey: sourceKeys.searchProvider, queryFn: sourcesApi.searchProvider });
+  const status = useQuery({ queryKey: keys.searchProvider, queryFn: api.searchProvider });
   const s = status.data;
   return (
     <section
@@ -221,9 +157,9 @@ function DomainRow({
   const queryClient = useQueryClient();
   const [confirm, setConfirm] = useState(false);
   const remove = useMutation({
-    mutationFn: () => sourcesApi.deleteDomain(d.id),
+    mutationFn: () => api.deleteDomain(d.id),
     onSuccess: onRemoved,
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: sourceKeys.domains(d.workspaceId) }),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: keys.researchDomains(d.workspaceId) }),
   });
   return (
     <li className={item}>
@@ -314,7 +250,7 @@ function RuleForm({
   });
   const bad = new Set(touched ? parsed.error?.issues.map((i) => i.path[0]) : []);
   const save = useMutation({
-    mutationFn: (b: PutResearchDomainRequest) => sourcesApi.putDomain(b),
+    mutationFn: (b: PutResearchDomainRequest) => api.putDomain(b),
     onSuccess: () => {
       setDomain("");
       setNote("");
@@ -322,7 +258,7 @@ function RuleForm({
       setTouched(false);
       onDone();
     },
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: sourceKeys.domains(workspaceId) }),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: keys.researchDomains(workspaceId) }),
   });
   const submit = (e: FormEvent) => {
     e.preventDefault();
