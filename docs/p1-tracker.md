@@ -68,6 +68,24 @@ Owner setup: `~/.nexus/search.json` (`{"provider":"brave","apiKey":"…"}`, mode
 
 Known follow-ups: `Opportunity` doesn't carry the report's contradiction notes (drawer flags CONTESTED only); issues are created without labels (GitHub drops them for apps without push); ai_spend not yet applied to Explain/Triage/Talk/plan drafting; single-process assumptions in the diver (marked `shortcut:`).
 
+## Jobs wave (done on `main`, not pushed; spec: `docs/specs/jobs-wave.md`)
+
+The owner wants NEXUS showable (`docs/handoff.md`). This wave lets a job start from plain words and shows every job and how agents perform.
+
+| Builder | Delivered | Tests |
+|---|---|---|
+| A — Jobs history + performance API | `job-history.ts`: `GET /v1/jobs/history` (repo, agent, status-group and local-date filters; duration, cost, tests from NEXUS's own verification, PR only from an EXECUTED approval; one query per page), `GET /v1/agents/performance` (7/30 local days, every agent, success rate, PRs, cost incl. ai_spend, cost per PR, median time to review-ready, approval decisions) | filters incl. a UTC+5:30 day boundary, paging, numbers, decoy project/owner |
+| B — Job drafts API | `job-drafts/**`: plain words → one Developer model call (spend reserved $0.25, settled) → READY / NEEDS_REPO (CMD-G01: the server resolves the repo among bound ones, never guesses) / UNSUPPORTED; edit, preview (R2 new issue / R1 existing), approve on the exact hash: claim before GitHub, marker adoption, `createJob` under `job-draft:<id>`; FAILED keeps the issue and resumes. `github/issue-text.ts` (shared neutralisers), `callTool` returns `usage`, Developer gets `github.issues.create` | CMD-G01, unbound repo, UNSUPPORTED, invalid output, budget/stop before the call, concurrency, hash binding, one issue + one job under retries and crashes, decoy |
+| C — Jobs page | `jobs.tsx`: Jobs drawer (`drawer=jobs`) with All jobs (filters, rows, load more, honest states, New job) and Agent performance (7/30 toggle, per-agent cards, estimates note); Code zone "All jobs" link | filters, PR link only when present, states, keyboard, performance "—" cases |
+| D — New job + Execute | `newJob.tsx`: New job (`drawer=newjob`) and the job-draft drawer (`drawer=jobdraft:<id>`: choose repo, AI-drafted editable issue, budget, runner, preview → approve, Created #n only from GitHub, FAILED retry, discard); command bar Execute with text drafts a job, without text keeps the diagnostic preview | draft states, retry keys, approve only after preview, a11y |
+
+Coordinator: contracts first (`job-history.ts`, `job-drafts.ts`, `AgentKey` moved to `agent-key.ts` to avoid an import cycle, `Job.agent/startedAt/finishedAt`); one migration `0008_jobs.sql` with a **hand-written backfill** (job agent from its plan step or job type; start/finish from its state events; keep it when regenerating); preview accepted on FAILED drafts; a failed approve now drops its stale preview (the hash changes once the issue exists); one shared web agent-label table (`agentLabels.ts`).
+Checks on the merged tree: typecheck, lint, prettier, tests (api 362, web 210, runner 165+1 skipped, contracts 23), web build, secret scan (no literals; gitleaks runs in CI).
+
+Owner checks: one live draft → issue → run (needs `ai.json` and Issues: read & write), and the Jobs page on real runs.
+
+Known follow-ups: the preview of a new issue checks the issues permission only, not contents/pull requests (the run then fails FAILED and resumes once fixed); Recent drafts shows the newest 20 without load more; "Rewrite" passes the text through the query cache (no router param); the Cofounder "Results · this week" panel can now be built on `GET /v1/agents/performance`.
+
 ## Next
 
 - Owner check: one live Talk turn on Anthropic and on Foundry.
