@@ -50,6 +50,14 @@ Checks on the merged tree: typecheck, lint, prettier, tests (api 215, web 114, r
 Coordinator: contracts first; adapters removed (real `resolveAgentProfile` everywhere); agent records count plan steps; plan issue-run budgets narrowed to the agent's caps before hashing (and re-checked before running); Developer default caps $5 / 60 turns; return lines → NOT_DEFINED; shortcut comments for known limits; one squashed `0006_p1.sql` with the conversation and agent-profile triggers re-appended.
 Checks on the merged tree: typecheck, lint, prettier, tests (api 258, web 141, runner 165+1 skipped, contracts 19), web build.
 
+## Wave 5 — the researcher (in progress; spec: `docs/specs/p1-wave-5-researcher.md`)
+
+Owner decisions (2026-11-03): web search = **Brave Search API** (NEXUS calls and audits it itself); the **NEXUS Cofounder** design (`docs/design/NEXUS-Cofounder.dc.html`, PRD §D.4) is the target Home, so opportunities render as Cofounder cards.
+
+Base on `main`: `9082f97` (contracts `research-deep.ts`, new tools/intent/plan action, stubs marked `shortcut: wave 5 agent D`). Builders in their own worktrees: **A** safe web access (SSRF guard on all research fetches, page reading, Brave client, domain registry), **B** deep-dive engine (bounded search→read→cite loop, claim verification, `ai_spend` ledger), **C** opportunities + approved GitHub issue (Cofounder cards, `opp` drawer), **D** UI/Talk/plans/agent defaults. Coordinator merges A→B→C→D, deletes adapters, squashes one `0007_researcher.sql`.
+
+Owner setup after merge: `~/.nexus/search.json` (Brave key, mode 600), GitHub App permission **Issues: read & write** accepted on the installation.
+
 ## Next
 
 - Owner check: one live Talk turn on Anthropic and on Foundry.
