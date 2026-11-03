@@ -64,6 +64,13 @@
       "when": 1793735710696,
       "tag": "0008_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793742369471,
+      "tag": "0009_jazzy_vertigo",
+      "breakpoints": true
     }
   ]
 }

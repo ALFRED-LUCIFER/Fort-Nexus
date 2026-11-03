@@ -27,7 +27,8 @@ export type AuditEntry = {
     | "automation_run"
     | "agent_profile"
     | "plan"
-    | "job_draft";
+    | "job_draft"
+    | "voice";
   resourceId: string;
   correlationId: string;
   outcome?: "SUCCEEDED" | "DENIED" | "FAILED";

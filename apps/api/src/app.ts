@@ -55,6 +55,7 @@ import { runnerRegisterRoute, runnerRoutes } from "./routes/runner.ts";
 import { systemRoutes } from "./routes/system.ts";
 import { workspaceRoutes } from "./routes/workspaces.ts";
 import { emergencyStopEngaged } from "./system.ts";
+import { voiceRoutes } from "./voice/routes.ts";
 
 export type Deps = {
   config: Config;
@@ -304,7 +305,8 @@ export async function buildApp(config: Config) {
       .then(() => agentRoutes(scope, deps))
       .then(() => planRoutes(scope, deps))
       .then(() => jobHistoryRoutes(scope, deps))
-      .then(() => jobDraftRoutes(scope, deps, github)),
+      .then(() => jobDraftRoutes(scope, deps, github))
+      .then(() => voiceRoutes(scope, deps)),
   );
   // n8n's signed trigger: its own scope, outside the owner session (like the runner routes).
   await app.register(async (scope) => automationTriggerRoute(scope, deps));
