@@ -87,8 +87,9 @@ export class FakeEventSource {
   }
 }
 
-export function renderApp(path: string) {
-  const { router, queryClient } = createApp(createMemoryHistory({ initialEntries: [path] }));
+/** `view`: what `/` shows without `view=` — the zone board unless a test is about the Cofounder home. */
+export function renderApp(path: string, { view = "board" }: { view?: "home" | "board" } = {}) {
+  const { router, queryClient } = createApp(createMemoryHistory({ initialEntries: [path] }), view);
   queryClient.setDefaultOptions({ queries: { retry: false } });
   render(
     <QueryClientProvider client={queryClient}>

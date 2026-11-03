@@ -71,6 +71,12 @@ const Env = z.object({
     .min(1)
     .transform((p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p))
     .default(join(homedir(), ".nexus", "search.json")),
+  // Speech provider for push-to-talk and spoken replies (docs/runbooks/voice.md); mode 0600, like ai.json.
+  NEXUS_VOICE_FILE: z
+    .string()
+    .min(1)
+    .transform((p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p))
+    .default(join(homedir(), ".nexus", "voice.json")),
 });
 
 export type Config = {
@@ -88,6 +94,7 @@ export type Config = {
   connectorsDir: string;
   aiFile: string;
   searchFile: string;
+  voiceFile: string;
   ownerTimezone: string;
 };
 
@@ -129,6 +136,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, inContainer = r
     connectorsDir: e.NEXUS_CONNECTORS_DIR,
     aiFile: e.NEXUS_AI_FILE,
     searchFile: e.NEXUS_SEARCH_FILE,
+    voiceFile: e.NEXUS_VOICE_FILE,
     ownerTimezone: e.OWNER_TIMEZONE,
   };
 }

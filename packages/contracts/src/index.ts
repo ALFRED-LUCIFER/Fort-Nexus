@@ -18,3 +18,5 @@ export * from "./agents.ts";
 export * from "./plans.ts";
 export * from "./job-history.ts";
 export * from "./job-drafts.ts";
+export * from "./home.ts";
+export * from "./voice.ts";

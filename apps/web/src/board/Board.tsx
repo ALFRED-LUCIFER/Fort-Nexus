@@ -41,6 +41,7 @@ import { P1Button } from "./P1Button.tsx";
 import { BusinessDrawer, BusinessZone, bizSub, useConnectors } from "./business.tsx";
 import { IssueDrawer, RepoDrawer } from "./github.tsx";
 import { InboxDrawer } from "./Inbox.tsx";
+import { HomeView } from "./home.tsx";
 import { JobsDrawer } from "./jobs.tsx";
 import { AppNodes, IncidentDrawer, SystemsDrawer, appsSub, useMonitoredApps } from "./monitoring.tsx";
 import { JobDraftDrawer, NewJobDrawer } from "./newJob.tsx";
@@ -124,6 +125,10 @@ export function Board() {
   const apps = useMonitoredApps(projectId, scope.ready);
   const agents = useAgents(projectId);
   const [group, setGroup] = useState<"domains" | "agents">("domains");
+  // The Cofounder home is the landing view (PRD §D.4); the zone board stays one click away.
+  const { defaultView } = route.useRouteContext();
+  const view = search.view ?? defaultView;
+  const onBoard = view === "board";
   const agentKey = AgentKey.safeParse(drawerId);
   const plans = usePlans();
   const noticed = useOpportunities();
@@ -178,8 +183,8 @@ export function Board() {
     glide(zoomedAt(viewOf(camera), f, (el?.clientWidth ?? 1200) / 2, (el?.clientHeight ?? 800) / 2));
   };
   useLayoutEffect(() => {
-    if (vpRef.current) jumpTo({ x: vx, y: vy, z: vz }, overviewOf(vpRef.current));
-  }, [vx, vy, vz]);
+    if (onBoard && vpRef.current) jumpTo({ x: vx, y: vy, z: vz }, overviewOf(vpRef.current));
+  }, [vx, vy, vz, onBoard]);
   useEffect(() => {
     const el = vpRef.current;
     if (!el) return;
@@ -191,7 +196,7 @@ export function Board() {
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [vx, vy, vz]);
+  }, [vx, vy, vz, onBoard]);
   // Esc leaves a focused zone, unless a drawer or a field has it (they close or clear themselves first).
   const hasDrawer = !!search.drawer;
   useEffect(() => {
@@ -385,49 +390,53 @@ export function Board() {
   const glass = "glass pointer-events-auto flex items-center rounded-[18px]";
   return (
     <div className="fixed inset-0 overflow-hidden">
-      <m.div
-        ref={vpRef}
-        onPointerDown={panStart}
-        onPointerMove={panMove}
-        onPointerUp={panEnd}
-        onPointerLeave={panEnd}
-        className="absolute inset-0 cursor-grab overflow-hidden touch-none"
-        style={{
-          backgroundImage: "radial-gradient(var(--dot) 1px, transparent 1.3px)",
-          backgroundSize: gridSize,
-          backgroundPosition: gridPos,
-        }}
-      >
-        {/* shortcut: phone width still shows the scaled canvas; the §8 mobile layout (bottom nav) replaces it in P1. */}
-        <m.main
-          aria-label="Board"
-          className="absolute top-0 left-0 will-change-transform"
-          style={{ width: BOARD_W, height: BOARD_H, x: vx, y: vy, scale: vz, originX: 0, originY: 0 }}
+      {onBoard ? (
+        <m.div
+          ref={vpRef}
+          onPointerDown={panStart}
+          onPointerMove={panMove}
+          onPointerUp={panEnd}
+          onPointerLeave={panEnd}
+          className="absolute inset-0 cursor-grab overflow-hidden touch-none"
+          style={{
+            backgroundImage: "radial-gradient(var(--dot) 1px, transparent 1.3px)",
+            backgroundSize: gridSize,
+            backgroundPosition: gridPos,
+          }}
         >
-          {/* Regrouping cross-fades the zone sets (opacity only, so it also suits reduced motion). */}
-          <AnimatePresence initial={false} mode="wait">
-            <m.div key={group} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-              {(group === "agents" ? agentLanes(agents, projectId, openAgent) : zones).map(
-                (zone: ZoneDef) => {
-                  const { ws: zws, body, ...z } = zone;
-                  return (
-                    <Zone
-                      key={z.id}
-                      {...z}
-                      dim={ws !== "all" && !!zws && zws !== ws}
-                      focused={focused === z.id}
-                      onZoneClick={zoneClick(zone)}
-                      onFocusZone={() => focusZone(z)}
-                    >
-                      {body}
-                    </Zone>
-                  );
-                },
-              )}
-            </m.div>
-          </AnimatePresence>
-        </m.main>
-      </m.div>
+          {/* shortcut: phone width still shows the scaled canvas; the §8 mobile layout (bottom nav) replaces it in P1. */}
+          <m.main
+            aria-label="Board"
+            className="absolute top-0 left-0 will-change-transform"
+            style={{ width: BOARD_W, height: BOARD_H, x: vx, y: vy, scale: vz, originX: 0, originY: 0 }}
+          >
+            {/* Regrouping cross-fades the zone sets (opacity only, so it also suits reduced motion). */}
+            <AnimatePresence initial={false} mode="wait">
+              <m.div key={group} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                {(group === "agents" ? agentLanes(agents, projectId, openAgent) : zones).map(
+                  (zone: ZoneDef) => {
+                    const { ws: zws, body, ...z } = zone;
+                    return (
+                      <Zone
+                        key={z.id}
+                        {...z}
+                        dim={ws !== "all" && !!zws && zws !== ws}
+                        focused={focused === z.id}
+                        onZoneClick={zoneClick(zone)}
+                        onFocusZone={() => focusZone(z)}
+                      >
+                        {body}
+                      </Zone>
+                    );
+                  },
+                )}
+              </m.div>
+            </AnimatePresence>
+          </m.main>
+        </m.div>
+      ) : (
+        <HomeView />
+      )}
 
       <header className="pointer-events-none absolute top-3.5 right-4 left-4 flex items-center gap-2.5">
         <div className={`${glass} h-[52px] gap-2.5 pr-1.5 pl-3.5`}>
@@ -477,7 +486,26 @@ export function Board() {
         </CommandBar>
 
         <div className={`${glass} h-[52px] gap-0.5 px-1.5`}>
-          <div role="group" aria-label="Board grouping" className="hidden rounded-xl bg-hair p-[3px] lg:flex">
+          <div role="group" aria-label="View" className="flex rounded-xl bg-hair p-[3px]">
+            {(["home", "board"] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                aria-pressed={view === v}
+                onClick={() =>
+                  void navigate({ search: (s) => ({ ...s, view: v === "home" ? undefined : v }) })
+                }
+                className={seg(view === v)}
+              >
+                {v === "home" ? "Home" : "Board"}
+              </button>
+            ))}
+          </div>
+          <div
+            role="group"
+            aria-label="Board grouping"
+            className={`hidden rounded-xl bg-hair p-[3px] ${onBoard ? "lg:flex" : ""}`}
+          >
             {(["domains", "agents"] as const).map((g) => (
               <button
                 key={g}
@@ -536,7 +564,7 @@ export function Board() {
       </header>
 
       <div className="absolute bottom-4 left-4 flex items-center gap-2">
-        <div className="glass flex items-center gap-0.5 rounded-[14px] p-1">
+        <div className={`glass items-center gap-0.5 rounded-[14px] p-1 ${onBoard ? "flex" : "hidden"}`}>
           <button
             type="button"
             aria-label="Zoom out"

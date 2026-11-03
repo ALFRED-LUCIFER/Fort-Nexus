@@ -28,6 +28,8 @@ const text = (max: number) =>
 // `drawer=issue:<repoId>:<number>`, `drawer=inbox`, `drawer=settings`, `drawer=business`, `drawer=research` / `drawer=research:<uuid>` (one deep dive), `drawer=talk` (threads) / `drawer=talk:<uuid>` (one thread), `drawer=systems`, `drawer=incident:<uuid>`, `drawer=agent:<AgentKey>`, `drawer=plan:<uuid>`, `drawer=opp:<uuid>` (`:preview` opens on the issue preview), `drawer=jobs` (Jobs page), `drawer=newjob` (New job form), `drawer=jobdraft:<uuid>` (one job draft). Bad values fall back instead of erroring.
 export const BoardSearch = z.object({
   ws: Workspace.optional().catch(undefined),
+  // Cofounder home (the default) or the zone board (`view=board`); drawers open over either.
+  view: z.enum(["home", "board"]).optional().catch(undefined),
   // The selected project of `ws` (FR-WKS-02); without one the board is a read-only aggregate.
   project: z.uuid().optional().catch(undefined),
   drawer: z
@@ -58,7 +60,11 @@ function Root() {
   );
 }
 
-const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({ component: Root });
+export type BoardView = "home" | "board";
+// `defaultView`: what `/` shows without `view=` (the Cofounder home in the app; tests of the zone board use "board").
+const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient; defaultView: BoardView }>()({
+  component: Root,
+});
 
 // Better Auth sends failed GitHub sign-ins back as `/login?error=<code>`; anything else is dropped.
 export const LoginSearch = z.object({
@@ -115,8 +121,8 @@ function BoardError({ error }: { error: unknown }) {
 
 const routeTree = rootRoute.addChildren([loginRoute, boardRoute]);
 
-const makeRouter = (queryClient: QueryClient, history?: RouterHistory) =>
-  createRouter({ routeTree, context: { queryClient }, history, defaultPreloadStaleTime: 0 });
+const makeRouter = (queryClient: QueryClient, history?: RouterHistory, defaultView: BoardView = "home") =>
+  createRouter({ routeTree, context: { queryClient, defaultView }, history, defaultPreloadStaleTime: 0 });
 
 declare module "@tanstack/react-router" {
   interface Register {
@@ -125,7 +131,7 @@ declare module "@tanstack/react-router" {
 }
 
 /** One router + query client pair; tests pass a memory history. */
-export function createApp(history?: RouterHistory) {
+export function createApp(history?: RouterHistory, defaultView: BoardView = "home") {
   const queryClient: QueryClient = new QueryClient({
     // An expired session on any request sends the owner back to sign in.
     queryCache: new QueryCache({
@@ -140,6 +146,6 @@ export function createApp(history?: RouterHistory) {
       },
     },
   });
-  const router = makeRouter(queryClient, history);
+  const router = makeRouter(queryClient, history, defaultView);
   return { router, queryClient };
 }

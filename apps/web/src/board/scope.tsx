@@ -18,7 +18,7 @@ export interface Scope {
   /** Why nothing can be started or decided here; null when the project can run things. */
   blocked: string | null;
   /** Search params that keep this scope when navigating. */
-  keep: { ws?: "dev" | "business"; project?: string };
+  keep: { ws?: "dev" | "business"; project?: string; view?: "home" | "board" };
 }
 
 /** The board's scope from the URL (`ws` + `project`). Never falls back to another project (FR-CSP-01). */
@@ -44,7 +44,7 @@ export function useScope(): Scope {
     project,
     ready: ws === "all" || !search.project || !workspaces.isPending,
     blocked,
-    keep: { ws: search.ws === "all" ? undefined : search.ws, project: search.project },
+    keep: { ws: search.ws === "all" ? undefined : search.ws, project: search.project, view: search.view },
   };
 }
 
@@ -108,8 +108,11 @@ export function ScopeNav() {
   };
   // Switching scope closes any drawer: it showed the other project's data.
   const select = (p: Project | null) => {
+    const view = scope.keep.view;
     void navigate({
-      search: p ? { ws: p.mode === "DEV" ? "dev" : "business", project: p.id } : { ws: undefined },
+      search: p
+        ? { ws: p.mode === "DEV" ? "dev" : "business", project: p.id, view }
+        : { ws: undefined, view },
     });
     close();
   };

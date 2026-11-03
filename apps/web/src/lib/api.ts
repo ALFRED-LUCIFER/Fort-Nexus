@@ -3,6 +3,11 @@ import {
   ActionProposal,
   AgentList,
   AgentPerformance,
+  HomeSummary,
+  Transcript,
+  VoiceStatus,
+  type SpeakRequest,
+  type UpdateVoiceSettingsRequest,
   JobDraft,
   JobDraftList,
   JobDraftPreview,
@@ -433,7 +438,47 @@ export const api = {
     ),
   discardJobDraft: (id: string) =>
     request(`/v1/job-drafts/${encodeURIComponent(id)}/discard`, JobDraft, post()),
+  // Cofounder home: projectId omitted = the read-only "All" view.
+  home: (projectId?: string) =>
+    request(`/v1/home${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`, HomeSummary),
+  voiceStatus: () => request("/v1/voice/status", VoiceStatus),
+  updateVoiceSettings: (body: UpdateVoiceSettingsRequest) =>
+    request("/v1/voice/settings", VoiceStatus, post({}, body, "PUT")),
+  // The raw clip as recorded; the server sends it to the owner's speech provider and returns the words to review.
+  transcribe: (projectId: string, audio: Blob, durationMs: number) =>
+    request(`/v1/voice/transcribe?${new URLSearchParams({ projectId })}`, Transcript, {
+      method: "POST",
+      headers: { "content-type": audio.type, "x-audio-duration-ms": String(Math.round(durationMs)) },
+      body: audio,
+    }),
+  // audio/mpeg of the reply, spoken by the owner's configured voice.
+  speak: (body: SpeakRequest) => requestBlob("/v1/voice/speak", post({}, body)),
 };
+
+/** Like `request`, for endpoints that answer a binary body (audio); errors are the same ApiRequestError. */
+async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
+  let res: Response;
+  try {
+    res = await fetch(path, { credentials: "same-origin", ...init });
+  } catch {
+    throw new ApiRequestError(UNREACHABLE, 0, "UNREACHABLE");
+  }
+  if (res.ok) return res.blob();
+  const body: unknown = await res.json().catch(() => null);
+  const err = ApiError.safeParse(body);
+  if (err.success)
+    throw new ApiRequestError(
+      err.data.error.message,
+      res.status,
+      err.data.error.code,
+      err.data.error.details,
+    );
+  throw new ApiRequestError(
+    res.status >= 500 ? UNREACHABLE : `Request failed (HTTP ${res.status}).`,
+    res.status,
+    "HTTP",
+  );
+}
 
 // Drops undefined and empty values so the server's defaults apply.
 const searchOf = (q: Record<string, string | number | undefined>) =>
@@ -505,4 +550,6 @@ export const keys = {
   jobDrafts: ["job-drafts"] as const,
   jobDraftsOf: (projectId: string | undefined) => ["job-drafts", "list", projectId ?? "all"] as const,
   jobDraft: (id: string) => ["job-drafts", id] as const,
+  home: (projectId: string | undefined) => ["home", projectId ?? "all"] as const,
+  voice: ["voice"] as const,
 };
