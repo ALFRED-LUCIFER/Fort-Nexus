@@ -375,7 +375,6 @@ describe("Brave search client (FR-RES-03)", () => {
 
   it("401/403 and an invalid-token 422 are AUTH, 429 is RATE_LIMITED, anything else UNAVAILABLE; never the key", async () => {
     const key = apiKey();
-    const client = braveClient(key);
     const cases: [Response | (() => never), SearchError["kind"]][] = [
       [json({ error: { code: "UNAUTHORIZED" } }, 401), "AUTH"],
       [json({}, 403), "AUTH"],
@@ -394,13 +393,15 @@ describe("Brave search client (FR-RES-03)", () => {
     ];
     for (const [respond, kind] of cases) {
       stub(() => (typeof respond === "function" ? respond() : respond));
+      // A fresh client per case: each has its own 1 req/s limiter, so the cases don't queue behind each other.
+      const client = braveClient(key);
       const err = await client.search("acme", { count: 5, signal: signal() }).catch((e: unknown) => e);
       expect(err, kind).toBeInstanceOf(SearchError);
       expect((err as SearchError).kind).toBe(kind);
       expect((err as SearchError).message).not.toContain(key);
       vi.restoreAllMocks();
     }
-  }, 20_000);
+  });
 
   it("spaces requests to 1 per second per client and skips empty queries", async () => {
     stub(() => json({ web: { results: [] } }));

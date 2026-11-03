@@ -614,7 +614,7 @@ function OpportunityLink({
   });
   if (!opps.data) return opps.error ? <Pending error={opps.error} /> : null;
   // shortcut: DeepDive carries no opportunity id, so it is found among the project's newest 50 opportunities.
-  const opp = opps.data.items.find((o) => o.deepDiveId === deepDiveId);
+  const opp = opps.data.find((o) => o.deepDiveId === deepDiveId);
   if (!opp)
     return (
       <p className="m-0 text-[12.5px] leading-snug text-ink2">
