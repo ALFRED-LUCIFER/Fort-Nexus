@@ -1,4 +1,4 @@
-import { useId, useState, type FormEvent, type ReactNode } from "react";
+import { useId, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
   useInfiniteQuery,
   useMutation,
@@ -19,22 +19,27 @@ import {
   type Watchlist,
 } from "@nexus/contracts";
 import { api, keys, type FindingFilters } from "../lib/api.ts";
-import { ago, clock, until, useNow, useWorkspaces } from "../lib/queries.ts";
+import { ago, until, useNow, useWorkspaces } from "../lib/queries.ts";
 import { AiError, AiLabel } from "./aiInference.tsx";
+import {
+  DeepDivesPanel,
+  Pending,
+  Stale,
+  field,
+  ghostBtn,
+  primaryBtn,
+  type SeedFinding,
+} from "./deepDive.tsx";
 import { Drawer, DrawerHeader } from "./Drawer.tsx";
-import { useScope, type Scope } from "./scope.tsx";
+import { ResearchSources } from "./researchSourcesAdapter.tsx";
+import { PICK_PROJECT, useScope, type Scope } from "./scope.tsx";
 import { EmptyZone } from "./zones.tsx";
 
 const POLL_MS = 30_000;
 const RUN_POLL_MS = 2_000;
 const ZONE_FINDINGS = 4;
 const PAGE = 20;
-
-const field =
-  "min-w-0 rounded-xl border border-hair bg-card px-3 py-2 text-[13px] text-ink placeholder:text-ink3";
-const ghostBtn =
-  "rounded-xl border border-hair px-3.5 py-2.5 text-[12.5px] font-medium text-ink disabled:opacity-45";
-const primaryBtn = "rounded-xl bg-teal px-4 py-2.5 text-[12.5px] font-medium text-onacc disabled:opacity-60";
+const MAX_SEED = 10; // CreateDeepDiveRequest.findingIds
 
 // Truth hierarchy: only a PRIMARY source or two independent publishers make a finding more than a claim (RES-G03).
 const LABEL: Record<VerificationLabel, { text: string; tone: string }> = {
@@ -127,28 +132,6 @@ function FindingTitle({ f }: { f: Finding }) {
   );
 }
 
-function Stale({ query }: { query: { error: Error | null; data: unknown; dataUpdatedAt: number } }) {
-  if (!query.error || query.data === undefined) return null;
-  return (
-    <p role="status" className="m-0 text-[12.5px] leading-normal text-amber">
-      Can&apos;t refresh: {query.error.message} Showing what NEXUS had at{" "}
-      {clock(new Date(query.dataUpdatedAt).toISOString())}.
-    </p>
-  );
-}
-
-function Pending({ error }: { error: Error | null }) {
-  return error ? (
-    <p role="alert" className="m-0 text-[14px] text-coral">
-      {error.message}
-    </p>
-  ) : (
-    <p role="status" className="m-0 text-[13px] text-ink3">
-      Loading…
-    </p>
-  );
-}
-
 // ---------------------------------------------------------------- zone
 
 export function ResearchZone({
@@ -226,17 +209,151 @@ export function ResearchZone({
 
 // ---------------------------------------------------------------- drawer
 
-export function ResearchDrawer({ banner, onClose }: { banner?: ReactNode; onClose: () => void }) {
+/** `deepDiveId` opens the drawer on that deep dive (Talk's "Open the deep dive", a plan step's evidence). */
+export function ResearchDrawer({
+  deepDiveId,
+  banner,
+  onClose,
+}: {
+  deepDiveId?: string;
+  banner?: ReactNode;
+  onClose: () => void;
+}) {
   return (
     <Drawer banner={banner} onClose={onClose}>
-      <ResearchBody />
+      <ResearchBody key={deepDiveId} deepDiveId={deepDiveId} />
     </Drawer>
   );
 }
 
-function ResearchBody() {
+const TABS = [
+  ["findings", "Findings"],
+  ["dives", "Deep dives"],
+  ["sources", "Sources"],
+] as const;
+type Tab = (typeof TABS)[number][0];
+
+function ResearchBody({ deepDiveId }: { deepDiveId?: string }) {
   const scope = useScope();
   const blocked = researchBlocked(scope);
+  const base = useId();
+  const workspaces = useWorkspaces();
+  const [tab, setTab] = useState<Tab>(deepDiveId ? "dives" : "findings");
+  const [focus, setFocus] = useState<string | null>(deepDiveId ?? null);
+  // Findings picked on the Findings tab seed a deep dive ("investigate this cluster", FR-RES-10).
+  const [seed, setSeed] = useState<SeedFinding[]>([]);
+  const toggleSeed = (f: Finding) =>
+    setSeed((s) =>
+      s.some((x) => x.id === f.id) ? s.filter((x) => x.id !== f.id) : [...s, { id: f.id, title: f.title }],
+    );
+  const workspaceId =
+    scope.project?.workspaceId ??
+    (scope.ws === "all"
+      ? undefined
+      : workspaces.data?.items.find((w) => w.mode === (scope.ws === "dev" ? "DEV" : "BUSINESS"))?.id);
+  const tabId = (t: Tab) => `${base}-tab-${t}`;
+  const select = (t: Tab) => {
+    setTab(t);
+    document.getElementById(tabId(t))?.focus();
+  };
+  // WAI-ARIA tabs: arrows move between tabs, Home/End jump to the ends.
+  const onKey = (e: KeyboardEvent<HTMLButtonElement>, i: number) => {
+    const to =
+      e.key === "ArrowRight"
+        ? (i + 1) % TABS.length
+        : e.key === "ArrowLeft"
+          ? (i - 1 + TABS.length) % TABS.length
+          : e.key === "Home"
+            ? 0
+            : e.key === "End"
+              ? TABS.length - 1
+              : null;
+    if (to === null) return;
+    e.preventDefault();
+    select(TABS[to]![0]);
+  };
+  return (
+    <>
+      <DrawerHeader
+        kicker={`Research · ${scope.project?.name ?? "all projects"} · public sources · scores are triage aids, not facts`}
+        title="Research"
+      />
+      <div
+        role="tablist"
+        aria-label="Research"
+        className="flex flex-none gap-1.5 border-b border-hair px-6 pt-3"
+      >
+        {TABS.map(([t, label], i) => (
+          <button
+            key={t}
+            id={tabId(t)}
+            type="button"
+            role="tab"
+            aria-selected={tab === t}
+            aria-controls={`${base}-panel`}
+            tabIndex={tab === t ? 0 : -1}
+            onClick={() => setTab(t)}
+            onKeyDown={(e) => onKey(e, i)}
+            className={`-mb-px border-b-2 px-3 pb-2.5 text-[13px] font-medium ${tab === t ? "border-teal text-ink" : "border-transparent text-ink2"}`}
+          >
+            {t === "dives" && seed.length > 0 ? `${label} · ${seed.length}` : label}
+          </button>
+        ))}
+      </div>
+      <div
+        id={`${base}-panel`}
+        role="tabpanel"
+        aria-labelledby={tabId(tab)}
+        className="nx-stagger flex min-h-0 flex-1 flex-col gap-7 overflow-auto px-6 pt-5 pb-6"
+      >
+        {tab === "findings" && (
+          <FindingsTab
+            scope={scope}
+            blocked={blocked}
+            seed={seed}
+            onToggle={toggleSeed}
+            onInvestigate={() => select("dives")}
+            onClear={() => setSeed([])}
+          />
+        )}
+        {tab === "dives" && (
+          <DeepDivesPanel
+            projectId={scope.project?.id}
+            blocked={blocked}
+            seed={seed}
+            onSeedChange={setSeed}
+            focusId={focus}
+            onFocus={setFocus}
+          />
+        )}
+        {tab === "sources" &&
+          (workspaceId ? (
+            <ResearchSources workspaceId={workspaceId} />
+          ) : (
+            <p className="m-0 text-[14px] leading-relaxed text-ink2">
+              {scope.ready ? `Source rules belong to a workspace. ${PICK_PROJECT}` : "Loading…"}
+            </p>
+          ))}
+      </div>
+    </>
+  );
+}
+
+function FindingsTab({
+  scope,
+  blocked,
+  seed,
+  onToggle,
+  onInvestigate,
+  onClear,
+}: {
+  scope: Scope;
+  blocked: string | null;
+  seed: readonly SeedFinding[];
+  onToggle: (f: Finding) => void;
+  onInvestigate: () => void;
+  onClear: () => void;
+}) {
   const blockedId = useId();
   const workspaces = useWorkspaces();
   const watchlists = useWatchlists();
@@ -244,6 +361,10 @@ function ResearchBody() {
   const [creating, setCreating] = useState(false);
   const items = watchlists.data ?? [];
   const current = items.find((w) => w.id === selected) ?? items[0];
+  // Picking findings for a deep dive needs a project that can start one.
+  const pick: SeedPick | undefined = blocked
+    ? undefined
+    : { chosen: new Set(seed.map((f) => f.id)), full: seed.length >= MAX_SEED, onToggle };
   // All mixes projects: name each watchlist's project.
   const projectName = (id: string) =>
     scope.project
@@ -252,73 +373,84 @@ function ResearchBody() {
         "another project");
   return (
     <>
-      <DrawerHeader
-        kicker={`Research · ${scope.project?.name ?? "all projects"} · public sources · scores are triage aids, not facts`}
-        title="Research"
-      />
-      <div className="nx-stagger flex min-h-0 flex-1 flex-col gap-7 overflow-auto px-6 pt-5 pb-6">
-        <section aria-labelledby="res-watchlists" className="flex flex-col gap-3">
-          <div className="flex items-center gap-3">
-            <h3 id="res-watchlists" className="kicker m-0 flex-1">
-              Watchlists
-            </h3>
-            <button
-              type="button"
-              aria-expanded={creating}
-              disabled={!!blocked}
-              aria-describedby={blocked ? blockedId : undefined}
-              onClick={() => setCreating((c) => !c)}
-              className={ghostBtn}
-            >
-              {creating ? "Close form" : "New watchlist"}
-            </button>
-          </div>
-          {blocked && (
-            <p id={blockedId} className="m-0 text-[12.5px] leading-snug text-ink2">
-              {blocked}
-            </p>
-          )}
-          {creating && !blocked && scope.project && (
-            <CreateWatchlist
-              projectId={scope.project.id}
-              onCreated={(w) => {
-                setCreating(false);
-                setSelected(w.id);
-              }}
-            />
-          )}
-          <Stale query={watchlists} />
-          {!watchlists.data ? (
-            <Pending error={watchlists.error} />
-          ) : items.length === 0 ? (
-            !creating && (
-              <p className="m-0 text-[14px] leading-relaxed text-ink2">
-                No watchlists yet. Create one with the feeds and GitHub repositories you want briefs about.
-              </p>
-            )
-          ) : (
-            <ul aria-label="Watchlists" className="m-0 flex list-none flex-col gap-2.5 p-0">
-              {items.map((w) => (
-                <WatchlistItem
-                  key={w.id}
-                  w={w}
-                  project={projectName(w.projectId)}
-                  blocked={blocked ? blockedId : undefined}
-                  selected={w.id === current?.id}
-                  onSelect={() => setSelected(w.id)}
-                />
-              ))}
-            </ul>
-          )}
-        </section>
-        {current && <LatestBrief key={current.id} w={current} blocked={blocked} />}
-        {items.length > 0 && (
-          <FindingSearch projectId={scope.project?.id} watchlists={items} blocked={blocked} />
+      {seed.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-teal px-4 py-3">
+          <span className="min-w-0 flex-1 text-[13px] text-ink">
+            {seed.length} {seed.length === 1 ? "finding" : "findings"} selected for a deep dive
+            {seed.length >= MAX_SEED && ` (at most ${MAX_SEED})`}
+          </span>
+          <button type="button" onClick={onClear} className={ghostBtn}>
+            Clear
+          </button>
+          <button type="button" onClick={onInvestigate} className={primaryBtn}>
+            Investigate selected findings
+          </button>
+        </div>
+      )}
+      <section aria-labelledby="res-watchlists" className="flex flex-col gap-3">
+        <div className="flex items-center gap-3">
+          <h3 id="res-watchlists" className="kicker m-0 flex-1">
+            Watchlists
+          </h3>
+          <button
+            type="button"
+            aria-expanded={creating}
+            disabled={!!blocked}
+            aria-describedby={blocked ? blockedId : undefined}
+            onClick={() => setCreating((c) => !c)}
+            className={ghostBtn}
+          >
+            {creating ? "Close form" : "New watchlist"}
+          </button>
+        </div>
+        {blocked && (
+          <p id={blockedId} className="m-0 text-[12.5px] leading-snug text-ink2">
+            {blocked}
+          </p>
         )}
-      </div>
+        {creating && !blocked && scope.project && (
+          <CreateWatchlist
+            projectId={scope.project.id}
+            onCreated={(w) => {
+              setCreating(false);
+              setSelected(w.id);
+            }}
+          />
+        )}
+        <Stale query={watchlists} />
+        {!watchlists.data ? (
+          <Pending error={watchlists.error} />
+        ) : items.length === 0 ? (
+          !creating && (
+            <p className="m-0 text-[14px] leading-relaxed text-ink2">
+              No watchlists yet. Create one with the feeds and GitHub repositories you want briefs about.
+            </p>
+          )
+        ) : (
+          <ul aria-label="Watchlists" className="m-0 flex list-none flex-col gap-2.5 p-0">
+            {items.map((w) => (
+              <WatchlistItem
+                key={w.id}
+                w={w}
+                project={projectName(w.projectId)}
+                blocked={blocked ? blockedId : undefined}
+                selected={w.id === current?.id}
+                onSelect={() => setSelected(w.id)}
+              />
+            ))}
+          </ul>
+        )}
+      </section>
+      {current && <LatestBrief key={current.id} w={current} blocked={blocked} pick={pick} />}
+      {items.length > 0 && (
+        <FindingSearch projectId={scope.project?.id} watchlists={items} blocked={blocked} pick={pick} />
+      )}
     </>
   );
 }
+
+/** Choosing findings for a deep dive; absent where none can start (All, archived). */
+type SeedPick = { chosen: ReadonlySet<string>; full: boolean; onToggle: (f: Finding) => void };
 
 function WatchlistItem({
   w,
@@ -581,7 +713,7 @@ function CreateWatchlist({ projectId, onCreated }: { projectId: string; onCreate
 }
 
 /** `blocked`: why findings can't be explained here (All or archived), else null. */
-function LatestBrief({ w, blocked }: { w: Watchlist; blocked: string | null }) {
+function LatestBrief({ w, blocked, pick }: { w: Watchlist; blocked: string | null; pick?: SeedPick }) {
   const now = useNow(30_000);
   const runs = useQuery({
     queryKey: keys.researchRuns(w.id),
@@ -631,7 +763,7 @@ function LatestBrief({ w, blocked }: { w: Watchlist; blocked: string | null }) {
           ) : (
             <ul aria-label="Brief findings" className="m-0 flex list-none flex-col gap-2.5 p-0">
               {brief.data!.findings.map((f) => (
-                <FindingCard key={f.id} f={f} blocked={blocked} />
+                <FindingCard key={f.id} f={f} blocked={blocked} pick={pick} />
               ))}
             </ul>
           )}
@@ -654,7 +786,7 @@ function LatestBrief({ w, blocked }: { w: Watchlist; blocked: string | null }) {
   );
 }
 
-function FindingCard({ f, blocked }: { f: Finding; blocked: string | null }) {
+function FindingCard({ f, blocked, pick }: { f: Finding; blocked: string | null; pick?: SeedPick }) {
   const now = useNow(30_000);
   const queryClient = useQueryClient();
   const blockedId = useId();
@@ -675,6 +807,17 @@ function FindingCard({ f, blocked }: { f: Finding; blocked: string | null }) {
           triage score {f.score}/100
         </span>
         {!f.readAt && <span className="font-mono text-[11px] text-teal">unread</span>}
+        {pick && (
+          <label className="ml-auto flex items-center gap-1.5 text-[12px] text-ink2">
+            <input
+              type="checkbox"
+              checked={pick.chosen.has(f.id)}
+              disabled={pick.full && !pick.chosen.has(f.id)}
+              onChange={() => pick.onToggle(f)}
+            />
+            Investigate <span className="sr-only">in a deep dive: {f.title}</span>
+          </label>
+        )}
       </span>
       <span className="text-[14.5px] leading-[1.35] font-medium text-ink">
         <FindingTitle f={f} />
@@ -790,10 +933,12 @@ function FindingSearch({
   projectId,
   watchlists,
   blocked,
+  pick,
 }: {
   projectId: string | undefined;
   watchlists: readonly Watchlist[];
   blocked: string | null;
+  pick?: SeedPick;
 }) {
   const [form, setFilters] = useState<FindingFilters>({});
   const filters = { ...form, projectId };
@@ -879,7 +1024,7 @@ function FindingSearch({
       ) : (
         <ul aria-label="Search results" className="m-0 flex list-none flex-col gap-2.5 p-0">
           {items.map((f) => (
-            <FindingCard key={f.id} f={f} blocked={blocked} />
+            <FindingCard key={f.id} f={f} blocked={blocked} pick={pick} />
           ))}
         </ul>
       )}

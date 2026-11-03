@@ -180,6 +180,15 @@ describe("registry (FR-AGT-07)", () => {
     expect(by("CHIEF_OF_STAFF").tools).toEqual([...AgentTool.options]);
     expect(by("DEVELOPER").tools).toEqual(["jobs.read", "jobs.create.issue_run", "github.read"]);
     expect(by("FINANCIAL_ANALYST").tools).toEqual(["business.metrics"]);
+    // P1 wave 5: the researcher deep-dives within its own caps; the issue it may propose is an R2 owner click.
+    expect(by("AI_RESEARCHER")).toMatchObject({
+      tools: ["research.search", "research.run", "research.deep_dive", "github.issues.create"],
+      maxCostUsdPerTask: 2,
+      maxTurns: 30,
+    });
+    expect(items.find((a) => a.agent === "AI_RESEARCHER")!.description).toBe(
+      "Searches the web and your watchlists, verifies every quoted claim against the page it read, and proposes opportunities with evidence.",
+    );
     expect(by("PRODUCT").autonomy).toBe("DRAFT");
     expect(
       items.filter((a) => a.effective.settings.autonomy !== "ACT_WITH_APPROVAL").map((a) => a.agent),

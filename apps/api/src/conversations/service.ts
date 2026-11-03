@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import {
   PROPOSAL_TTL_MS,
+  TOOL_RISK,
   type ActionProposal,
   type CreateThreadRequest,
   type PostTurnRequest,
@@ -68,7 +69,11 @@ export const toProposalDto = (p: ProposalRow, now = new Date()): ActionProposal 
   status: p.status === "AWAITING_APPROVAL" && p.expiresAt <= now ? "EXPIRED" : p.status,
   expiresAt: p.expiresAt.toISOString(),
   decidedAt: p.decidedAt?.toISOString() ?? null,
-  result: p.resultJobId ? { jobId: p.resultJobId } : null,
+  result: p.resultJobId
+    ? { jobId: p.resultJobId }
+    : p.resultDeepDiveId
+      ? { deepDiveId: p.resultDeepDiveId }
+      : null,
   error: p.error,
   createdAt: p.createdAt.toISOString(),
 });
@@ -340,7 +345,9 @@ export async function postTurn(
           ...scope,
           threadId: thread.id,
           turnId: assistant!.id,
-          riskTier: "R1", // a sandboxed job; its push is a separate R2 approval
+          // A sandboxed job (its push is a separate R2 approval) or a deep dive (spends budget, writes nothing outside
+          // NEXUS): both R1.
+          riskTier: reply.proposal.type === "research.deep_dive" ? TOOL_RISK["research.deep_dive"] : "R1",
           action: reply.proposal,
           actionHash: sha256(canonical(reply.proposal)),
           status: "AWAITING_APPROVAL",
@@ -392,10 +399,11 @@ export async function postTurn(
 
 /**
  * FR-CXR-05: the owner's authenticated decision on the exact action hash is the only approval. Approve creates the
- * job through the normal path with idempotency key `proposal:<id>`, so a retried or doubled approve creates it once.
+ * job or deep dive through its normal path with idempotency key `proposal:<id>`, so a retried or doubled approve
+ * creates it once.
  */
 export async function decideProposal(
-  deps: Deps,
+  deps: Pick<Deps, "db" | "config" | "github" | "deepDives">,
   input: { ownerId: string; proposalId: string; body: ProposalDecisionRequest; correlationId: string },
 ): Promise<ActionProposal> {
   const { db } = deps;
@@ -462,34 +470,57 @@ export async function decideProposal(
 
   let finished: ProposalRow;
   try {
-    // shortcut: wave 5 agent D executes research.deep_dive proposals; nothing creates one before that lands.
-    if (decided.action.type !== "jobs.create")
-      throw new HttpError(409, "CONFLICT", "Deep-dive proposals can't run yet.");
-    const job = await createJob(db, {
-      ownerId: input.ownerId,
-      idempotencyKey: `proposal:${decided.id}`,
-      body: decided.action.request,
-      correlationId: input.correlationId,
-      timezone: deps.config.ownerTimezone,
-      pinIssue: (b) => requireGithub(deps.github).issueSnapshot(b.repositoryId, b.issueNumber, b.baseBranch),
-    });
+    const action = decided.action;
+    const key = `proposal:${decided.id}`;
+    // The created record is the only result (truth hierarchy); both paths are idempotent per key.
+    const result =
+      action.type === "jobs.create"
+        ? {
+            resultJobId: (
+              await createJob(db, {
+                ownerId: input.ownerId,
+                idempotencyKey: key,
+                body: action.request,
+                correlationId: input.correlationId,
+                timezone: deps.config.ownerTimezone,
+                pinIssue: (b) =>
+                  requireGithub(deps.github).issueSnapshot(b.repositoryId, b.issueNumber, b.baseBranch),
+              })
+            ).id,
+          }
+        : {
+            resultDeepDiveId: (
+              await deps.deepDives.create(
+                { ownerId: input.ownerId, actor, correlationId: input.correlationId },
+                action.request,
+                key,
+              )
+            ).deepDive.id,
+          };
     finished = await db.transaction(async (tx) => {
       const [done] = await tx
         .update(actionProposals)
-        .set({ status: "EXECUTED", resultJobId: job.id })
+        .set({ status: "EXECUTED", ...result })
         .where(and(eq(actionProposals.id, decided.id), eq(actionProposals.status, "APPROVED")))
         .returning();
       if (!done) {
-        // A concurrent approve finished it first; both point at the same job.
+        // A concurrent approve finished it first; both point at the same job or dive.
         const [current] = await tx.select().from(actionProposals).where(eq(actionProposals.id, decided.id));
         return current!;
       }
-      // Truth hierarchy: the thread is now about the job that really exists.
-      await tx
-        .update(conversationThreads)
-        .set({ subjectJobId: job.id, updatedAt: new Date() })
-        .where(eq(conversationThreads.id, decided.threadId));
-      await record(tx, decided, "action_proposal.execute", "SUCCEEDED", { jobId: job.id });
+      // The thread is now about the job that really exists; a deep dive isn't a run, so the subject stays.
+      if ("resultJobId" in result)
+        await tx
+          .update(conversationThreads)
+          .set({ subjectJobId: result.resultJobId, updatedAt: new Date() })
+          .where(eq(conversationThreads.id, decided.threadId));
+      await record(
+        tx,
+        decided,
+        "action_proposal.execute",
+        "SUCCEEDED",
+        "resultJobId" in result ? { jobId: result.resultJobId } : { deepDiveId: result.resultDeepDiveId },
+      );
       return done;
     });
   } catch (err) {

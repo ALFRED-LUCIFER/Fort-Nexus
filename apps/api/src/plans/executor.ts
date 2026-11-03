@@ -34,7 +34,7 @@ const failed = (error: string): Finish => ({ status: "FAILED", artifact: null, e
 export type PlanExecutor = ReturnType<typeof createPlanExecutor>;
 
 export function createPlanExecutor(
-  deps: Pick<Deps, "db" | "github" | "research" | "config">,
+  deps: Pick<Deps, "db" | "github" | "research" | "config" | "deepDives">,
   log: FastifyBaseLogger,
 ) {
   const { db } = deps;
@@ -116,11 +116,11 @@ export function createPlanExecutor(
     });
   }
 
-  /** Records the source a running step waits on; a plan cancelled meanwhile gets its new job cancelled. */
+  /** Records the source a running step waits on; a plan cancelled meanwhile gets its new job or dive cancelled. */
   async function recordSource(
     plan: PlanRow,
     index: number,
-    set: { jobId: string } | { researchRunId: string },
+    set: { jobId: string } | { researchRunId: string } | { deepDiveId: string },
   ) {
     const cancelled = await db.transaction(async (tx) => {
       const { plan: current } = await lockPlan(tx, plan.id);
@@ -132,12 +132,15 @@ export function createPlanExecutor(
         );
       return current.status === "CANCELLED";
     });
+    const settled = (err: unknown) => {
+      if (!(err instanceof HttpError)) throw err;
+    };
     if (cancelled && "jobId" in set)
-      await cancelJob(db, { ownerId: plan.ownerId, jobId: set.jobId, correlationId: plan.id }).catch(
-        (err: unknown) => {
-          if (!(err instanceof HttpError)) throw err;
-        },
-      );
+      await cancelJob(db, { ownerId: plan.ownerId, jobId: set.jobId, correlationId: plan.id }).catch(settled);
+    if (cancelled && "deepDiveId" in set)
+      await deps.deepDives
+        .cancel({ ownerId: plan.ownerId, actor: ACTOR, correlationId: plan.id }, set.deepDiveId)
+        .catch(settled);
   }
 
   /** Runs the claimed step's typed path. Safe to repeat: every path is idempotent per `plan:<id>:<index>`. */
@@ -169,8 +172,13 @@ export function createPlanExecutor(
         if (run.status === "RUNNING") deps.research.start(run.id); // ignored when it is already executing
         await recordSource(plan, step.index, { researchRunId: run.id });
       } else if (a.type === "research.deep_dive") {
-        // shortcut: unreachable until wave 5 agent D (targetBlock blocks these steps, so no plan is approved).
-        return finish(plan.id, step.index, failed("Deep dives can't run as plan steps yet."));
+        // The deep-dive path checks the stop, the researcher's profile and reserves the cap against today's budget.
+        const { deepDive } = await deps.deepDives.create(
+          { ownerId: plan.ownerId, actor: ACTOR, correlationId: plan.id },
+          { ...a.request, projectId: plan.projectId },
+          key,
+        );
+        await recordSource(plan, step.index, { deepDiveId: deepDive.id });
       } else {
         const res = await getSalesSummary(
           {
@@ -250,6 +258,37 @@ export function createPlanExecutor(
           : `The run ended ${words(job.status)}${job.outcome ? ` (${words(job.outcome)})` : ""}.`,
       });
     }
+    if (step.deepDiveId) {
+      // "Done" comes from the dive's own status; QUEUED/RUNNING waits, a restart-failed dive fails the step.
+      const dive = await deps.deepDives.get(plan.ownerId, step.deepDiveId).catch((err: unknown) => {
+        if (err instanceof HttpError && err.statusCode === 404) return null;
+        throw err;
+      });
+      if (!dive) return finish(plan.id, step.index, failed("The step's deep dive can't be found any more."));
+      if (dive.status === "QUEUED" || dive.status === "RUNNING") return;
+      const ok = dive.status === "COMPLETED" && dive.report !== null;
+      const claims = dive.report?.claims ?? [];
+      const verified = claims.filter((c) => c.evidence.some((e) => e.verified)).length;
+      return finish(plan.id, step.index, {
+        status: ok ? "SUCCEEDED" : "FAILED",
+        artifact: {
+          kind: "deep_dive",
+          id: dive.id,
+          evidence: [
+            {
+              kind: "DEEP_DIVE",
+              id: dive.id,
+              label: ok
+                ? `deep dive · completed · ${claims.length} ${claims.length === 1 ? "claim" : "claims"}, ${verified} with verified evidence`
+                : `deep dive · ${words(dive.status)}`,
+              asOf: dive.finishedAt ?? dive.createdAt,
+            },
+          ],
+          verifiedAt,
+        },
+        error: ok ? null : (dive.error ?? `The deep dive ended ${words(dive.status)}.`),
+      });
+    }
     const [run] = await db.select().from(researchRuns).where(eq(researchRuns.id, step.researchRunId!));
     if (!run || run.status === "RUNNING") return;
     const ok = run.status === "COMPLETED" || run.status === "PARTIAL";
@@ -285,6 +324,8 @@ export function createPlanExecutor(
       .from(researchRuns)
       .where(eq(researchRuns.idempotencyKey, key));
     if (run) return recordSource(plan, step.index, { researchRunId: run.id });
+    // shortcut: the deep-dive service has no lookup by idempotency key, so a dive created just before a crash on a
+    // cancelled plan isn't adopted here; it stays bounded by its own limits and can be cancelled in Research.
     await db
       .update(planSteps)
       .set({ status: "CANCELLED", finishedAt: new Date() })
@@ -372,7 +413,7 @@ export function createPlanExecutor(
         .where(eq(planSteps.status, "RUNNING"));
       for (const { step, plan } of running)
         await guard(plan.id, () =>
-          step.jobId || step.researchRunId
+          step.jobId || step.researchRunId || step.deepDiveId
             ? settle(plan, step)
             : plan.status === "CANCELLED"
               ? abandon(plan, step)

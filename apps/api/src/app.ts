@@ -36,6 +36,8 @@ import { reapExpiredLeases } from "./jobs.ts";
 import { monitoringRoutes } from "./monitoring/routes.ts";
 import { createMonitoring, type Monitoring } from "./monitoring/service.ts";
 import { createHub, type Hub } from "./notify.ts";
+import { createDeepDiver } from "./plans/deep-dive-adapter.ts";
+import { deepDiveOps, type DeepDives } from "./plans/deep-dives.ts";
 import { createPlanExecutor } from "./plans/executor.ts";
 import { planRoutes } from "./plans/routes.ts";
 import { researchRoutes } from "./research/routes.ts";
@@ -59,6 +61,8 @@ export type Deps = {
   executor: Executor;
   research: Research;
   monitoring: Monitoring;
+  /** The researcher's deep dives, as Talk proposals and plan steps run them. */
+  deepDives: DeepDives;
 };
 
 const REAPER_INTERVAL_MS = 5_000;
@@ -151,6 +155,7 @@ export async function buildApp(config: Config) {
   const executor = createExecutor(db, catalog, app.log);
   const research = createResearch(db, app.log, shutdown.signal);
   const monitoring = createMonitoring(db, app.log, shutdown.signal);
+  const diver = createDeepDiver(db, { config }, app.log, shutdown.signal);
   const deps: Deps = {
     config,
     db,
@@ -161,6 +166,7 @@ export async function buildApp(config: Config) {
     executor,
     research,
     monitoring,
+    deepDives: deepDiveOps({ db, config, diver }),
   };
 
   const planExecutor = createPlanExecutor(deps, app.log);

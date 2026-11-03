@@ -1,7 +1,15 @@
 import { useId, useState, type ReactNode } from "react";
 import { getRouteApi } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { AgentKey, Plan, PlanStatus, PlanStep, PlanStepAction, PlanStepStatus } from "@nexus/contracts";
+import type {
+  AgentKey,
+  Plan,
+  PlanStatus,
+  PlanStep,
+  PlanStepAction,
+  PlanStepStatus,
+  SourceRef,
+} from "@nexus/contracts";
 import { api, keys } from "../lib/api.ts";
 import { ago, clock, useNow } from "../lib/queries.ts";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
@@ -244,7 +252,7 @@ function actionText(a: PlanStepAction, watchlists: Map<string, string>): string 
   if (a.type === "business.sales_summary")
     return `Sales summary · ${a.day} · connector ${a.connectorId.slice(0, 8)}`;
   if (a.type === "research.deep_dive")
-    return `Deep dive · ${a.request.depth.toLowerCase()} · up to $${a.request.maxCostUsd}`;
+    return `Deep dive · ${a.request.depth.toLowerCase()} · up to $${a.request.maxCostUsd} · reads the public web, writes nothing outside NEXUS · “${a.request.question}”`;
   const r = a.request;
   return r.jobType === "RUNNER_DIAGNOSTIC"
     ? `Runner diagnostic · ${r.preset} · read-only`
@@ -275,7 +283,7 @@ function PlanBody({ plan: p }: { plan: Plan }) {
       : null);
   const error = decide.error ?? cancel.error;
   const busy = decide.isPending || cancel.isPending;
-  const openRun = (jobId: string) => void navigate({ search: { ...scope.keep, drawer: `run:${jobId}` } });
+  const open = (drawer: string) => void navigate({ search: { ...scope.keep, drawer } });
 
   return (
     <>
@@ -304,7 +312,7 @@ function PlanBody({ plan: p }: { plan: Plan }) {
           </h3>
           <ol aria-labelledby="plan-steps" className="m-0 flex list-none flex-col gap-2.5 p-0">
             {p.steps.map((s) => (
-              <StepRow key={s.index} s={s} action={actionText(s.action, watchlists)} onOpenRun={openRun} />
+              <StepRow key={s.index} s={s} action={actionText(s.action, watchlists)} onOpen={open} />
             ))}
           </ol>
         </section>
@@ -362,15 +370,10 @@ function PlanBody({ plan: p }: { plan: Plan }) {
   );
 }
 
-function StepRow({
-  s,
-  action,
-  onOpenRun,
-}: {
-  s: PlanStep;
-  action: string;
-  onOpenRun: (jobId: string) => void;
-}) {
+// Evidence that opens its own drawer: a run, or a deep dive in the Research drawer.
+const OPENS: Partial<Record<SourceRef["kind"], string>> = { JOB: "run", DEEP_DIVE: "research" };
+
+function StepRow({ s, action, onOpen }: { s: PlanStep; action: string; onOpen: (drawer: string) => void }) {
   return (
     <li className="flex flex-col gap-1.5 rounded-2xl border border-hair px-4 py-3">
       <div className="flex flex-wrap items-center gap-3">
@@ -394,10 +397,10 @@ function StepRow({
         >
           {s.artifact.evidence.map((e) => (
             <li key={`${e.kind}:${e.id}`}>
-              {e.kind === "JOB" ? (
+              {OPENS[e.kind] ? (
                 <button
                   type="button"
-                  onClick={() => onOpenRun(e.id)}
+                  onClick={() => onOpen(`${OPENS[e.kind]}:${e.id}`)}
                   className="rounded-full border border-hair px-2.5 py-1 font-mono text-[11px] text-teal underline"
                 >
                   {e.label}

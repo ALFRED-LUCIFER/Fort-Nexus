@@ -87,6 +87,8 @@ export const actionProposals = pgTable(
     decidedAt: ts("decided_at"),
     decidedBy: text("decided_by"),
     resultJobId: uuid("result_job_id").references(() => jobs.id),
+    // The deep dive an approved research.deep_dive proposal created (P1 wave 5); set only from the created dive.
+    resultDeepDiveId: uuid("result_deep_dive_id"),
     error: text("error"),
     createdAt: ts("created_at").notNull().defaultNow(),
   },

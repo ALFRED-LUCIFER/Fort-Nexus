@@ -46,7 +46,13 @@ export const DEFAULT_AGENT_SETTINGS: Record<AgentKey, AgentProfileSettings> = {
   QA: { ...STANDARD, tools: ["jobs.read", "github.read", "jobs.create.diagnostic"] },
   DEVOPS: { ...STANDARD, tools: ["monitoring.read", "jobs.read", "jobs.create.diagnostic"] },
   PRODUCT: { ...STANDARD, autonomy: "DRAFT", tools: ["github.read", "research.search"] },
-  AI_RESEARCHER: { ...STANDARD, tools: ["research.search", "research.run"] },
+  // Bounds every deep dive: its cost cap is reserved against today's budget before the first model call.
+  AI_RESEARCHER: {
+    ...STANDARD,
+    maxCostUsdPerTask: 2,
+    maxTurns: 30,
+    tools: ["research.search", "research.run", "research.deep_dive", "github.issues.create"],
+  },
   FINANCIAL_ANALYST: { ...STANDARD, tools: ["business.metrics"] },
 };
 
@@ -73,7 +79,8 @@ export const AGENT_ROSTER: Record<AgentKey, { label: string; description: string
   },
   AI_RESEARCHER: {
     label: "AI researcher",
-    description: "Searches and runs research watchlists and summarises sourced findings.",
+    description:
+      "Searches the web and your watchlists, verifies every quoted claim against the page it read, and proposes opportunities with evidence.",
   },
   FINANCIAL_ANALYST: {
     label: "Financial analyst",

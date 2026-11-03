@@ -61,6 +61,6 @@ export async function planRoutes(app: FastifyInstance, deps: Deps) {
   );
 
   r.post("/v1/plans/:id/cancel", { schema: { params: IdParams, response: { 200: Plan } } }, async (req) =>
-    cancelPlan(db, { ownerId: owner(req).id, id: req.params.id, correlationId: req.id }),
+    cancelPlan(deps, { ownerId: owner(req).id, id: req.params.id, correlationId: req.id }),
   );
 }

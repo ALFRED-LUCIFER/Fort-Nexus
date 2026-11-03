@@ -499,7 +499,9 @@ export function Board() {
       {drawerKind === "settings" && <SettingsDrawer banner={banner} onClose={closeDrawer} />}
       {drawerKind === "business" && <BusinessDrawer banner={banner} onClose={closeDrawer} />}
       {drawerKind === "talk" && <TalkDrawer threadId={drawerId} banner={banner} onClose={closeDrawer} />}
-      {drawerKind === "research" && <ResearchDrawer banner={banner} onClose={closeDrawer} />}
+      {drawerKind === "research" && (
+        <ResearchDrawer deepDiveId={drawerId} banner={banner} onClose={closeDrawer} />
+      )}
       {drawerKind === "systems" && (
         <SystemsDrawer banner={banner} onClose={closeDrawer} onOpenIncident={openIncident} />
       )}

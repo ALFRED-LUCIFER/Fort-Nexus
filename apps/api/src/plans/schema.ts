@@ -63,6 +63,7 @@ export const planSteps = pgTable(
     // The source record a running step waits on; success is read from it, never from agent text.
     jobId: uuid("job_id").references(() => jobs.id),
     researchRunId: uuid("research_run_id"),
+    deepDiveId: uuid("deep_dive_id"),
     artifact: jsonb("artifact").$type<StepArtifact>(),
     error: text("error"),
     startedAt: ts("started_at"),

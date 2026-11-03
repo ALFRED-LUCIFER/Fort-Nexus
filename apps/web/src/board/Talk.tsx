@@ -1,7 +1,13 @@
 import { useId, useState, type FormEvent, type ReactNode } from "react";
 import { getRouteApi } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ActionProposal, Basis, SourceRef, Turn } from "@nexus/contracts";
+import {
+  DEEP_DIVE_DEPTH_LIMITS,
+  type ActionProposal,
+  type Basis,
+  type SourceRef,
+  type Turn,
+} from "@nexus/contracts";
 import { ApiRequestError, api, keys } from "../lib/api.ts";
 import { ago, clock, shortHash, until, useNow } from "../lib/queries.ts";
 import { PinnedProfile } from "./agents.tsx";
@@ -66,8 +72,9 @@ function ThreadList() {
       <DrawerHeader kicker="Talk · text" title="Talk to NEXUS" />
       <div className="nx-stagger flex min-h-0 flex-1 flex-col gap-3 overflow-auto px-6 pt-5 pb-6">
         <p className="m-0 text-[13.5px] leading-relaxed text-ink2">
-          Ask how a run is going, list recent runs, or ask NEXUS to work on a GitHub issue. Answers cite the
-          records they come from, and nothing starts until you confirm it on screen.
+          Ask how a run is going, list recent runs, ask NEXUS to work on a GitHub issue, or have the AI
+          researcher dig into a question. Answers cite the records they come from, and nothing starts until
+          you confirm it on screen.
         </p>
         <button
           type="button"
@@ -192,7 +199,7 @@ function ThreadView({ id }: { id: string }) {
                   key={turn.id}
                   turn={turn}
                   proposal={proposals.find((p) => p.id === turn.proposalId)}
-                  onOpenRun={(jobId) => open(`run:${jobId}`)}
+                  onOpen={open}
                 />
               ))}
             </ol>
@@ -250,11 +257,11 @@ const BASIS: Record<Exclude<Basis, "NONE">, { label: string; tone: string }> = {
 function TurnItem({
   turn,
   proposal,
-  onOpenRun,
+  onOpen,
 }: {
   turn: Turn;
   proposal?: ActionProposal;
-  onOpenRun: (jobId: string) => void;
+  onOpen: (drawer: string) => void;
 }) {
   const mine = turn.role === "USER";
   const basis = turn.basis === "NONE" ? null : BASIS[turn.basis];
@@ -285,12 +292,12 @@ function TurnItem({
         <ul aria-label="Sources" className="m-0 flex max-w-[560px] list-none flex-wrap gap-1.5 p-0">
           {turn.sources.map((s) => (
             <li key={`${s.kind}:${s.id}`}>
-              <SourceChip source={s} onOpenRun={onOpenRun} />
+              <SourceChip source={s} onOpen={onOpen} />
             </li>
           ))}
         </ul>
       )}
-      {proposal && <ProposalCard proposal={proposal} onOpenRun={onOpenRun} />}
+      {proposal && <ProposalCard proposal={proposal} onOpen={onOpen} />}
     </li>
   );
 }
@@ -298,12 +305,20 @@ function TurnItem({
 const chip =
   "inline-flex items-center gap-1.5 rounded-full border border-hair px-2 py-1 font-mono text-[10.5px] leading-tight text-ink2";
 
-function SourceChip({ source: s, onOpenRun }: { source: SourceRef; onOpenRun: (jobId: string) => void }) {
+const OPENS: Partial<Record<SourceRef["kind"], string>> = { JOB: "run", DEEP_DIVE: "research" };
+
+function SourceChip({ source: s, onOpen }: { source: SourceRef; onOpen: (drawer: string) => void }) {
   const text = `${s.kind.toLowerCase().replace("_", " ")} · ${s.label}`;
   const asOf = `as of ${clock(s.asOf)}`;
-  if (s.kind === "JOB")
+  const drawer = OPENS[s.kind];
+  if (drawer)
     return (
-      <button type="button" title={asOf} onClick={() => onOpenRun(s.id)} className={`${chip} underline`}>
+      <button
+        type="button"
+        title={asOf}
+        onClick={() => onOpen(`${drawer}:${s.id}`)}
+        className={`${chip} underline`}
+      >
         {text}
       </button>
     );
@@ -337,12 +352,13 @@ const CARD: Record<ActionProposal["status"], { kicker: string; tone: string }> =
 const CHANGED =
   "This proposal changed or was already decided, so nothing happened. The latest state is shown now.";
 
+/** `onOpen(drawer)` opens what the proposal created: its run, or its deep dive in the Research drawer. */
 function ProposalCard({
   proposal: p,
-  onOpenRun,
+  onOpen,
 }: {
   proposal: ActionProposal;
-  onOpenRun: (jobId: string) => void;
+  onOpen: (drawer: string) => void;
 }) {
   const queryClient = useQueryClient();
   const now = useNow(30_000);
@@ -354,20 +370,26 @@ function ProposalCard({
       void queryClient.invalidateQueries({ queryKey: keys.jobs });
     },
   });
-  const card = CARD[p.status];
   const action = p.action;
+  const card =
+    p.status === "EXECUTED" && action.type === "research.deep_dive"
+      ? { kicker: "Confirmed · deep dive started", tone: "var(--green)" }
+      : CARD[p.status];
   const error =
     decide.error instanceof ApiRequestError && decide.error.status === 409 ? CHANGED : decide.error?.message;
-  const facts: [string, string][] = [
-    [
-      "action",
-      action.type === "jobs.create"
-        ? `${action.type} · ${action.request.jobType}`
-        : `${action.type} · ${action.request.depth}`,
-    ],
-    ["risk", p.riskTier],
-    ["hash", shortHash(p.actionHash)],
-  ];
+  const facts: [string, string][] =
+    action.type === "jobs.create"
+      ? [["action", `${action.type} · ${action.request.jobType}`]]
+      : [
+          ["action", `${action.type} · ${action.request.depth.toLowerCase()}`],
+          [
+            "limits",
+            `${DEEP_DIVE_DEPTH_LIMITS[action.request.depth].maxSearches} searches · ${DEEP_DIVE_DEPTH_LIMITS[action.request.depth].maxFetches} page reads · cap $${action.request.maxCostUsd}`,
+          ],
+          ["writes", "nothing outside NEXUS"],
+        ];
+  facts.push(["risk", p.riskTier], ["hash", shortHash(p.actionHash)]);
+  const result = p.status === "EXECUTED" ? p.result : null;
   if (p.status === "AWAITING_APPROVAL") facts.push(["expires", until(p.expiresAt, now)]);
 
   return (
@@ -410,13 +432,15 @@ function ProposalCard({
           </button>
         </div>
       )}
-      {p.status === "EXECUTED" && p.result && "jobId" in p.result && (
+      {result && (
         <button
           type="button"
-          onClick={() => onOpenRun((p.result as { jobId: string }).jobId)}
+          onClick={() =>
+            "jobId" in result ? onOpen(`run:${result.jobId}`) : onOpen(`research:${result.deepDiveId}`)
+          }
           className="self-start text-[12.5px] font-medium text-teal underline"
         >
-          Open the queued run
+          {"jobId" in result ? "Open the queued run" : "Open the deep dive"}
         </button>
       )}
       {p.status === "FAILED" && (

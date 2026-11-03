@@ -1,6 +1,8 @@
 import { and, desc, eq, gte, notInArray, or } from "drizzle-orm";
 import {
+  CreateDeepDiveRequest,
   CreateJobRequest,
+  DEEP_DIVE_DEPTH_LIMITS,
   GITHUB_SETUP_COMMAND,
   TERMINAL_JOB_STATUSES,
   isTerminal,
@@ -10,6 +12,7 @@ import {
   type ProposedAction,
   type SourceRef,
 } from "@nexus/contracts";
+import { resolveAgentProfile } from "../agents/service.ts";
 import { listConnectors } from "../business/connectors.ts";
 import {
   getPaymentFailures,
@@ -23,6 +26,7 @@ import { HttpError } from "../errors.ts";
 import { searchFindings } from "../research/service.ts";
 import type { GithubCatalog } from "../github/catalog.ts";
 import { ownerActor, type JobRow } from "../jobs.ts";
+import { profileBlock } from "../plans/service.ts";
 import { boundRepositoryIds } from "../workspaces.ts";
 
 // FR-CWV-07 / FR-CXR-04: every reply is built here from records NEXUS read itself, with sources and a basis.
@@ -51,7 +55,7 @@ export type ToolContext = {
 };
 
 const CAPABILITIES =
-  "From Talk I can tell you how a run is going, list your recent runs, propose starting a run for a GitHub issue, and report sales, failed payments, revenue (gross, refunds, net) or top products, and search research findings.";
+  "From Talk I can tell you how a run is going, list your recent runs, propose starting a run for a GitHub issue, report sales, failed payments, revenue (gross, refunds, net) or top products, search research findings, and propose a deep dive by the AI researcher.";
 const RECENT_RUNS = 5;
 const FOLLOW_UP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -93,14 +97,8 @@ export async function answer(intent: Intent, ctx: ToolContext): Promise<Reply> {
       return businessMetric(intent, ctx);
     case "RESEARCH_SEARCH":
       return researchSearch(intent, ctx);
-    // shortcut: wave 5 agent D turns this into a deep-dive proposal card.
     case "RESEARCH_DEEP_DIVE":
-      return {
-        intent,
-        text: `I can't start a deep dive from Talk yet. ${CAPABILITIES}`,
-        basis: "NONE",
-        sources: [],
-      };
+      return proposeDeepDive(intent, ctx);
     case "CLARIFY":
       return {
         intent,
@@ -319,6 +317,50 @@ async function proposeIssueRun(
     if (err instanceof HttpError) return none(err.message);
     throw err;
   }
+}
+
+/**
+ * PRD §10.1 RESEARCH_DEEP_DIVE: an R1 proposal (it spends budget), bounded by the AI researcher's effective profile.
+ * The preview is built here from the request and the server's limits; the dive starts only on the owner's approval.
+ */
+async function proposeDeepDive(
+  intent: Extract<Intent, { kind: "RESEARCH_DEEP_DIVE" }>,
+  ctx: ToolContext,
+): Promise<Reply> {
+  const none = (text: string): Reply => ({ intent, text, basis: "NONE", sources: [] });
+  const profile = await resolveAgentProfile(ctx.db, ctx.ownerId, ctx.projectId, "AI_RESEARCHER");
+  // The cap is the profile's: Talk has no owner-typed cap, and the dive takes the lower of the two anyway.
+  const parsed = CreateDeepDiveRequest.safeParse({
+    projectId: ctx.projectId,
+    question: intent.question.replace(/\s+/g, " "),
+    depth: intent.depth,
+    findingIds: [],
+    maxCostUsd: profile.settings.maxCostUsdPerTask,
+  });
+  if (!parsed.success)
+    return none("What exactly should the deep dive find out? Ask it as one complete question.");
+  const request = parsed.data;
+  const { question, depth, findingIds, maxCostUsd } = request;
+  const blocked = profileBlock(profile, {
+    type: "research.deep_dive",
+    request: { question, depth, findingIds, maxCostUsd },
+  });
+  if (blocked)
+    return none(`I can't propose a deep dive here: the ${blocked}. Change it in Agents → AI researcher.`);
+  const limits = DEEP_DIVE_DEPTH_LIMITS[depth];
+  const preview = [
+    `Deep dive (${depth.toLowerCase()}) by the AI researcher: "${question}".`,
+    `At most ${limits.maxSearches} web searches, ${limits.maxFetches} page reads, ${profile.settings.maxTurns} model turns and $${maxCostUsd}, reserved against today's budget when it starts.`,
+    "It reads the public web; writes nothing outside NEXUS.",
+    "Its report labels each claim by the evidence NEXUS found on the pages it read.",
+  ].join(" ");
+  return {
+    intent,
+    text: "I can have the AI researcher run that deep dive. Nothing starts until you confirm it on screen.",
+    basis: "PENDING",
+    sources: [],
+    proposal: { type: "research.deep_dive", request, preview },
+  };
 }
 
 // One typed gateway tool per metric (FR-BIZ-02..05); the label names it in the reply.

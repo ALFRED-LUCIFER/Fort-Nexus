@@ -21,16 +21,29 @@ import { AgentTool } from "@nexus/contracts";
 import { createDb } from "../src/db/index.ts";
 import { auditRecords, jobs, notifications } from "../src/db/schema.ts";
 import { moveJob, type NewEvent } from "../src/jobs.ts";
+import type { DeepDives } from "../src/plans/deep-dives.ts";
 import { createPlanExecutor } from "../src/plans/executor.ts";
 import { planHash } from "../src/plans/service.ts";
 import { planSteps } from "../src/plans/schema.ts";
 import { createResearch } from "../src/research/service.ts";
+import { fakeDeepDives, report } from "./helpers/fake-deep-dives.ts";
 import { createTestApp, ownerSession, type TestApp } from "./helpers/owner-session.ts";
 
 // EPIC AGT FR-AGT-01/09, PRD §11.7. The model provider and GitHub are stubbed at fetch level; the Anthropic SDK and
 // the API are real. Agent profiles come from the plans adapter, narrowed here per test.
 
 const profiles = vi.hoisted(() => ({ override: new Map<string, Partial<AgentProfileSettings>>() }));
+// The deep-dive service is a scripted fake: passed to each executor below, and behind the app's own seam so the
+// app's interval tick sees the same dives.
+const seams = vi.hoisted(() => ({ dives: null as ReturnType<typeof fakeDeepDives> | null }));
+vi.mock("../src/plans/deep-dives.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/plans/deep-dives.ts")>()),
+  deepDiveOps: () => ({
+    create: (...a: Parameters<DeepDives["create"]>) => seams.dives!.ops.create(...a),
+    get: (...a: Parameters<DeepDives["get"]>) => seams.dives!.ops.get(...a),
+    cancel: (...a: Parameters<DeepDives["cancel"]>) => seams.dives!.ops.cancel(...a),
+  }),
+}));
 vi.mock("../src/agents/service.ts", async (importOriginal) => {
   const m = await importOriginal<typeof import("../src/agents/service.ts")>();
   return {
@@ -197,6 +210,7 @@ const executor = () =>
       github: null,
       research: createResearch(db.db, t.app.log, new AbortController().signal),
       config: t.config,
+      deepDives: seams.dives!.ops,
     },
     t.app.log,
   );
@@ -273,6 +287,7 @@ beforeEach(() => {
   fake = fakeProviders();
   ip = `127.0.2.${++tests}`;
   profiles.override.clear();
+  seams.dives = fakeDeepDives();
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -656,6 +671,146 @@ describe("executor (FR-AGT-01/09)", () => {
     expect(now.steps[0]!.status).toBe("FAILED");
     expect(await planNotices(p.id)).toHaveLength(0);
     expect((await call("POST", `/v1/plans/${p.id}/cancel`)).statusCode).toBe(409);
+  });
+});
+
+describe("deep-dive steps (P1 wave 5)", () => {
+  const QUESTION = "Why do shoppers abandon carts at the shipping step?";
+  const dive = (maxCostUsd = 10, findingIds: string[] = []): PlanStepAction => ({
+    type: "research.deep_dive",
+    request: { question: QUESTION, depth: "STANDARD", findingIds, maxCostUsd },
+  });
+  const researcher = (action = dive()) => step(action, { agent: "AI_RESEARCHER", title: "Dig into carts" });
+
+  it("are draftable from the catalog, capped to the researcher's profile before hashing, blocked by the usual rules", async () => {
+    const p = await draft([
+      researcher(),
+      researcher(dive(1, [randomUUID()])),
+      step(dive(), { agent: "QA" }),
+      step(dive(), { agent: "PRODUCT" }),
+    ]);
+    const content = (fake.modelRequests.at(-1)!.messages as { content: string }[])[0]!.content;
+    const data = JSON.parse(content.slice(content.indexOf("\n") + 1)) as {
+      catalog: { toolForAction: Record<string, string>; deepDiveDepths: Record<string, unknown> };
+    };
+    expect(data.catalog.toolForAction["research.deep_dive"]).toBe("research.deep_dive");
+    expect(data.catalog.deepDiveDepths).toMatchObject({ QUICK: { maxSearches: 4, maxFetches: 8 } });
+    expect(fake.modelRequests.at(-1)!.system).toMatch(/research\.deep_dive: the AI researcher investigates/);
+
+    expect(p.steps[0]).toMatchObject({
+      blockedReason: null,
+      action: { type: "research.deep_dive", request: { maxCostUsd: 2, question: QUESTION } },
+    });
+    expect(p.planHash).toBe(planHash(p.steps)); // the capped cost is what the owner approves
+    expect(p.steps.slice(1).map((s) => s.blockedReason)).toEqual([
+      "unknown findings: plans don't seed deep dives with findings",
+      "QA's profile doesn't allow research.deep_dive",
+      "Product's profile doesn't allow research.deep_dive",
+    ]);
+
+    profiles.override.set("AI_RESEARCHER", { tools: ["research.search", "research.run"] });
+    const without = await draft([researcher()]);
+    expect(without.steps[0]!.blockedReason).toBe("AI researcher's profile doesn't allow research.deep_dive");
+    expect((await decide(without, "approve")).statusCode).toBe(409);
+  });
+
+  it("creates the dive with the step's key and succeeds only once the dive is COMPLETED, citing it", async () => {
+    const p = await approved([researcher(), step(diag(), { dependsOn: [0] })]);
+    const e = executor();
+    await e.tick();
+    await e.tick(); // a second tick creates nothing new
+    const { calls, byId, finish } = seams.dives!;
+    expect(calls.create.filter((c) => c.created)).toHaveLength(1);
+    expect(calls.create[0]).toMatchObject({
+      key: `plan:${p.id}:0`,
+      ctx: { actor: "system:plans", correlationId: p.id },
+      body: { projectId: home.id, question: QUESTION, depth: "STANDARD", findingIds: [], maxCostUsd: 2 },
+    });
+    const [id] = [...byId.keys()];
+    const [row] = await db.db.select().from(planSteps).where(eq(planSteps.planId, p.id));
+    expect(row!.deepDiveId).toBe(id);
+
+    finish(id!, { status: "RUNNING", finishedAt: null });
+    await e.tick();
+    expect((await get(p.id)).steps.map((s) => s.status)).toEqual(["RUNNING", "PENDING"]);
+
+    finish(id!, { status: "COMPLETED", report: report() });
+    await e.tick();
+    const now = await get(p.id);
+    expect(now.steps[0]).toMatchObject({ status: "SUCCEEDED", error: null });
+    expect(now.steps[0]!.artifact).toMatchObject({
+      kind: "deep_dive",
+      id,
+      evidence: [
+        { kind: "DEEP_DIVE", id, label: "deep dive · completed · 1 claim, 1 with verified evidence" },
+      ],
+    });
+    expect(now.steps[1]!.status).toBe("RUNNING"); // the dependent step starts only now
+  });
+
+  it("FAILED or CANCELLED dives fail the step with the dive's own error; dependents skip", async () => {
+    for (const status of ["FAILED", "CANCELLED"] as const) {
+      const p = await approved([researcher(), step(diag(), { dependsOn: [0] })]);
+      const e = executor();
+      await e.tick();
+      const id = [...seams.dives!.byId.values()].find((d) => d.status === "QUEUED")!.id;
+      seams.dives!.finish(id, { status, error: "NEXUS restarted during this dive; nothing was published" });
+      await e.tick();
+      const now = await get(p.id);
+      expect(now.steps.map((s) => s.status)).toEqual(["FAILED", "SKIPPED"]);
+      expect(now.steps[0]).toMatchObject({
+        error: "NEXUS restarted during this dive; nothing was published",
+        artifact: {
+          kind: "deep_dive",
+          evidence: [{ kind: "DEEP_DIVE", label: `deep dive · ${status.toLowerCase()}` }],
+        },
+      });
+      expect(now.status).toBe("FAILED");
+    }
+  });
+
+  it("restart-safe: a crash after the dive was created adopts it on the next tick; a refusal fails the step", async () => {
+    const p = await approved([researcher()]);
+    const { ops } = seams.dives!;
+    const real = ops.create;
+    ops.create = async (...a) => {
+      await real(...a);
+      throw new Error("process died before the dive id was recorded");
+    };
+    await executor().tick();
+    expect((await get(p.id)).steps[0]!.status).toBe("RUNNING");
+    ops.create = real;
+    await executor().tick();
+    const creates = seams.dives!.calls.create;
+    expect(creates.length).toBeGreaterThanOrEqual(2); // the crashed attempt and the adopting one
+    expect(creates.filter((c) => c.created)).toHaveLength(1);
+    expect(new Set(creates.map((c) => c.key))).toEqual(new Set([`plan:${p.id}:0`]));
+    const [row] = await db.db.select().from(planSteps).where(eq(planSteps.planId, p.id));
+    expect(row!.deepDiveId).toBe([...seams.dives!.byId.keys()][0]);
+
+    const refused = await approved([researcher()]);
+    const { HttpError } = await import("../src/errors.ts");
+    ops.create = async () => {
+      throw new HttpError(409, "BUDGET_EXHAUSTED", "Today's AI budget is spent.");
+    };
+    await executor().tick();
+    expect((await get(refused.id)).steps[0]).toMatchObject({
+      status: "FAILED",
+      error: "Today's AI budget is spent.",
+    });
+  });
+
+  it("cancel goes through the deep-dive cancel path; the step settles from the dive", async () => {
+    const p = await approved([researcher()]);
+    await executor().tick();
+    const id = [...seams.dives!.byId.keys()][0]!;
+    const res = await call("POST", `/v1/plans/${p.id}/cancel`);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(seams.dives!.calls.cancel).toEqual([id]);
+    await executor().tick();
+    const now = await get(p.id);
+    expect(now.status).toBe("CANCELLED");
+    expect(now.steps[0]).toMatchObject({ status: "FAILED", error: "Cancelled by the owner" });
   });
 });
 

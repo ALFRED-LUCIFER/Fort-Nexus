@@ -15,6 +15,9 @@ import {
   Connector,
   ConnectorList,
   CreateJobResponse,
+  DeepDive,
+  DeepDiveDetail,
+  DeepDiveList,
   Finding,
   FindingExplanation,
   FindingList,
@@ -33,6 +36,7 @@ import {
   MonitoredAppList,
   Notification,
   NotificationList,
+  OpportunityList,
   OwnerSessionList,
   PairingCodeResponse,
   PaymentFailuresResponse,
@@ -48,6 +52,7 @@ import {
   Runner,
   RunnerList,
   SalesSummaryResponse,
+  SearchProviderStatus,
   SystemControls,
   Thread,
   ThreadDetail,
@@ -61,6 +66,7 @@ import {
   type ApprovalStatus,
   type CreateAutomationClientRequest,
   type CreateConnectorRequest,
+  type CreateDeepDiveRequest,
   type CreateJobRequest,
   type CreateMonitoredAppRequest,
   type CreatePlanRequest,
@@ -286,6 +292,21 @@ export const api = {
   explainFinding: (id: string) =>
     request(`/v1/research/findings/${encodeURIComponent(id)}/explain`, FindingExplanation, post()),
   // projectId omitted = the read-only "All" view.
+  deepDives: (projectId: string | undefined) =>
+    request(
+      `/v1/research/deep-dives?${new URLSearchParams({ limit: "50", ...(projectId && { projectId }) })}`,
+      DeepDiveList,
+    ),
+  deepDive: (id: string) => request(`/v1/research/deep-dives/${encodeURIComponent(id)}`, DeepDiveDetail),
+  // A retry with the same key returns the same dive: the cap is reserved once.
+  createDeepDive: (body: CreateDeepDiveRequest, idempotencyKey: string) =>
+    request("/v1/research/deep-dives", DeepDive, post({ [IDEMPOTENCY_HEADER]: idempotencyKey }, body)),
+  cancelDeepDive: (id: string) =>
+    request(`/v1/research/deep-dives/${encodeURIComponent(id)}/cancel`, DeepDive, post()),
+  searchProvider: () => request("/v1/research/search-provider", SearchProviderStatus),
+  opportunities: (projectId: string) =>
+    request(`/v1/research/opportunities?${new URLSearchParams({ projectId, limit: "50" })}`, OpportunityList),
+  // projectId omitted = the read-only "All" view.
   automationClients: (projectId?: string) =>
     request(
       `/v1/automations/clients${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`,
@@ -378,6 +399,10 @@ export const keys = {
   researchRuns: (watchlistId: string) => ["research", "runs", watchlistId] as const,
   brief: (runId: string) => ["research", "brief", runId] as const,
   findings: (f: FindingFilters) => ["research", "findings", f] as const,
+  deepDivesOf: (projectId: string | undefined) => ["research", "deep-dives", projectId ?? "all"] as const,
+  deepDive: (id: string) => ["research", "deep-dive", id] as const,
+  searchProvider: ["research", "search-provider"] as const,
+  opportunitiesOf: (projectId: string) => ["research", "opportunities", projectId] as const,
   automations: ["automations"] as const,
   automationClients: (projectId: string | undefined) =>
     ["automations", "clients", projectId ?? "all"] as const,
