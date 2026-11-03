@@ -735,7 +735,8 @@ describe("revenue and top products (FR-BIZ-04/05)", () => {
         orderItems: { ...DICTIONARY.orderItems!, table: "shop.order_items_returns" },
       },
     );
-    expect((await topProducts({ connectorId: c.id })).current).toMatchObject({
+    // A pinned day: the HTTP route runs on the real clock, and order 6 (the return lines) is on Dubai 28 Oct.
+    expect((await topProducts({ connectorId: c.id, day: "2026-10-28" })).current).toMatchObject({
       status: "UNAVAILABLE",
       reason: "NOT_DEFINED",
       message: expect.stringContaining("returns"),
