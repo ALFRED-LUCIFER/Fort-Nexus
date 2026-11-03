@@ -1,10 +1,11 @@
-import { useId, useState, type FormEvent, type ReactNode } from "react";
+import { useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { getRouteApi } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   DEEP_DIVE_DEPTH_LIMITS,
   type ActionProposal,
   type Basis,
+  type PostTurnResponse,
   type SourceRef,
   type Turn,
 } from "@nexus/contracts";
@@ -13,9 +14,13 @@ import { ago, clock, shortHash, until, useNow } from "../lib/queries.ts";
 import { PinnedProfile } from "./agents.tsx";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { PICK_PROJECT, useScope, type Scope } from "./scope.tsx";
+import { MicButton, ReadAloudButton, VoiceHud, VoiceProblems, usePushToTalk, useSpeak } from "./voice.tsx";
 
-// Talk, text only (EPIC CWV/CXR). Replies come from the API, built from NEXUS's own records; the owner's click on
-// a proposal is the only approval.
+// Talk (EPIC CWV/CXR), typed or spoken. Replies come from the API, built from NEXUS's own records; the owner's click
+// on a proposal is the only approval. A transcript only fills the input: the owner reads it and sends it.
+
+/** PostTurnRequest's limit; a longer transcript is cut to it before the owner reviews it. */
+export const MAX_TURN_CHARS = 4000;
 
 const route = getRouteApi("/");
 
@@ -69,7 +74,7 @@ function ThreadList() {
 
   return (
     <>
-      <DrawerHeader kicker="Talk · text" title="Talk to NEXUS" />
+      <DrawerHeader kicker="Talk · type or speak" title="Talk to NEXUS" />
       <div className="nx-stagger flex min-h-0 flex-1 flex-col gap-3 overflow-auto px-6 pt-5 pb-6">
         <p className="m-0 text-[13.5px] leading-relaxed text-ink2">
           Ask how a run is going, list recent runs, ask NEXUS to work on a GitHub issue, or have the AI
@@ -124,36 +129,103 @@ const SEND_FAILED: Record<string, string> = {
   UNREACHABLE: "Your message wasn't sent: NEXUS can't be reached. Send again to retry it safely.",
 };
 
+type Attempt = { text: string; key: string; threadId?: string; spoken: boolean };
+
+/**
+ * Sends one turn to `threadId`, or to a new thread in `projectId` when there is none yet. One Idempotency-Key per
+ * message: resending the same text after a failure reuses it (and the thread it created), so it is answered once.
+ * `spoken`: the text came from the mic, so the reply may be read aloud.
+ */
+export function useSendTurn({
+  threadId,
+  projectId,
+  onSent,
+}: {
+  threadId?: string;
+  projectId?: string;
+  onSent: (res: PostTurnResponse, threadId: string, spoken: boolean) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [attempt, setAttempt] = useState<Attempt | null>(null);
+  const send = useMutation({
+    mutationFn: async (a: Attempt) => {
+      let id = a.threadId ?? threadId;
+      if (!id) {
+        if (!projectId) throw new Error(PICK_PROJECT);
+        id = (await api.createThread({ projectId })).id;
+        setAttempt({ ...a, threadId: id });
+      }
+      return { id, res: await api.postTurn(id, a.text, a.key) };
+    },
+    onSuccess: ({ id, res }, a) => {
+      setAttempt(null);
+      onSent(res, id, a.spoken);
+    },
+    // Also refreshes the thread itself (keys.thread is under keys.threads).
+    onSettled: () => queryClient.invalidateQueries({ queryKey: keys.threads }),
+  });
+  return {
+    send,
+    submit: (text: string, spoken: boolean) => {
+      const msg = text.trim();
+      if (!msg || send.isPending) return;
+      const a =
+        attempt?.text === msg ? { ...attempt, spoken } : { text: msg, key: crypto.randomUUID(), spoken };
+      setAttempt(a);
+      send.mutate(a);
+    },
+  };
+}
+
+/** Why a turn wasn't sent; no AI provider (no or unusable ai.json) gets the setup hint. */
+export function SendError({ error }: { error: Error }) {
+  const err = error instanceof ApiRequestError ? error : null;
+  const reason = (err?.details as { reason?: string } | undefined)?.reason;
+  if (reason === "ai_provider_not_configured" || reason === "ai_provider_config_invalid")
+    return (
+      <div role="alert" className="flex flex-col gap-1 rounded-xl bg-hair px-3 py-2.5">
+        <span className="text-[13px] font-medium text-ink">Talk isn't set up yet</span>
+        <span className="text-[12.5px] leading-snug text-ink2">{error.message}</span>
+      </div>
+    );
+  return (
+    <p role="alert" className="m-0 text-[12.5px] leading-snug text-coral">
+      {(err && SEND_FAILED[err.code]) ?? error.message}
+    </p>
+  );
+}
+
+/** The input after a transcript arrived: appended to what is typed, cut to the turn limit. */
+export const withTranscript = (typed: string, words: string) =>
+  (typed.trim() ? `${typed.trimEnd()} ${words}` : words).slice(0, MAX_TURN_CHARS);
+
 function ThreadView({ id }: { id: string }) {
   const open = useOpen();
-  const queryClient = useQueryClient();
   const thread = useQuery({ queryKey: keys.thread(id), queryFn: () => api.thread(id) });
+  const projectId = thread.data?.thread.projectId;
   const [text, setText] = useState("");
-  // One Idempotency-Key per message: resending the same text after a failure can't produce a second answer.
-  const [attempt, setAttempt] = useState<{ text: string; key: string } | null>(null);
-  const send = useMutation({
-    mutationFn: (a: { text: string; key: string }) => api.postTurn(id, a.text, a.key),
-    onSuccess: () => {
+  // The input holds words from the mic: the reply to them is read aloud when spoken replies are on.
+  const [spoken, setSpoken] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const ptt = usePushToTalk(projectId);
+  const speaker = useSpeak(projectId);
+  const { send, submit } = useSendTurn({
+    threadId: id,
+    onSent: (res, _thread, viaMic) => {
       setText("");
-      setAttempt(null);
-    },
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: keys.thread(id) });
-      void queryClient.invalidateQueries({ queryKey: keys.threads });
+      setSpoken(false);
+      if (viaMic) speaker.speak(res.assistantTurn.id, res.assistantTurn.text);
     },
   });
-  const submit = (e: FormEvent) => {
+  const onSubmit = (e: FormEvent) => {
     e.preventDefault();
-    const msg = text.trim();
-    if (!msg || send.isPending) return;
-    const a = attempt?.text === msg ? attempt : { text: msg, key: crypto.randomUUID() };
-    setAttempt(a);
-    send.mutate(a);
+    submit(text, spoken);
   };
-
-  const err = send.error instanceof ApiRequestError ? send.error : null;
-  const reason = (err?.details as { reason?: string } | undefined)?.reason;
-  const notConfigured = reason === "ai_provider_not_configured" || reason === "ai_provider_config_invalid";
+  const onTranscript = (words: string) => {
+    setText((t) => withTranscript(t, words));
+    setSpoken(true);
+    inputRef.current?.focus();
+  };
 
   if (!thread.data)
     return (
@@ -200,37 +272,49 @@ function ThreadView({ id }: { id: string }) {
                   turn={turn}
                   proposal={proposals.find((p) => p.id === turn.proposalId)}
                   onOpen={open}
+                  aside={
+                    turn.role === "ASSISTANT" && (
+                      <ReadAloudButton speaker={speaker} id={turn.id} text={turn.text} />
+                    )
+                  }
                 />
               ))}
             </ol>
           )}
         </div>
 
-        <form onSubmit={submit} className="flex flex-none flex-col gap-2 border-t border-hair px-6 pt-3 pb-5">
-          {send.error &&
-            (notConfigured ? (
-              <div role="alert" className="flex flex-col gap-1 rounded-xl bg-hair px-3 py-2.5">
-                <span className="text-[13px] font-medium text-ink">Talk isn't set up yet</span>
-                <span className="text-[12.5px] leading-snug text-ink2">{send.error.message}</span>
-              </div>
-            ) : (
-              <p role="alert" className="m-0 text-[12.5px] leading-snug text-coral">
-                {(err && SEND_FAILED[err.code]) ?? send.error.message}
-              </p>
-            ))}
+        <form
+          onSubmit={onSubmit}
+          className="flex flex-none flex-col gap-2 border-t border-hair px-6 pt-3 pb-5"
+        >
+          <VoiceHud
+            ptt={ptt}
+            speaker={speaker}
+            onEnd={() => {
+              ptt.cancel();
+              speaker.stop();
+            }}
+          />
+          <VoiceProblems ptt={ptt} speaker={speaker} />
+          {send.error && <SendError error={send.error} />}
           <div className="flex items-center gap-2 rounded-2xl bg-hair py-1.5 pr-1.5 pl-4">
             <label htmlFor="talk-input" className="sr-only">
               Message
             </label>
             <input
               id="talk-input"
+              ref={inputRef}
               value={text}
-              onChange={(e) => setText(e.target.value)}
-              maxLength={4000}
+              onChange={(e) => {
+                setText(e.target.value);
+                if (!e.target.value) setSpoken(false);
+              }}
+              maxLength={MAX_TURN_CHARS}
               autoComplete="off"
               placeholder="Ask about a run, or name an issue to work on…"
               className="min-w-0 flex-1 bg-transparent text-[14px] text-ink outline-none placeholder:text-ink3"
             />
+            <MicButton ptt={ptt} onTranscript={onTranscript} blocked={null} />
             <button
               type="submit"
               disabled={send.isPending || !text.trim()}
@@ -240,7 +324,7 @@ function ThreadView({ id }: { id: string }) {
             </button>
           </div>
           <span className="font-mono text-[10.5px] leading-snug text-ink3">
-            text only · answers cite NEXUS records · actions need your on-screen confirm
+            type or talk · a transcript waits for you to send it · actions need your on-screen confirm
           </span>
         </form>
       </div>
@@ -254,21 +338,27 @@ const BASIS: Record<Exclude<Basis, "NONE">, { label: string; tone: string }> = {
   PENDING: { label: "pending", tone: "var(--ink3)" },
 };
 
-function TurnItem({
+/** One turn with its basis, source chips and proposal card; `aside` sits in its meta line (e.g. read aloud). */
+export function TurnItem({
   turn,
   proposal,
   onOpen,
+  name = "NEXUS",
+  aside,
 }: {
   turn: Turn;
   proposal?: ActionProposal;
   onOpen: (drawer: string) => void;
+  /** Who answers: "NEXUS" in the Talk drawer, "Cofounder" in the Cofounder panel. */
+  name?: string;
+  aside?: ReactNode;
 }) {
   const mine = turn.role === "USER";
   const basis = turn.basis === "NONE" ? null : BASIS[turn.basis];
   return (
     <li className={`flex flex-col gap-1.5 ${mine ? "items-end" : "items-start"}`}>
       <span className="flex items-center gap-2 font-mono text-[10.5px] text-ink3">
-        {mine ? "You" : "NEXUS"} · {clock(turn.createdAt)}
+        {mine ? "You" : name} · {clock(turn.createdAt)}
         {basis && (
           <span
             className="rounded-full border px-1.5 py-0.5"
@@ -278,6 +368,7 @@ function TurnItem({
             {basis.label}
           </span>
         )}
+        {aside}
       </span>
       <p
         className={`m-0 max-w-[min(560px,92%)] px-4 py-3 text-[14px] leading-[1.55] break-words whitespace-pre-wrap ${
