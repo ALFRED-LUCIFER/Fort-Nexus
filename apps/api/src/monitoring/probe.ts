@@ -1,14 +1,13 @@
-import { lookup } from "node:dns/promises";
 import { request } from "node:https";
-import { BlockList, isIP } from "node:net";
+import { isIP, type BlockList } from "node:net";
 import type { CheckError } from "@nexus/contracts";
+import { isBlocked, resolveAll, type Resolve } from "../net-guard.ts";
 
 // FR-MON-02: one bounded HTTPS GET per check. SSRF guard: the host is resolved once here, every address is vetted,
 // and the socket connects to the vetted address (SNI and Host keep the name), so a DNS rebind can't swap it.
 export const USER_AGENT = "NEXUS-Monitor/1.0 (self-hosted health check)";
 const MAX_BODY = 64 * 1024;
 
-export type Resolve = (hostname: string) => Promise<{ address: string; family: number }[]>;
 export type ProbeResult = {
   ok: boolean;
   statusCode: number | null;
@@ -24,43 +23,6 @@ export type ProbeOptions = {
   /** API shutdown: the probe throws instead of reporting a failure the app didn't cause. */
   signal?: AbortSignal;
 };
-
-/** Loopback, private, link-local (incl. cloud metadata), CGNAT, multicast, reserved and v4-embedding v6 ranges. */
-export const BLOCKED = new BlockList();
-for (const [net, prefix] of [
-  ["0.0.0.0", 8],
-  ["10.0.0.0", 8],
-  ["100.64.0.0", 10],
-  ["127.0.0.0", 8],
-  ["169.254.0.0", 16],
-  ["172.16.0.0", 12],
-  ["192.0.0.0", 24],
-  ["192.168.0.0", 16],
-  ["198.18.0.0", 15],
-  ["224.0.0.0", 4],
-  ["240.0.0.0", 4],
-] as const)
-  BLOCKED.addSubnet(net, prefix, "ipv4");
-for (const [net, prefix] of [
-  ["::", 128],
-  ["::1", 128],
-  ["::ffff:0:0", 96], // IPv4-mapped
-  ["64:ff9b::", 96], // NAT64
-  ["2001::", 32], // Teredo
-  ["2002::", 16], // 6to4
-  ["fc00::", 7], // unique local (incl. fd00:ec2::254 metadata)
-  ["fe80::", 10],
-  ["fec0::", 10],
-  ["ff00::", 8],
-] as const)
-  BLOCKED.addSubnet(net, prefix, "ipv6");
-
-export const isBlocked = (address: string, blocked = BLOCKED) => {
-  const family = isIP(address);
-  return family === 0 || blocked.check(address, family === 6 ? "ipv6" : "ipv4");
-};
-
-const resolveAll: Resolve = (host) => lookup(host, { all: true, verbatim: true });
 
 const TLS_CODES = /CERT|SSL|TLS|SELF_SIGNED|UNABLE_TO_VERIFY|EPROTO/;
 

@@ -38,6 +38,7 @@ import { createMonitoring, type Monitoring } from "./monitoring/service.ts";
 import { createHub, type Hub } from "./notify.ts";
 import { createPlanExecutor } from "./plans/executor.ts";
 import { planRoutes } from "./plans/routes.ts";
+import { researchDomainRoutes } from "./research/domain-routes.ts";
 import { researchRoutes } from "./research/routes.ts";
 import { createResearch, type Research } from "./research/service.ts";
 import { githubRoutes } from "./routes/github.ts";
@@ -282,6 +283,7 @@ export async function buildApp(config: Config) {
       .then(() => businessRoutes(scope, deps))
       .then(() => conversationRoutes(scope, deps))
       .then(() => researchRoutes(scope, deps))
+      .then(() => researchDomainRoutes(scope, deps))
       .then(() => automationRoutes(scope, deps))
       .then(() => monitoringRoutes(scope, deps))
       .then(() => agentRoutes(scope, deps))
