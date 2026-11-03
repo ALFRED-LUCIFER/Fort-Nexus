@@ -1,15 +1,7 @@
 import { useId, useState, type ReactNode } from "react";
 import { getRouteApi } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type {
-  AgentKey,
-  Plan,
-  PlanStatus,
-  PlanStep,
-  PlanStepAction,
-  PlanStepStatus,
-  SourceRef,
-} from "@nexus/contracts";
+import type { Plan, PlanStatus, PlanStep, PlanStepAction, PlanStepStatus, SourceRef } from "@nexus/contracts";
 import { api, keys } from "../lib/api.ts";
 import { ago, clock, useNow } from "../lib/queries.ts";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
