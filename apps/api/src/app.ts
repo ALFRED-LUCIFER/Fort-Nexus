@@ -47,6 +47,7 @@ import { createDeepDiver, type DeepDiver } from "./research/deep/service.ts";
 import { researchRoutes } from "./research/routes.ts";
 import { createResearch, type Research } from "./research/service.ts";
 import { githubRoutes } from "./routes/github.ts";
+import { jobHistoryRoutes } from "./routes/job-history.ts";
 import { notificationRoutes } from "./routes/notifications.ts";
 import { ownerRoutes } from "./routes/owner.ts";
 import { runnerRegisterRoute, runnerRoutes } from "./routes/runner.ts";
@@ -300,7 +301,8 @@ export async function buildApp(config: Config) {
       .then(() => automationRoutes(scope, deps))
       .then(() => monitoringRoutes(scope, deps))
       .then(() => agentRoutes(scope, deps))
-      .then(() => planRoutes(scope, deps)),
+      .then(() => planRoutes(scope, deps))
+      .then(() => jobHistoryRoutes(scope, deps)),
   );
   // n8n's signed trigger: its own scope, outside the owner session (like the runner routes).
   await app.register(async (scope) => automationTriggerRoute(scope, deps));
