@@ -1,9 +1,13 @@
 import { useState, type ReactNode } from "react";
 import { useMutation, type UseQueryResult } from "@tanstack/react-query";
+import { getRouteApi } from "@tanstack/react-router";
 import type { GithubStatus, JobList, RepositoryList, Runner } from "@nexus/contracts";
 import { api } from "../lib/api.ts";
 import { RUNNER_TONE, ago, clock, isActive, jobTone, statusLabel, useNow } from "../lib/queries.ts";
 import { githubSetupHint } from "./github.tsx";
+import { useScope } from "./scope.tsx";
+
+const route = getRouteApi("/");
 
 export interface ZoneProps {
   id: string;
@@ -99,6 +103,8 @@ export function CodeZone({
   onOpenRepo: (id: string) => void;
 }) {
   const now = useNow(30_000);
+  const navigate = route.useNavigate();
+  const { keep } = useScope();
   const hint = githubSetupHint(github);
   const items = repos.data?.items ?? [];
   const jobs = query.data?.items;
@@ -146,15 +152,24 @@ export function CodeZone({
           ))}
       </section>
       <section aria-labelledby="code-runs" className="flex flex-col gap-3">
-        <h3 id="code-runs" className="kicker m-0">
-          Recent runs
-        </h3>
+        <div className="flex items-center gap-3">
+          <h3 id="code-runs" className="kicker m-0">
+            Recent runs
+          </h3>
+          <button
+            type="button"
+            onClick={() => void navigate({ search: { ...keep, drawer: "jobs" } })}
+            className="text-[13px] font-medium text-teal underline"
+          >
+            All jobs
+          </button>
+        </div>
         {jobs?.length ? (
           <RunNodes jobs={jobs} runners={runners} repos={items} onOpen={onOpen} />
         ) : (
           <QueryState
             query={query}
-            empty="No runs yet. Start one from an issue in a repository, or run a diagnostic with Execute in the command bar."
+            empty="No runs yet. Describe one in plain words with New job in All jobs, start one from an issue in a repository, or run a diagnostic with Execute in the command bar."
           />
         )}
       </section>
