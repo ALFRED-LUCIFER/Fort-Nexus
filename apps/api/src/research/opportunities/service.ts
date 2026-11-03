@@ -19,6 +19,7 @@ import { audit } from "../../audit.ts";
 import type { Db, Tx } from "../../db/index.ts";
 import { projectRepositories } from "../../db/schema.ts";
 import { HttpError, notFound } from "../../errors.ts";
+import { inert, inertTitle } from "../../github/issue-text.ts";
 import type { IssueDraft, IssueWriter } from "../../github/issues.ts";
 import { canonical, sha256 } from "../../jobs.ts";
 import { requireGithub } from "../../routes/github.ts";
@@ -229,29 +230,6 @@ export async function dismissOpportunity(db: Db, ctx: Ctx, id: string): Promise<
 }
 
 // ── The issue (FR-CXR-09) ──────────────────────────────────────────────────────────────────────────────────────
-
-const ZW = "​";
-
-/** Single-line plain text with no @mentions, issue references or autolinks (titles aren't Markdown). */
-export const inertTitle = (text: string) =>
-  text
-    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ") // controls, bidi overrides and zero-width characters
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/@(?=[\p{L}\p{N}_-])/gu, `@${ZW}`)
-    .replace(/#(?=\d)/g, `#${ZW}`)
-    .replace(/\bGH-(?=\d)/gi, (m) => `${m.slice(0, 2)}${ZW}-`)
-    .replace(/:\/\//g, `:${ZW}//`)
-    .replace(/\bwww\./gi, (m) => `${m.slice(0, 3)}${ZW}.`);
-
-/**
- * Untrusted (model or web) text as inert Markdown: one line, Markdown and HTML syntax escaped, so it can't add links,
- * images, headings, HTML or a fake marker, and none of the mentions, references or autolinks GitHub would make.
- */
-export const inert = (text: string) =>
-  inertTitle(text.replace(/[\\`*_[\]&|~]/g, "\\$&"))
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
 
 /** An evidence URL as a Markdown link target: https only, no credentials, nothing that ends the link early. */
 function linkTarget(raw: string): string | null {

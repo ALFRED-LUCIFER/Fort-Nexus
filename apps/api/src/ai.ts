@@ -2,7 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import Anthropic from "@anthropic-ai/sdk";
 import AnthropicFoundry from "@anthropic-ai/foundry-sdk";
 import { z } from "zod";
-import { costUsd, worstCaseCostUsd } from "./ai-cost.ts";
+import { costUsd, worstCaseCostUsd, type CostUsage } from "./ai-cost.ts";
 import { HttpError } from "./errors.ts";
 
 // ADR-0003: Anthropic API or Microsoft Foundry, chosen by ~/.nexus/ai.json; one place builds the client.
@@ -99,8 +99,11 @@ function providerMessage(err: unknown) {
       : "The AI provider couldn't be reached. Try again shortly.";
 }
 
+// `usage`: the provider's measured usage whenever a response arrived, for `costUsd` (a rejected answer is billed too).
 export type ToolCall<T> =
-  { ok: true; input: T } | { ok: false; outcome: "PROVIDER_ERROR" | "INVALID_OUTPUT"; message: string };
+  | { ok: true; input: T; usage: CostUsage }
+  | { ok: false; outcome: "PROVIDER_ERROR"; message: string }
+  | { ok: false; outcome: "INVALID_OUTPUT"; message: string; usage: CostUsage };
 
 /**
  * One model call whose only accepted output is a single `tool` call with input matching `schema` (model output is
@@ -141,8 +144,13 @@ export async function callTool<T>(
   const call = res.content.find((b) => b.type === "tool_use" && b.name === req.tool);
   const parsed = req.schema.safeParse(call?.type === "tool_use" ? call.input : undefined);
   return res.stop_reason !== "refusal" && parsed.success
-    ? { ok: true, input: parsed.data }
-    : { ok: false, outcome: "INVALID_OUTPUT", message: "The model didn't produce a valid answer." };
+    ? { ok: true, input: parsed.data, usage: res.usage }
+    : {
+        ok: false,
+        outcome: "INVALID_OUTPUT",
+        message: "The model didn't produce a valid answer.",
+        usage: res.usage,
+      };
 }
 
 /** Every URL written in `text` (scheme://…), trailing punctuation trimmed; keeps model text to its input's URLs. */
