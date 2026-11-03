@@ -422,8 +422,13 @@ function DraftBody({ d, stale }: { d: JobDraft; stale: Error | null }) {
       saved(next);
       void queryClient.invalidateQueries({ queryKey: keys.jobs });
     },
-    // A failed approve may have moved the draft to FAILED (with the issue kept): show the server's state.
-    onError: () => void queryClient.invalidateQueries({ queryKey: keys.jobDraft(d.id) }),
+    // A failed approve may have moved the draft to FAILED (with the issue kept): show the server's state. Its hash
+    // no longer matches once the issue exists, so the owner previews again (now R1). Unreachable keeps the preview:
+    // the approve may have gone through, and retrying the same key is safe.
+    onError: (err) => {
+      if (!(err instanceof ApiRequestError && err.status === 0)) setHeld(null);
+      void queryClient.invalidateQueries({ queryKey: keys.jobDraft(d.id) });
+    },
   });
   const discard = useMutation({
     mutationFn: () => api.discardJobDraft(d.id),

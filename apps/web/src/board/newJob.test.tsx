@@ -395,19 +395,25 @@ describe("job draft drawer", () => {
     expect(await within(d).findByRole("button", { name: "Approve: start the run" })).toBeTruthy();
   });
 
-  it("FAILED shows the error; Try again approves the same live hash and resumes", async () => {
-    let attempt = 0;
+  it("FAILED after the issue was created previews again (now R1) and approves the new hash", async () => {
+    const R1 = "d".repeat(64);
+    let previews = 0;
     const failed = draft({
       status: "FAILED",
-      error: "GitHub is unavailable. Approve again to resume.",
+      kind: "EXISTING_ISSUE",
+      issue: null,
+      issueNumber: 7,
+      error: "Today's budget is used up. Approve again to resume.",
       createdIssue: { number: 7, url: "https://github.com/acme/web/issues/7" },
     });
     const { state, calls } = server(draft(), {
-      [`POST /v1/job-drafts/${DRAFT}/preview`]: () => json(preview()),
-      [`POST /v1/job-drafts/${DRAFT}/approve`]: () => {
-        if (++attempt === 1) {
+      // Like the real server: once the issue exists, the draft's hash changes and the old preview is refused.
+      [`POST /v1/job-drafts/${DRAFT}/preview`]: () =>
+        json(++previews === 1 ? preview() : preview({ riskTier: "R1", actionHash: R1 })),
+      [`POST /v1/job-drafts/${DRAFT}/approve`]: (c) => {
+        if ((c.body as { actionHash: string }).actionHash === HASH) {
           state.current = failed;
-          return apiError(409, "CONFLICT", "GitHub is unavailable.");
+          return apiError(409, "BUDGET_EXHAUSTED", "Today's budget is used up.");
         }
         state.current = STARTED;
         return json(STARTED);
@@ -419,10 +425,41 @@ describe("job draft drawer", () => {
     await user.click(await within(d).findByRole("button", { name: "Preview" }));
     await user.click(await within(d).findByRole("button", { name: /^Approve/ }));
 
-    expect(await within(d).findByText("GitHub is unavailable. Approve again to resume.")).toBeTruthy();
-    expect(within(d).getByRole("heading", { name: /Status: Failed/ })).toBeTruthy();
+    expect(await within(d).findByText("Today's budget is used up. Approve again to resume.")).toBeTruthy();
     expect(within(d).getByRole("link", { name: /Created #7/ })).toBeTruthy();
+    // The stale R2 preview is gone: Try again builds a fresh one instead of resending the refused hash.
+    expect(within(d).queryByText(/Exactly what will happen · R2/)).toBeNull();
     await user.click(within(d).getByRole("button", { name: "Try again" }));
+    expect(await within(d).findByRole("heading", { name: /Exactly what will happen · R1/ })).toBeTruthy();
+    await user.click(within(d).getByRole("button", { name: "Try again" }));
+    expect(await within(d).findByRole("button", { name: "Open the run" })).toBeTruthy();
+
+    expect(posts(calls, `/v1/job-drafts/${DRAFT}/approve`).map((c) => c.body)).toEqual([
+      { actionHash: HASH },
+      { actionHash: R1 },
+    ]);
+    expect(posts(calls, `/v1/job-drafts/${DRAFT}/preview`)).toHaveLength(2);
+  });
+
+  it("an unreachable approve keeps the live preview; Try again resends the same hash and key", async () => {
+    let attempt = 0;
+    const { state, calls } = server(draft(), {
+      [`POST /v1/job-drafts/${DRAFT}/preview`]: () => json(preview()),
+      [`POST /v1/job-drafts/${DRAFT}/approve`]: () => {
+        if (++attempt === 1) {
+          state.current = draft({ status: "FAILED", error: "NEXUS lost the connection." });
+          throw new TypeError("Failed to fetch");
+        }
+        state.current = STARTED;
+        return json(STARTED);
+      },
+    });
+    const user = userEvent.setup();
+    renderApp(IN_DRAFT);
+    const d = await drawer();
+    await user.click(await within(d).findByRole("button", { name: "Preview" }));
+    await user.click(await within(d).findByRole("button", { name: /^Approve/ }));
+    await user.click(await within(d).findByRole("button", { name: "Try again" }));
     expect(await within(d).findByRole("button", { name: "Open the run" })).toBeTruthy();
 
     const approves = posts(calls, `/v1/job-drafts/${DRAFT}/approve`);
