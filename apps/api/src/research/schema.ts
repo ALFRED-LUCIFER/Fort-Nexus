@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   date,
   index,
   integer,
@@ -169,4 +170,22 @@ export const researchFindingExplanations = pgTable(
     createdAt: ts("created_at"),
   },
   (t) => [uniqueIndex("research_finding_explanations_finding_uq").on(t.findingId)],
+);
+
+// P1 wave 5: the owner's source registry (PRD §9 RES "source allowlist"), per workspace. A rule covers the domain and
+// its subdomains; the longest matching rule wins. Unknown domains are COMMUNITY; blocked ones are never fetched and
+// their search results never reach the model.
+export const researchDomains = pgTable(
+  "research_domains",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id").notNull(),
+    domain: text("domain").notNull(),
+    tier: text("tier").$type<SourceTier>().notNull(),
+    blocked: boolean("blocked").notNull().default(false),
+    note: text("note"),
+    createdBy: text("created_by").notNull(),
+    updatedAt: ts("updated_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("research_domains_workspace_domain_uq").on(t.workspaceId, t.domain)],
 );

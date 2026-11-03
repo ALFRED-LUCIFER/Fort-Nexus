@@ -50,6 +50,13 @@
       "when": 1793204120780,
       "tag": "0006_p1",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793725285510,
+      "tag": "0007_worried_zodiak",
+      "breakpoints": true
     }
   ]
 }

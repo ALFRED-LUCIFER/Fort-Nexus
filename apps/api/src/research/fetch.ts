@@ -1,17 +1,23 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { SkipReason } from "@nexus/contracts";
+import { guardedAgent, isBlockedHostError, type GuardOptions } from "../net-guard.ts";
 
-// FR-RES-12 / RES-G04: public https sources only, robots.txt honoured, no credentials, no bypass, no retries.
+// FR-RES-12 / RES-G04: public https sources only, robots.txt honoured, no credentials, no bypass, no retries. Every
+// connection (robots.txt, the page, each redirect hop) goes through the net-guard dispatcher: one resolve, every
+// address vetted, the socket dialled to the vetted address.
 export const USER_AGENT = "NEXUS-Research/1.0 (self-hosted research digest; honours robots.txt)";
 const ROBOTS_TOKEN = "nexus-research"; // the product token robots.txt groups are matched against
 const TIMEOUT_MS = 10_000;
 const MAX_BYTES = 2 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
 export const HOST_INTERVAL_MS = 1_000;
+const FEED_ACCEPT = "application/atom+xml, application/rss+xml, */*;q=0.5";
 
 export type Skip = { ok: false; reason: SkipReason; detail: string };
-export type Fetched = { ok: true; body: string; url: URL } | Skip;
+/** `contentType` is the response's media type without parameters, lower case ("" when the server sent none). */
+export type Fetched = { ok: true; body: string; url: URL; contentType: string } | Skip;
 export type Limiter = (host: string, signal: AbortSignal) => Promise<void>;
+export type FetchSession = ReturnType<typeof fetchSession>;
 
 const skip = (reason: SkipReason, detail: string): Skip => ({
   ok: false,
@@ -85,14 +91,41 @@ function wildcardMatch(pattern: string, path: string) {
   return i === p.length;
 }
 
+const BOMS: [bytes: number[], label: string][] = [
+  [[0xef, 0xbb, 0xbf], "utf-8"],
+  [[0xfe, 0xff], "utf-16be"],
+  [[0xff, 0xfe], "utf-16le"],
+];
+
+/**
+ * Text encoding per WHATWG order, simplified: a byte-order mark, then the Content-Type charset, then a `<meta>`
+ * charset or XML encoding declaration in the first 1 KiB, else UTF-8. Unknown labels fall back to UTF-8.
+ */
+export function decodeBody(bytes: Uint8Array, contentTypeHeader: string | null): string {
+  const bom = BOMS.find(([b]) => b.every((x, i) => bytes[i] === x))?.[1];
+  const head = Buffer.from(bytes.subarray(0, 1024)).toString("latin1");
+  const label =
+    bom ??
+    /;\s*charset\s*=\s*"?([\w.:-]+)/i.exec(contentTypeHeader ?? "")?.[1] ??
+    /<meta[^>]*?charset\s*=\s*["']?\s*([\w.:-]+)/i.exec(head)?.[1] ??
+    /^\s*<\?xml[^>]*?encoding\s*=\s*["']([\w.:-]+)/i.exec(head)?.[1] ??
+    "utf-8";
+  try {
+    return new TextDecoder(label).decode(bytes);
+  } catch {
+    return new TextDecoder().decode(bytes); // RangeError: a label TextDecoder doesn't know
+  }
+}
+
 /**
  * One run's fetch session: robots.txt is read before a host's first fetch and cached for the run, then every request
- * goes through the policy. `signal` aborts everything (API shutdown).
+ * goes through the policy. `signal` aborts everything (API shutdown). `opts` are net-guard test seams only.
  */
-export function fetchSession(wait: Limiter, signal: AbortSignal) {
+export function fetchSession(wait: Limiter, signal: AbortSignal, opts: GuardOptions = {}) {
   const robots = new Map<string, Promise<((path: string) => boolean) | Skip>>();
+  const dispatcher = guardedAgent({ ...opts, connectTimeoutMs: TIMEOUT_MS });
 
-  async function request(start: URL, checkRobots: boolean): Promise<Fetched> {
+  async function request(start: URL, checkRobots: boolean, accept = FEED_ACCEPT): Promise<Fetched> {
     let url = start;
     for (let hop = 0; ; hop++) {
       if (url.protocol !== "https:") return skip("HTTP_ERROR", `Refused a non-https URL (${url.protocol})`);
@@ -109,11 +142,9 @@ export function fetchSession(wait: Limiter, signal: AbortSignal) {
         const res = await fetch(url, {
           redirect: "manual",
           credentials: "omit",
-          headers: {
-            "user-agent": USER_AGENT,
-            accept: "application/atom+xml, application/rss+xml, */*;q=0.5",
-          },
+          headers: { "user-agent": USER_AGENT, accept },
           signal: timeout,
+          dispatcher,
         });
         const location = res.headers.get("location");
         if (res.status >= 300 && res.status < 400 && location) {
@@ -141,12 +172,19 @@ export function fetchSession(wait: Limiter, signal: AbortSignal) {
           if (size > MAX_BYTES) return skip("TOO_LARGE", "Larger than 2 MB"); // leaving the loop cancels the body
           chunks.push(chunk);
         }
-        // shortcut: bodies are decoded as UTF-8 (nearly every feed); honour the XML/HTTP charset if a source needs it.
-        return { ok: true, body: new TextDecoder().decode(Buffer.concat(chunks)), url };
+        const header = res.headers.get("content-type");
+        return {
+          ok: true,
+          body: decodeBody(Buffer.concat(chunks), header),
+          url,
+          contentType: (header ?? "").split(";")[0]!.trim().toLowerCase(),
+        };
       } catch (err) {
         if (signal.aborted) throw err;
         if (err instanceof Error && err.name === "TimeoutError")
           return skip("TIMEOUT", "No response within 10 s");
+        if (err instanceof Error && isBlockedHostError(err.cause))
+          return skip("BLOCKED_HOST", `Refused: ${err.cause.message}`);
         const cause = err instanceof Error && err.cause instanceof Error ? err.cause.message : "";
         return skip("HTTP_ERROR", `Network error${cause ? `: ${cause}` : ""}`);
       }
@@ -158,6 +196,7 @@ export function fetchSession(wait: Limiter, signal: AbortSignal) {
     if (!entry) {
       entry = request(new URL("/robots.txt", url.origin), false).then((r) => {
         if (r.ok) return parseRobots(r.body);
+        if (r.reason === "BLOCKED_HOST") return r;
         // RFC 9309: an unavailable robots.txt (4xx) allows everything; an unreachable one (5xx, network) disallows.
         if (r.reason === "AUTH_REQUIRED" || /^HTTP 4\d\d$/.test(r.detail)) return () => true;
         return skip("ROBOTS_DISALLOWED", `robots.txt on ${url.host} is unreachable (${r.detail})`);
@@ -167,5 +206,5 @@ export function fetchSession(wait: Limiter, signal: AbortSignal) {
     return entry;
   }
 
-  return { get: (url: URL) => request(url, true) };
+  return { get: (url: URL, accept?: string) => request(url, true, accept) };
 }
