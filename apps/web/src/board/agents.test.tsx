@@ -129,7 +129,9 @@ describe("Agents on the board (FR-AGT-07)", () => {
   it("in All asks for a project instead of resolving profiles", async () => {
     const calls = base();
     renderApp("/");
-    expect(await screen.findByText(/Pick a project to see its agents/)).toBeTruthy();
+    expect(
+      await screen.findByText(/Pick a project in the scope menu \(bottom left\) to see its agents/),
+    ).toBeTruthy();
     expect(calls.some((c) => c.path === "/v1/agents")).toBe(false);
   });
 });

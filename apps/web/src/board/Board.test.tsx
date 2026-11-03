@@ -5,6 +5,7 @@ import { IDEMPOTENCY_HEADER, IdempotencyKey, type Job, type Runner } from "@nexu
 import {
   FakeEventSource,
   IN_PROJECT,
+  BIZ_PROJECT_ID,
   JOB_ID,
   PROJECT_ID,
   ME,
@@ -171,11 +172,16 @@ describe("board", () => {
     expect(document.activeElement).toBe(inbox);
   });
 
-  it("keeps workspace scope in the URL", async () => {
+  it("keeps workspace scope in the URL; a workspace with one active project opens on it", async () => {
     board([runner()]);
     const user = userEvent.setup();
     const { router } = renderApp("/");
     await user.click(await screen.findByRole("button", { name: "Business" }));
-    await waitFor(() => expect(router.state.location.search).toEqual({ ws: "business" }));
+    await waitFor(() =>
+      expect(router.state.location.search).toEqual({ ws: "business", project: BIZ_PROJECT_ID }),
+    );
+    // Dev has two projects (Home and the decoy): nothing is picked for the owner.
+    await user.click(screen.getByRole("button", { name: "Dev" }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ ws: "dev" }));
   });
 });

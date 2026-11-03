@@ -141,10 +141,12 @@ describe("workspace switch and project menu", () => {
     await waitFor(() => expect(router.state.location.search).toEqual({ ws: "dev", project: PROJECT_ID }));
     expect(scope.textContent).toMatch(/Dev.*Home ▾.*home runner/);
 
-    // The workspace switch clears the project: Dev without a project is read-only again.
+    // The workspace switch clears the project; Business has one active project, so it opens on it.
     await user.click(screen.getByRole("button", { name: "Business" }));
-    await waitFor(() => expect(router.state.location.search).toEqual({ ws: "business" }));
-    expect(scope.textContent).toMatch(/Business.*all products ▾/);
+    await waitFor(() =>
+      expect(router.state.location.search).toEqual({ ws: "business", project: BIZ_PROJECT_ID }),
+    );
+    expect(scope.textContent).toMatch(/Business.*Shop ▾/);
   });
 
   it("filters runs, approvals and repositories by the selected project", async () => {

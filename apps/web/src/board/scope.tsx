@@ -89,6 +89,19 @@ export function ScopeNav() {
     };
   }, [open]);
 
+  // A workspace with exactly one active project opens on it: its "all repos" view would show the same data, but
+  // read-only and without the project's agents, so nothing would look like it works.
+  const only =
+    scope.ws === "all" || scope.keep.project
+      ? undefined
+      : workspaces.data?.items
+          .find((w) => w.mode === MODE[scope.ws as "dev" | "business"])
+          ?.projects.filter((p) => !p.archivedAt);
+  const onlyId = only?.length === 1 ? only[0]!.id : undefined;
+  useEffect(() => {
+    if (onlyId) void navigate({ search: (s) => ({ ...s, project: onlyId }), replace: true });
+  }, [onlyId, navigate]);
+
   const close = () => {
     setOpen(false);
     buttonRef.current?.focus();

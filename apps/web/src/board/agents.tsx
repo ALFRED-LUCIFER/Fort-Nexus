@@ -55,7 +55,12 @@ const useAgentVersions = (agent: AgentKey, projectId: string | undefined, enable
 
 function AgentsState({ query, projectId }: { query: UseQueryResult<AgentSummary[]>; projectId?: string }) {
   if (!projectId)
-    return <EmptyZone>Pick a project to see its agents: profiles resolve per project.</EmptyZone>;
+    return (
+      <EmptyZone>
+        Pick a project in the scope menu (bottom left) to see its agents: each project can tune their tools
+        and caps.
+      </EmptyZone>
+    );
   return <EmptyZone>{query.error ? query.error.message : "Loading…"}</EmptyZone>;
 }
 
