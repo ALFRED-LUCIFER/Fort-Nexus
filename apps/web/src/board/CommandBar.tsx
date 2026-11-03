@@ -11,10 +11,10 @@ import { api, keys } from "../lib/api.ts";
 import { preferredRunner } from "../lib/queries.ts";
 import { AiError } from "./aiInference.tsx";
 import { jobTextProblem, useCreateJobDraft } from "./newJob.tsx";
-import { P1Button } from "./P1Button.tsx";
 import { useCreatePlan } from "./plans.tsx";
 import { useScope } from "./scope.tsx";
-import { talkBlocked } from "./Talk.tsx";
+import { talkBlocked, withTranscript } from "./Talk.tsx";
+import { MicButton, VoiceHud, VoiceProblems, micScopeBlock, usePushToTalk } from "./voice.tsx";
 
 const route = getRouteApi("/");
 
@@ -94,6 +94,13 @@ export function CommandBar({
   const asking = useAsk(done);
   const planning = useCreatePlan(done);
   const drafting = useCreateJobDraft(done);
+  const scope = useScope();
+  // The mic records into the current project; the words only fill the command for the owner to read and run.
+  const ptt = usePushToTalk(scope.project?.id);
+  const onTranscript = (words: string) => {
+    setText((t) => withTranscript(t, words));
+    inputRef.current?.focus();
+  };
 
   const close = () => {
     setPanel(null);
@@ -123,20 +130,7 @@ export function CommandBar({
           placeholder="Ask, plan or run anything on your home machine…"
           className="min-w-0 flex-1 border-0 bg-transparent text-[15px] text-ink outline-none placeholder:text-ink3"
         />
-        <P1Button
-          why="Voice commands arrive in P1."
-          className="flex size-10 flex-none items-center justify-center gap-[2.5px] rounded-xl bg-hair"
-        >
-          <span className="sr-only">Voice command</span>
-          {[0.5, 1, 0.7, 0.4].map((s, i) => (
-            <span
-              key={i}
-              aria-hidden="true"
-              className="h-4 w-[3px] rounded-sm bg-ink2"
-              style={{ transform: `scaleY(${s})` }}
-            />
-          ))}
-        </P1Button>
+        <MicButton ptt={ptt} onTranscript={onTranscript} blocked={micScopeBlock(scope)} />
         <div
           role="group"
           aria-label="Command mode"
@@ -164,6 +158,12 @@ export function CommandBar({
       </div>
       <div className="absolute top-[62px] right-0 left-0 z-[12] flex flex-col gap-2.5">
         {children}
+        <VoiceHud ptt={ptt} onEnd={ptt.cancel} />
+        {ptt.problem && (
+          <Panel label="Voice input">
+            <VoiceProblems ptt={ptt} />
+          </Panel>
+        )}
         {panel === "ask" && (
           <Panel label="Ask">
             {asking.blocked || !text.trim() ? (
