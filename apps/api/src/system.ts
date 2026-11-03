@@ -2,7 +2,7 @@ import { and, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { CreateJobRequest, RunnerEventInput, SystemControls } from "@nexus/contracts";
 import { audit } from "./audit.ts";
 import type { Db, Tx } from "./db/index.ts";
-import { aiSpend, jobs, systemControls } from "./db/schema.ts";
+import { aiSpend, jobs, systemControls, type AiSpendSource } from "./db/schema.ts";
 import { HttpError } from "./errors.ts";
 import { LEASED, moveJob, ownerActor, type JobRow } from "./jobs.ts";
 import { notifySecurity } from "./notifications.ts";
@@ -87,7 +87,12 @@ export async function getSystemControls(db: Db, timezone: string, now = new Date
 }
 
 /** BUDGET_EXHAUSTED unless `max` fits in what is left of today's budget; `what` names the work for the owner. */
-async function assertFits(tx: Db | Tx, max: number, timezone: string, what: "run" | "deep dive") {
+async function assertFits(
+  tx: Db | Tx,
+  max: number,
+  timezone: string,
+  what: "run" | "deep dive" | "job draft",
+) {
   const b = await budgetStatus(tx, timezone, new Date());
   if (micros(b.spentTodayUsd) + micros(max) > micros(b.dailyCapUsd))
     throw new HttpError(
@@ -123,7 +128,7 @@ export async function reserveAiSpend(
   i: {
     workspaceId: string;
     projectId: string;
-    source: "DEEP_DIVE";
+    source: AiSpendSource;
     sourceId: string;
     maxUsd: number;
     timezone: string;
@@ -135,7 +140,7 @@ export async function reserveAiSpend(
       "EMERGENCY_STOP",
       "Emergency stop is engaged: nothing new can start and approvals can't execute until you release it.",
     );
-  await assertFits(tx, i.maxUsd, i.timezone, "deep dive");
+  await assertFits(tx, i.maxUsd, i.timezone, i.source === "DEEP_DIVE" ? "deep dive" : "job draft");
   const [row] = await tx
     .insert(aiSpend)
     .values({

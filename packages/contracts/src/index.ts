@@ -16,3 +16,5 @@ export * from "./monitoring.ts";
 export * from "./automations.ts";
 export * from "./agents.ts";
 export * from "./plans.ts";
+export * from "./job-history.ts";
+export * from "./job-drafts.ts";

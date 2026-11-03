@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AgentKey } from "./agent-key.ts";
 import { RepoId } from "./github.ts";
 
 // PRD §10.2 — early exits (REJECTED, BLOCKED_NEEDS_INFO, EXPIRED) are states; PR_CREATED etc. are outcomes.
@@ -123,6 +124,12 @@ export const Job = z.object({
   outcome: JobOutcome.nullable(),
   stateVersion: z.int().nonnegative(),
   lastEventSequence: z.int().nonnegative(),
+  // The agent the job runs for, set by the server at create (plan steps: the step's agent; otherwise by job type:
+  // DEV_ISSUE_TO_PR → DEVELOPER, RUNNER_DIAGNOSTIC → DEVOPS). Never taken from the request body.
+  agent: AgentKey,
+  // First move into PREPARING, and the move into a terminal status; null until each happens.
+  startedAt: z.iso.datetime().nullable(),
+  finishedAt: z.iso.datetime().nullable(),
   // DEV_ISSUE_TO_PR only (from the pinned snapshot); null for other job types.
   issue: z
     .object({

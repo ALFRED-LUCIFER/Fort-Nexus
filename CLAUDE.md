@@ -4,6 +4,7 @@ Self-hosted AI command center: a private web UI (office/phone) that runs Claude 
 
 ## Read first
 
+- **`docs/handoff.md` — the latest session handoff (state, how to run, the owner's open asks). Read it first.**
 - **`docs/mvp-tracker.md` — current delivery status, what's in flight and how to resume. Read it before anything else.** (P1 runs in a separate worktree: `docs/p1-kickoff.md`.)
 - `docs/PRD.md` — the single source of truth (consolidated v2.0). Start with Part A (tech stack), Part B (engineering rules), Part C (resolved conflicts), Part D (design mapping).
 - `docs/design/NEXUS-v2.dc.html` — the UI design. `support.js` next to it is the Claude Design preview runtime: reference only, never import or ship it. All data in the design is demo data.

@@ -2,6 +2,17 @@ import { z } from "zod";
 import {
   ActionProposal,
   AgentList,
+  AgentPerformance,
+  JobDraft,
+  JobDraftList,
+  JobDraftPreview,
+  JobHistoryList,
+  type AgentPerformanceQuery,
+  type ApproveJobDraftRequest,
+  type CreateJobDraftRequest,
+  type JobDraftPreviewRequest,
+  type JobHistoryQuery,
+  type UpdateJobDraftRequest,
   AgentProfileVersion,
   AgentProfileVersionList,
   ApiError,
@@ -399,7 +410,36 @@ export const api = {
       Opportunity,
       post({ [IDEMPOTENCY_HEADER]: idempotencyKey }, body),
     ),
+  // Jobs page: projectId omitted = the read-only "All" view.
+  jobHistory: (q: Partial<JobHistoryQuery>) => request(`/v1/jobs/history?${searchOf(q)}`, JobHistoryList),
+  agentPerformance: (q: Partial<AgentPerformanceQuery>) =>
+    request(`/v1/agents/performance?${searchOf(q)}`, AgentPerformance),
+  // Drafting calls the model once: a retry with the same key returns the same draft.
+  createJobDraft: (body: CreateJobDraftRequest, idempotencyKey: string) =>
+    request("/v1/job-drafts", JobDraft, post({ [IDEMPOTENCY_HEADER]: idempotencyKey }, body)),
+  jobDrafts: (projectId?: string) =>
+    request(`/v1/job-drafts${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`, JobDraftList),
+  jobDraft: (id: string) => request(`/v1/job-drafts/${encodeURIComponent(id)}`, JobDraft),
+  updateJobDraft: (id: string, body: UpdateJobDraftRequest) =>
+    request(`/v1/job-drafts/${encodeURIComponent(id)}`, JobDraft, post({}, body, "PATCH")),
+  previewJobDraft: (id: string, body: JobDraftPreviewRequest) =>
+    request(`/v1/job-drafts/${encodeURIComponent(id)}/preview`, JobDraftPreview, post({}, body)),
+  // Answers after GitHub created the issue (if any) and the job exists: STARTED with jobId, or an error.
+  approveJobDraft: (id: string, body: ApproveJobDraftRequest, idempotencyKey: string) =>
+    request(
+      `/v1/job-drafts/${encodeURIComponent(id)}/approve`,
+      JobDraft,
+      post({ [IDEMPOTENCY_HEADER]: idempotencyKey }, body),
+    ),
+  discardJobDraft: (id: string) =>
+    request(`/v1/job-drafts/${encodeURIComponent(id)}/discard`, JobDraft, post()),
 };
+
+// Drops undefined and empty values so the server's defaults apply.
+const searchOf = (q: Record<string, string | number | undefined>) =>
+  new URLSearchParams(
+    Object.entries(q).flatMap(([k, v]) => (v === undefined || v === "" ? [] : [[k, String(v)]])),
+  );
 
 export type FindingFilters = Partial<Omit<FindingSearchQuery, "cursor">>;
 
@@ -459,4 +499,10 @@ export const keys = {
     ["research", "opportunities", "list", projectId ?? "all"] as const,
   opportunity: (id: string) => ["research", "opportunities", id] as const,
   issuePreview: (id: string) => ["research", "opportunities", id, "preview"] as const,
+  // Under "jobs" so every job mutation's invalidation refreshes the Jobs page too.
+  jobHistory: (q: Partial<JobHistoryQuery>) => ["jobs", "history", q] as const,
+  agentPerformance: (q: Partial<AgentPerformanceQuery>) => ["jobs", "performance", q] as const,
+  jobDrafts: ["job-drafts"] as const,
+  jobDraftsOf: (projectId: string | undefined) => ["job-drafts", "list", projectId ?? "all"] as const,
+  jobDraft: (id: string) => ["job-drafts", id] as const,
 };

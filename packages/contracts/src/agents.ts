@@ -1,19 +1,12 @@
 import { z } from "zod";
+import { AgentKey } from "./agent-key.ts";
 import { RiskTier } from "./jobs.ts";
 
 // EPIC AGT (FR-AGT-06/07) + FR-WKS-04/05 + PRD C-04. An agent's profile can only narrow what the global safety ceiling
 // allows; it is checked at every tool call, never baked into a running job (PRD §11.16).
 
-export const AgentKey = z.enum([
-  "CHIEF_OF_STAFF",
-  "DEVELOPER",
-  "QA",
-  "DEVOPS",
-  "PRODUCT",
-  "AI_RESEARCHER",
-  "FINANCIAL_ANALYST",
-]);
-export type AgentKey = z.infer<typeof AgentKey>;
+// In its own file so jobs.ts can use it without an import cycle (this file imports RiskTier from jobs.ts).
+export { AgentKey };
 
 // The only things an agent can be allowed to do: existing typed paths, nothing free-form.
 export const AgentTool = z.enum([

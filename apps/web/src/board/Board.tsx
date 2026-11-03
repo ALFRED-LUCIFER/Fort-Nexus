@@ -23,7 +23,9 @@ import { P1Button } from "./P1Button.tsx";
 import { BusinessDrawer, BusinessZone, bizSub, useConnectors } from "./business.tsx";
 import { IssueDrawer, RepoDrawer } from "./github.tsx";
 import { InboxDrawer } from "./Inbox.tsx";
+import { JobsDrawer } from "./jobs.tsx";
 import { AppNodes, IncidentDrawer, SystemsDrawer, appsSub, useMonitoredApps } from "./monitoring.tsx";
+import { JobDraftDrawer, NewJobDrawer } from "./newJob.tsx";
 import { NotificationToasts, useScopeNotifications } from "./notifications.tsx";
 import { NoticedZone, OpportunityDrawer, noticedSub, useOpportunities } from "./opportunities.tsx";
 import { PlanDrawer, PlansZone, plansSub, usePlans } from "./plans.tsx";
@@ -525,6 +527,11 @@ export function Board() {
           banner={banner}
           onClose={closeDrawer}
         />
+      )}
+      {drawerKind === "jobs" && <JobsDrawer banner={banner} onClose={closeDrawer} />}
+      {drawerKind === "newjob" && <NewJobDrawer banner={banner} onClose={closeDrawer} />}
+      {drawerKind === "jobdraft" && drawerId && (
+        <JobDraftDrawer id={drawerId} banner={banner} onClose={closeDrawer} />
       )}
       {drawerKind === "issue" && drawerId && drawerNumber && (
         <IssueDrawer repoId={drawerId} number={Number(drawerNumber)} banner={banner} onClose={closeDrawer} />

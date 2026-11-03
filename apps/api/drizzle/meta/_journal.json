@@ -57,6 +57,13 @@
       "when": 1793728118178,
       "tag": "0007_researcher",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793730340485,
+      "tag": "0008_jobs",
+      "breakpoints": true
     }
   ]
 }

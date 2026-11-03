@@ -3,6 +3,8 @@ import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, lt, or, sql 
 import {
   RUNNER_LEASE_TTL_MS,
   canTransition,
+  type AgentKey,
+  type JobType,
   isTerminal,
   type AppendEventsRequest,
   type AppendEventsResponse,
@@ -43,6 +45,8 @@ export type NewEvent = {
   occurredAt?: Date;
 };
 
+export const defaultJobAgent = (t: JobType): AgentKey => (t === "DEV_ISSUE_TO_PR" ? "DEVELOPER" : "DEVOPS");
+
 export const ownerActor = (userId: string) => `user:${userId}`;
 export const runnerActor = (runnerId: string) => `runner:${runnerId}`;
 
@@ -66,6 +70,9 @@ export const toJobDto = (j: JobRow): Job => ({
       }
     : null,
   estimatedCostUsd: j.estimatedCostUsd,
+  agent: j.agent,
+  startedAt: j.startedAt?.toISOString() ?? null,
+  finishedAt: j.finishedAt?.toISOString() ?? null,
   createdAt: j.createdAt.toISOString(),
   updatedAt: j.updatedAt.toISOString(),
 });
@@ -137,6 +144,7 @@ export async function moveJob(
   set: Partial<Pick<JobRow, "outcome" | "leaseExpiresAt">> = {},
 ): Promise<JobRow> {
   if (!canTransition(job.status, to)) throw invalidTransition(job.status, to);
+  const now = new Date();
   const seq = await writeEvents(tx, job.id, job.lastEventSequence, actor, [
     ...events,
     stateChanged(job.status, to, set.outcome ? { outcome: set.outcome } : {}),
@@ -147,7 +155,10 @@ export async function moveJob(
       status: to,
       stateVersion: job.stateVersion + 1,
       lastEventSequence: seq,
-      updatedAt: new Date(),
+      updatedAt: now,
+      // The Jobs page's duration: first lease start → terminal move.
+      ...(to === "PREPARING" && !job.startedAt ? { startedAt: now } : {}),
+      ...(isTerminal(to) ? { finishedAt: now } : {}),
       ...set,
     })
     .where(eq(jobs.id, job.id))
@@ -197,6 +208,8 @@ export async function createJob(
     timezone: string;
     /** DEV_ISSUE_TO_PR: validates against GitHub and pins the issue. Runs only for a new key, outside the tx. */
     pinIssue: (body: Extract<CreateJobRequest, { jobType: "DEV_ISSUE_TO_PR" }>) => Promise<IssueSnapshot>;
+    /** Trusted callers only (plan steps, job drafts); otherwise the job type's default agent. */
+    agent?: AgentKey;
   },
 ): Promise<JobRow> {
   const requestHash = sha256(canonical(input.body));
@@ -239,6 +252,7 @@ export async function createJob(
         initiatorId: input.ownerId,
         projectId: body.projectId,
         jobType: body.jobType,
+        agent: input.agent ?? defaultJobAgent(body.jobType),
         status: "QUEUED",
         // RUNNER_DIAGNOSTIC: read-only fixed argv. DEV_ISSUE_TO_PR: sandboxed edits; the push is a separate R2 approval.
         riskTier: snapshot ? "R1" : "R0",
@@ -379,6 +393,7 @@ export async function cancelJob(
       .set({
         status: "CANCELLED",
         cancelRequestedAt: now,
+        finishedAt: now,
         stateVersion: job.stateVersion + 1,
         lastEventSequence: seq,
         updatedAt: now,
@@ -437,6 +452,7 @@ export async function tryLease(db: Db, runner: RunnerRow): Promise<JobRow | null
       .update(jobs)
       .set({
         status: "PREPARING",
+        startedAt: job.startedAt ?? now,
         runnerId: runner.id,
         fencingToken: job.fencingToken + 1,
         leaseExpiresAt: new Date(now.getTime() + RUNNER_LEASE_TTL_MS),
@@ -533,6 +549,7 @@ export async function appendRunnerEvents(
         stateVersion,
         lastEventSequence: seq,
         leaseExpiresAt: LEASED.includes(status) ? job.leaseExpiresAt : null,
+        ...(isTerminal(status) ? { finishedAt: now } : {}),
         ...(cost === null ? {} : { estimatedCostUsd: (job.estimatedCostUsd ?? 0) + cost }),
         updatedAt: now,
       })

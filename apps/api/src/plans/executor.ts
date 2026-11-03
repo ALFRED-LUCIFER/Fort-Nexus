@@ -153,6 +153,7 @@ export function createPlanExecutor(
           ownerId: plan.ownerId,
           idempotencyKey: key,
           body: a.request,
+          agent: step.agent,
           correlationId: plan.id,
           timezone: deps.config.ownerTimezone,
           pinIssue: (b) =>

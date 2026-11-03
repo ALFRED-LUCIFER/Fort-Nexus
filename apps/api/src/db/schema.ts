@@ -14,6 +14,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import type {
+  AgentKey,
   Approval,
   ApprovalStatus,
   ChangesetFile,
@@ -31,6 +32,9 @@ import type {
   UploadChangesetRequest,
   WorkspaceMode,
 } from "@nexus/contracts";
+
+// Direct model calls that reserve budget (FR-CSP-08). Each source belongs to one agent for the performance view.
+export type AiSpendSource = "DEEP_DIVE" | "JOB_DRAFT";
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, mode: "date" });
 // Postgres 18 uuidv7(): time-ordered ids double as the newest-first list cursor.
@@ -206,6 +210,10 @@ export const jobs = pgTable(
     issueSnapshot: jsonb("issue_snapshot").$type<IssueSnapshot>(),
     // Sum of the runner's summary-event cost estimates (FR-OBS-03); null until one arrives.
     estimatedCostUsd: numeric("estimated_cost_usd", { precision: 12, scale: 6, mode: "number" }),
+    // Set by the server at create; never from the request body.
+    agent: text("agent").$type<AgentKey>().notNull(),
+    startedAt: ts("started_at"),
+    finishedAt: ts("finished_at"),
     stateVersion: integer("state_version").notNull().default(0),
     lastEventSequence: integer("last_event_sequence").notNull().default(0),
     createdAt: ts("created_at").notNull().defaultNow(),
@@ -216,6 +224,7 @@ export const jobs = pgTable(
     index("jobs_status_created_idx").on(t.status, t.createdAt),
     index("jobs_initiator_id_idx").on(t.initiatorId, t.id),
     index("jobs_project_id_idx").on(t.projectId, t.id),
+    index("jobs_initiator_agent_idx").on(t.initiatorId, t.agent, t.createdAt),
     index("jobs_lease_idx")
       .on(t.leaseExpiresAt)
       .where(sql`${t.leaseExpiresAt} is not null`),
@@ -415,7 +424,7 @@ export const aiSpend = pgTable(
     projectId: uuid("project_id")
       .notNull()
       .references(() => projects.id),
-    source: text("source").$type<"DEEP_DIVE">().notNull(),
+    source: text("source").$type<AiSpendSource>().notNull(),
     sourceId: uuid("source_id").notNull(),
     reservedUsd: numeric("reserved_usd", { precision: 12, scale: 6, mode: "number" }).notNull(),
     // null until settled: the measured cost, or the whole reservation when the outcome is unknown (restart).
@@ -426,7 +435,7 @@ export const aiSpend = pgTable(
   (t) => [
     uniqueIndex("ai_spend_source_uq").on(t.source, t.sourceId),
     index("ai_spend_created_idx").on(t.createdAt),
-    check("ai_spend_source_valid", sql`${t.source} in ('DEEP_DIVE')`),
+    check("ai_spend_source_valid", sql`${t.source} in ('DEEP_DIVE', 'JOB_DRAFT')`),
     check("ai_spend_reserved_positive", sql`${t.reservedUsd} > 0`),
     check("ai_spend_cost_nonnegative", sql`${t.costUsd} is null or ${t.costUsd} >= 0`),
   ],
