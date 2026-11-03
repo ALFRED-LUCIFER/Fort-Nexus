@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readSecretJson } from "../../secret-file.ts";
 import { z } from "zod";
 import type { SearchProviderStatus } from "@nexus/contracts";
 import { HttpError } from "../../errors.ts";
@@ -59,39 +59,16 @@ const BraveError = z.object({ error: z.object({ code: z.string().optional() }) }
  * Reads and checks the search config on every call. Missing or unusable → 409 naming the file and runbook; messages
  * never include the file's content.
  */
-// shortcut: repeats loadAi's file checks (ai.ts); fold both into one helper when a third provider file appears.
 export async function loadSearch(file: string): Promise<SearchClient> {
-  const fail = (
-    reason: "search_provider_not_configured" | "search_provider_config_invalid",
-    message: string,
-  ) => new HttpError(409, "CONFLICT", message, { reason, file, runbook: SEARCH_RUNBOOK });
-  const invalid = (why: string) =>
-    fail("search_provider_config_invalid", `${file} ${why}. See ${SEARCH_RUNBOOK} on the home machine.`);
-
-  const st = await stat(file).catch((err: NodeJS.ErrnoException) => {
-    if (err.code === "ENOENT")
-      throw fail(
-        "search_provider_not_configured",
-        `Web search isn't set up. On the home machine create ${file} with mode 0600 (see ${SEARCH_RUNBOOK}), then try again.`,
-      );
-    throw invalid(`could not be read (${err.code ?? "error"})`);
+  const c = await readSecretJson(file, SearchConfig, {
+    runbook: SEARCH_RUNBOOK,
+    missing: {
+      reason: "search_provider_not_configured",
+      message: `Web search isn't set up. On the home machine create ${file} with mode 0600 (see ${SEARCH_RUNBOOK}), then try again.`,
+    },
+    invalidReason: "search_provider_config_invalid",
   });
-  if (!st.isFile()) throw invalid("is not a regular file");
-  if ((st.mode & 0o077) !== 0) throw invalid("must not be readable by group or others: run chmod 600");
-  if (process.getuid && st.uid !== process.getuid()) throw invalid("must be owned by the API user");
-
-  let raw: unknown;
-  try {
-    raw = JSON.parse(await readFile(file, "utf8"));
-  } catch {
-    throw invalid("is not valid JSON"); // JSON.parse messages quote the input: never pass them on
-  }
-  const parsed = SearchConfig.safeParse(raw);
-  if (!parsed.success)
-    throw invalid(
-      `is invalid (${parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.code}`).join("; ")})`,
-    );
-  return braveClient(parsed.data.apiKey);
+  return braveClient(c.apiKey);
 }
 
 /** GET /v1/research/search-provider: whether search.json is usable, never the key. */

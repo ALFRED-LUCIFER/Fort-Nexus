@@ -1,9 +1,8 @@
-import { readFile, stat } from "node:fs/promises";
+import { readSecretJson } from "./secret-file.ts";
 import Anthropic from "@anthropic-ai/sdk";
 import AnthropicFoundry from "@anthropic-ai/foundry-sdk";
 import { z } from "zod";
 import { costUsd, worstCaseCostUsd, type CostUsage } from "./ai-cost.ts";
-import { HttpError } from "./errors.ts";
 
 // ADR-0003: Anthropic API or Microsoft Foundry, chosen by ~/.nexus/ai.json; one place builds the client.
 // shortcut: duplicates the runner's schema and file checks (apps/runner/src/ai-config.ts); move both to a shared
@@ -46,35 +45,14 @@ export type AiClient = { client: { messages: Pick<Anthropic.Messages, "create"> 
  * Missing or unusable config → 409 naming the file and runbook; messages never include the file's content.
  */
 export async function loadAi(file: string): Promise<AiClient> {
-  const fail = (reason: "ai_provider_not_configured" | "ai_provider_config_invalid", message: string) =>
-    new HttpError(409, "CONFLICT", message, { reason, file, runbook: AI_RUNBOOK });
-  const invalid = (why: string) =>
-    fail("ai_provider_config_invalid", `${file} ${why}. See ${AI_RUNBOOK} on the home machine.`);
-
-  const st = await stat(file).catch((err: NodeJS.ErrnoException) => {
-    if (err.code === "ENOENT")
-      throw fail(
-        "ai_provider_not_configured",
-        `NEXUS needs an AI provider for this. On the home machine create ${file} with mode 0600 (see ${AI_RUNBOOK}), then try again.`,
-      );
-    throw invalid(`could not be read (${err.code ?? "error"})`);
+  const c = await readSecretJson(file, AiConfig, {
+    runbook: AI_RUNBOOK,
+    missing: {
+      reason: "ai_provider_not_configured",
+      message: `NEXUS needs an AI provider for this. On the home machine create ${file} with mode 0600 (see ${AI_RUNBOOK}), then try again.`,
+    },
+    invalidReason: "ai_provider_config_invalid",
   });
-  if (!st.isFile()) throw invalid("is not a regular file");
-  if ((st.mode & 0o077) !== 0) throw invalid("must not be readable by group or others: run chmod 600");
-  if (process.getuid && st.uid !== process.getuid()) throw invalid("must be owned by the API user");
-
-  let raw: unknown;
-  try {
-    raw = JSON.parse(await readFile(file, "utf8"));
-  } catch {
-    throw invalid("is not valid JSON"); // JSON.parse messages quote the input: never pass them on
-  }
-  const parsed = AiConfig.safeParse(raw);
-  if (!parsed.success)
-    throw invalid(
-      `is invalid (${parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.code}`).join("; ")})`,
-    );
-  const c = parsed.data;
   const common = { apiKey: c.apiKey, timeout: REQUEST_TIMEOUT_MS };
   if (c.provider === "anthropic") return { client: new Anthropic(common), model: c.model };
   return {
