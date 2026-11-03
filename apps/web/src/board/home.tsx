@@ -46,22 +46,19 @@ const rowBtn = "rounded-[14px] text-left transition-shadow hover:shadow-[0_0_0_2
 // What waits on the owner: a pending push approval arrives as its JOB (the run drawer holds the approval).
 const WAITING_KIND: Record<HomeRef["kind"], string> = {
   JOB: "Push approval",
-  APPROVAL: "Push approval",
   PLAN: "Plan",
   JOB_DRAFT: "Job draft",
   OPPORTUNITY: "Opportunity",
   DEEP_DIVE: "Deep dive",
 };
-// The API never sends APPROVAL (it has no drawer of its own); the Inbox lists approvals if it ever does.
 const REF_DRAWER: Record<HomeRef["kind"], string> = {
   JOB: "run",
-  APPROVAL: "inbox",
   PLAN: "plan",
   OPPORTUNITY: "opp",
   DEEP_DIVE: "research",
   JOB_DRAFT: "jobdraft",
 };
-const drawerOf = (ref: HomeRef) => (ref.kind === "APPROVAL" ? "inbox" : `${REF_DRAWER[ref.kind]}:${ref.id}`);
+const drawerOf = (ref: HomeRef) => `${REF_DRAWER[ref.kind]}:${ref.id}`;
 
 const INITIALS: Record<AgentKey, string> = {
   CHIEF_OF_STAFF: "CS",

@@ -11,9 +11,10 @@ import { JobStatus } from "./jobs.ts";
 export const HomeQuery = z.object({ projectId: z.uuid().optional() });
 export type HomeQuery = z.infer<typeof HomeQuery>;
 
-// A record the UI can open: run:<id>, approval (via run), plan:<id>, opp:<id>, research:<deepDiveId>, jobdraft:<id>.
+// A record the UI can open: run:<id> (a pending push approval is its JOB: the run drawer holds the gate), plan:<id>,
+// opp:<id>, research:<deepDiveId>, jobdraft:<id>.
 export const HomeRef = z.object({
-  kind: z.enum(["JOB", "APPROVAL", "PLAN", "OPPORTUNITY", "DEEP_DIVE", "JOB_DRAFT"]),
+  kind: z.enum(["JOB", "PLAN", "OPPORTUNITY", "DEEP_DIVE", "JOB_DRAFT"]),
   id: z.uuid(),
 });
 export type HomeRef = z.infer<typeof HomeRef>;
@@ -35,7 +36,7 @@ export const HomeDecisions = z.object({
   approvals: z.int().nonnegative(), // PENDING push/PR approvals, unexpired
   plans: z.int().nonnegative(), // plans awaiting approval
   jobDrafts: z.int().nonnegative(), // READY or NEEDS_REPO job drafts
-  opportunities: z.int().nonnegative(), // NEW opportunities
+  opportunities: z.int().nonnegative(), // OPEN opportunities
   // The most urgent few, newest first, for "Waiting on you".
   top: z
     .array(z.object({ ref: HomeRef, title: z.string().max(300), expiresAt: z.iso.datetime().nullable() }))
