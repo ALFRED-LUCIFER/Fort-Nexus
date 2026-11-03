@@ -10,6 +10,7 @@ export default defineConfig({
     "./src/business/schema.ts",
     "./src/conversations/schema.ts",
     "./src/research/schema.ts",
+    "./src/research/deep/schema.ts",
     "./src/monitoring/schema.ts",
     "./src/plans/schema.ts",
   ],

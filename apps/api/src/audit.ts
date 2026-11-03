@@ -15,6 +15,7 @@ export type AuditEntry = {
     | "notification"
     | "research_watchlist"
     | "research_run"
+    | "research_deep_dive"
     | "connector"
     | "conversation"
     | "action_proposal"
