@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CreateJobRequest } from "./jobs.ts";
+import { CreateDeepDiveRequest, DeepDiveDepth } from "./research-deep.ts";
 
 // EPIC CWV/CXR, text only (FR-CWV-01/04/05/07, FR-CXR-01..07). The model only ever proposes; the server computes
 // every hash and the owner's authenticated click is the only approval (PRD §12.7, §13.8).
@@ -30,7 +31,18 @@ export type CreateThreadRequest = z.infer<typeof CreateThreadRequest>;
 
 // FR-CXR-04: every material claim points at a record NEXUS read itself, with its as-of time.
 export const SourceRef = z.object({
-  kind: z.enum(["JOB", "RUN_EVENT", "APPROVAL", "PULL_REQUEST", "METRIC", "FINDING", "RESEARCH_RUN"]),
+  kind: z.enum([
+    "JOB",
+    "RUN_EVENT",
+    "APPROVAL",
+    "PULL_REQUEST",
+    "METRIC",
+    "FINDING",
+    "RESEARCH_RUN",
+    "DEEP_DIVE",
+    "OPPORTUNITY",
+    "WEB_PAGE",
+  ]),
   id: z.string().max(200),
   label: z.string().max(200),
   asOf: z.iso.datetime({ offset: true }),
@@ -58,6 +70,12 @@ export const Intent = z.discriminatedUnion("kind", [
     compare: z.boolean(),
   }),
   z.strictObject({ kind: z.literal("RESEARCH_SEARCH"), query: z.string().max(200) }),
+  // Becomes a deep-dive proposal card (R1: it spends budget); never starts on its own.
+  z.strictObject({
+    kind: z.literal("RESEARCH_DEEP_DIVE"),
+    question: z.string().max(2000),
+    depth: DeepDiveDepth,
+  }),
   // FR-CXR-07: ambiguous antecedent ("do it", "that one") → ask, never guess.
   z.strictObject({ kind: z.literal("CLARIFY"), question: z.string().max(500) }),
   z.strictObject({ kind: z.literal("UNSUPPORTED"), reason: z.string().max(500) }),
@@ -92,13 +110,12 @@ export const ProposalStatus = z.enum([
 ]);
 export type ProposalStatus = z.infer<typeof ProposalStatus>;
 
-// Wave 1: the only executable action is a typed job request through the existing POST /v1/jobs path.
-export const ProposedAction = z.object({
-  type: z.literal("jobs.create"),
-  request: CreateJobRequest,
-  // What the owner sees before confirming, built by the server from the request (never model text).
-  preview: z.string(),
-});
+// Executable actions are typed requests through existing paths (POST /v1/jobs, POST /v1/research/deep-dives).
+// `preview` is what the owner sees before confirming, built by the server from the request (never model text).
+export const ProposedAction = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("jobs.create"), request: CreateJobRequest, preview: z.string() }),
+  z.object({ type: z.literal("research.deep_dive"), request: CreateDeepDiveRequest, preview: z.string() }),
+]);
 export type ProposedAction = z.infer<typeof ProposedAction>;
 
 export const ActionProposal = z.object({
@@ -112,8 +129,8 @@ export const ActionProposal = z.object({
   status: ProposalStatus,
   expiresAt: z.iso.datetime({ offset: true }),
   decidedAt: z.iso.datetime({ offset: true }).nullable(),
-  // Set only from the created job (truth hierarchy).
-  result: z.object({ jobId: z.uuid() }).nullable(),
+  // Set only from the created job / deep dive (truth hierarchy).
+  result: z.union([z.object({ jobId: z.uuid() }), z.object({ deepDiveId: z.uuid() })]).nullable(),
   error: z.string().nullable(),
   createdAt: z.iso.datetime({ offset: true }),
 });

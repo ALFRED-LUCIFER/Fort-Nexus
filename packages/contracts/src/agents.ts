@@ -23,6 +23,8 @@ export const AgentTool = z.enum([
   "github.read",
   "research.search",
   "research.run",
+  "research.deep_dive",
+  "github.issues.create",
   "business.metrics",
   "monitoring.read",
 ]);
@@ -36,6 +38,10 @@ export const TOOL_RISK: Readonly<Record<AgentTool, RiskTier>> = {
   "github.read": "R0",
   "research.search": "R0",
   "research.run": "R0",
+  // Spends budget (reserved up front) and reads the public web; writes nothing outside NEXUS.
+  "research.deep_dive": "R1",
+  // An external write: always the owner's click on the exact previewed issue.
+  "github.issues.create": "R2",
   "business.metrics": "R0",
   "monitoring.read": "R0",
 };

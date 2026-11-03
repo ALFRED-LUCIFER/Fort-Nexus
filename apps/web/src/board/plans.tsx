@@ -243,6 +243,8 @@ function actionText(a: PlanStepAction, watchlists: Map<string, string>): string 
     return `Research brief · ${watchlists.get(a.watchlistId) ?? `watchlist ${a.watchlistId.slice(0, 8)}`}`;
   if (a.type === "business.sales_summary")
     return `Sales summary · ${a.day} · connector ${a.connectorId.slice(0, 8)}`;
+  if (a.type === "research.deep_dive")
+    return `Deep dive · ${a.request.depth.toLowerCase()} · up to $${a.request.maxCostUsd}`;
   const r = a.request;
   return r.jobType === "RUNNER_DIAGNOSTIC"
     ? `Runner diagnostic · ${r.preset} · read-only`

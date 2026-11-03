@@ -476,7 +476,7 @@ describe("proposals (FR-CWV-05, FR-CXR-05)", () => {
       error: null,
       result: { jobId: expect.any(String) },
     });
-    const job = (await call("GET", `/v1/jobs/${executed.result!.jobId}`)).json();
+    const job = (await call("GET", `/v1/jobs/${(executed.result as { jobId: string }).jobId}`)).json();
     expect(job).toMatchObject({ jobType: "DEV_ISSUE_TO_PR", status: "QUEUED", projectId: home.id });
 
     const twice = await decide(p, "approve");
@@ -488,7 +488,7 @@ describe("proposals (FR-CWV-05, FR-CXR-05)", () => {
     expect(count.rows[0].n).toBe(1);
 
     const detail = (await call("GET", `/v1/conversations/${thread.id}`)).json() as ThreadDetail;
-    expect(detail.thread.subjectJobId).toBe(executed.result!.jobId);
+    expect(detail.thread.subjectJobId).toBe((executed.result as { jobId: string }).jobId);
     expect(detail.proposals).toEqual([expect.objectContaining({ id: p.id, status: "EXECUTED" })]);
     const audits = await sql.query(
       `select action, correlation_id from audit_records where resource_type = 'action_proposal' and resource_id = $1 order by occurred_at`,

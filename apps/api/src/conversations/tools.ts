@@ -93,6 +93,14 @@ export async function answer(intent: Intent, ctx: ToolContext): Promise<Reply> {
       return businessMetric(intent, ctx);
     case "RESEARCH_SEARCH":
       return researchSearch(intent, ctx);
+    // shortcut: wave 5 agent D turns this into a deep-dive proposal card.
+    case "RESEARCH_DEEP_DIVE":
+      return {
+        intent,
+        text: `I can't start a deep dive from Talk yet. ${CAPABILITIES}`,
+        basis: "NONE",
+        sources: [],
+      };
     case "CLARIFY":
       return {
         intent,

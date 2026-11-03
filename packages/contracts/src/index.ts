@@ -9,6 +9,7 @@ export * from "./system.ts";
 export * from "./workspaces.ts";
 export * from "./notifications.ts";
 export * from "./research.ts";
+export * from "./research-deep.ts";
 export * from "./business.ts";
 export * from "./conversations.ts";
 export * from "./monitoring.ts";

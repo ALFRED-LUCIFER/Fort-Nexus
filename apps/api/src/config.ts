@@ -65,6 +65,12 @@ const Env = z.object({
     .min(1)
     .transform((p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p))
     .default(join(homedir(), ".nexus", "ai.json")),
+  // The researcher's web search provider key (docs/runbooks/web-search.md); mode 0600, like ai.json.
+  NEXUS_SEARCH_FILE: z
+    .string()
+    .min(1)
+    .transform((p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p))
+    .default(join(homedir(), ".nexus", "search.json")),
 });
 
 export type Config = {
@@ -81,6 +87,7 @@ export type Config = {
   githubAppFile: string;
   connectorsDir: string;
   aiFile: string;
+  searchFile: string;
   ownerTimezone: string;
 };
 
@@ -121,6 +128,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, inContainer = r
     githubAppFile: e.GITHUB_APP_FILE ?? defaultGithubAppFile(),
     connectorsDir: e.NEXUS_CONNECTORS_DIR,
     aiFile: e.NEXUS_AI_FILE,
+    searchFile: e.NEXUS_SEARCH_FILE,
     ownerTimezone: e.OWNER_TIMEZONE,
   };
 }

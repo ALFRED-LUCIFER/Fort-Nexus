@@ -168,6 +168,9 @@ export function createPlanExecutor(
         );
         if (run.status === "RUNNING") deps.research.start(run.id); // ignored when it is already executing
         await recordSource(plan, step.index, { researchRunId: run.id });
+      } else if (a.type === "research.deep_dive") {
+        // shortcut: unreachable until wave 5 agent D (targetBlock blocks these steps, so no plan is approved).
+        return finish(plan.id, step.index, failed("Deep dives can't run as plan steps yet."));
       } else {
         const res = await getSalesSummary(
           {

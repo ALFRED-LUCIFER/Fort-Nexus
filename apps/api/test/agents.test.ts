@@ -12,6 +12,7 @@ import type {
   Project,
   WorkspaceList,
 } from "@nexus/contracts";
+import { AgentTool } from "@nexus/contracts";
 import {
   CEILING,
   DEFAULT_AGENT_SETTINGS,
@@ -87,6 +88,8 @@ const DEFAULT_RISK = {
   "github.read": "R0",
   "research.search": "R0",
   "research.run": "R0",
+  "research.deep_dive": "R1",
+  "github.issues.create": "R2",
   "business.metrics": "R0",
   "monitoring.read": "R0",
 } as const;
@@ -174,7 +177,7 @@ describe("registry (FR-AGT-07)", () => {
       expect(a.record).toEqual({ stepsSucceeded: 0, stepsFailed: 0, lastActiveAt: null });
     }
     const by = (k: AgentKey) => items.find((a) => a.agent === k)!.effective.settings;
-    expect(by("CHIEF_OF_STAFF").tools).toHaveLength(8);
+    expect(by("CHIEF_OF_STAFF").tools).toEqual([...AgentTool.options]);
     expect(by("DEVELOPER").tools).toEqual(["jobs.read", "jobs.create.issue_run", "github.read"]);
     expect(by("FINANCIAL_ANALYST").tools).toEqual(["business.metrics"]);
     expect(by("PRODUCT").autonomy).toBe("DRAFT");

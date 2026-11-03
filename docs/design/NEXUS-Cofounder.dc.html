@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0B1020;color:#E8ECF5;font-family:Geist,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}button,input{font-family:inherit}a{color:#53E2C1;text-decoration:none}a:hover{color:#E8ECF5}
+input::placeholder{color:#7C86A2}
+@keyframes nxspin{to{transform:rotate(360deg)}}
+@keyframes nxbreath{0%,100%{transform:scale(.82);opacity:.7}50%{transform:scale(1.04);opacity:1}}
+@keyframes nxpulse{0%,100%{opacity:1}50%{opacity:.3}}
+@keyframes nxbar{0%,100%{transform:scaleY(.2)}50%{transform:scaleY(1)}}
+</style>
+</helmet>
+<div style="min-height:100vh;position:relative">
+  <sc-if value="{{ glow }}" hint-placeholder-val="{{ true }}">
+    <div style="position:fixed;inset:0;pointer-events:none;background:radial-gradient(900px 520px at 12% -12%,rgba(83,226,193,.09),transparent 60%),radial-gradient(760px 620px at 104% 26%,rgba(173,156,255,.10),transparent 62%)"></div>
+  </sc-if>
+
+  <header style="position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:14px 24px;background:rgba(11,16,32,.74);backdrop-filter:blur(18px) saturate(1.3);-webkit-backdrop-filter:blur(18px) saturate(1.3);border-bottom:1px solid rgba(255,255,255,.06)">
+    <div style="display:flex;align-items:center;gap:10px">
+      {{ orbMark }}
+      <span style="font:600 13px/1 Geist;letter-spacing:.24em;color:#E8ECF5">NEXUS</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <div style="display:flex;padding:3px;border-radius:12px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.06)">
+        <sc-for list="{{ wsList }}" as="w" hint-placeholder-count="2">
+          <button onClick="{{ w.go }}" style="border:0;border-radius:9px;padding:9px 14px;font:500 12.5px/1 Geist;cursor:pointer;background:{{ w.bg }};color:{{ w.fg }}">{{ w.label }}</button>
+        </sc-for>
+      </div>
+      <span style="font:400 11.5px/1 'Geist Mono',monospace;color:#AEB6CC;padding:9px 10px;border-radius:10px;border:1px solid rgba(255,255,255,.07)">{{ proj }} ▾</span>
+    </div>
+    <div style="flex:1 1 360px;max-width:640px;margin:0 auto;display:flex;align-items:center;gap:10px;height:48px;padding:0 5px 0 16px;border-radius:15px;background:rgba(255,255,255,.045);border:1px solid {{ vbBorder }}">
+      <sc-if value="{{ voiceIdle }}" hint-placeholder-val="{{ true }}">
+        <input value="{{ cmd }}" onChange="{{ setCmd }}" onKeyDown="{{ cmdKey }}" placeholder="Ask your cofounder, or say a command…" style="flex:1;min-width:0;border:0;outline:0;background:transparent;color:#E8ECF5;font:400 14.5px/1 Geist">
+        <span style="font:400 10.5px/1 'Geist Mono',monospace;color:#7C86A2;padding:5px 7px;border-radius:7px;border:1px solid rgba(255,255,255,.08)">⌘K</span>
+      </sc-if>
+      <sc-if value="{{ voiceActive }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1;min-width:0;display:flex;align-items:center;gap:12px">
+          {{ wave }}
+          <span style="font:400 13.5px/1.2 Geist;color:#E8ECF5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ voiceCaption }}</span>
+          <span style="margin-left:auto;font:500 10px/1 'Geist Mono',monospace;letter-spacing:.08em;color:{{ voiceColor }};white-space:nowrap">{{ voiceState }}</span>
+        </div>
+      </sc-if>
+      <button onClick="{{ toggleVoice }}" title="Push to talk" style="width:38px;height:38px;flex:none;border-radius:11px;border:0;cursor:pointer;background:{{ micBg }};color:{{ micFg }};display:flex;align-items:center;justify-content:center">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path></svg>
+      </button>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <div style="display:flex;align-items:center;gap:9px;height:38px;padding:0 12px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)">
+        <span style="width:7px;height:7px;border-radius:50%;background:{{ hostDot }}"></span>
+        <span style="font:500 12.5px/1 Geist;color:#E8ECF5">home-studio</span>
+        <span style="font:400 11px/1 'Geist Mono',monospace;color:#8A93AD">{{ hostSub }}</span>
+      </div>
+      <button style="position:relative;width:38px;height:38px;border-radius:12px;border:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.04);color:#AEB6CC;cursor:pointer;display:flex;align-items:center;justify-content:center">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"></path><path d="M10 20.5a2 2 0 0 0 4 0"></path></svg>
+        <span style="position:absolute;top:-4px;right:-4px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:#F2C27B;color:#0B1020;font:600 10px/17px 'Geist Mono',monospace;text-align:center">{{ bellN }}</span>
+      </button>
+      <button onClick="{{ toggleStop }}" style="height:38px;padding:0 12px;border-radius:12px;border:1px solid {{ stopBd }};background:{{ stopBg }};color:{{ stopFg }};font:500 11px/1 'Geist Mono',monospace;letter-spacing:.08em;cursor:pointer">{{ stopLabel }}</button>
+    </div>
+  </header>
+
+  <div style="position:relative;display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;padding:24px 24px 40px">
+    <main style="flex:1 1 480px;min-width:0;display:flex;flex-direction:column;gap:26px">
+      <section data-screen-label="Brief" style="display:flex;flex-direction:column;gap:12px;padding-top:4px">
+        <span style="font:400 11px/1 'Geist Mono',monospace;letter-spacing:.1em;color:#8A93AD">{{ dateLine }}</span>
+        <h1 style="margin:0;max-width:860px;font:300 clamp(26px,3vw,38px)/1.18 Geist;letter-spacing:-.025em;color:#E8ECF5;text-wrap:pretty">{{ hl.a }}<span style="color:#53E2C1">{{ hl.b }}</span>{{ hl.c }}</h1>
+        <span style="font:400 12px/1.4 'Geist Mono',monospace;color:#8A93AD">{{ hlSub }}</span>
+      </section>
+
+      <section style="display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap">
+          <span style="font:500 11px/1 'Geist Mono',monospace;letter-spacing:.12em;color:#AEB6CC">LIVE · {{ wsName }}</span>
+          <span style="font:400 11px/1 'Geist Mono',monospace;color:#7C86A2">{{ kpiMeta }}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+          <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="4">
+            <div style="padding:16px 16px 14px;border-radius:18px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);display:flex;flex-direction:column;gap:10px;min-width:0">
+              <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+                <span style="font:400 12.5px/1.2 Geist;color:#AEB6CC">{{ k.label }}</span>
+                <span style="font:500 11px/1 'Geist Mono',monospace;padding:4px 7px;border-radius:7px;background:{{ k.db }};color:{{ k.dc }};white-space:nowrap">{{ k.delta }}</span>
+              </div>
+              <span style="font:300 32px/1 Geist;letter-spacing:-.02em;color:#E8ECF5">{{ k.value }}</span>
+              <svg viewBox="0 0 200 40" preserveAspectRatio="none" style="width:100%;height:38px;display:block;overflow:visible"><path d="{{ k.area }}" fill="{{ k.sc }}" opacity="0.10"></path><path d="{{ k.line }}" fill="none" stroke="{{ k.sc }}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"></path></svg>
+              <span style="font:400 11.5px/1.4 Geist;color:#8A93AD;text-wrap:pretty"><span style="color:#AD9CFF">AI ·</span> {{ k.note }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </section>
+
+      <section data-screen-label="Opportunities" style="display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap">
+          <span style="font:500 11px/1 'Geist Mono',monospace;letter-spacing:.12em;color:#AEB6CC">YOUR COFOUNDER NOTICED</span>
+          <span style="font:400 11px/1 'Geist Mono',monospace;color:#7C86A2">ranked by impact × confidence · estimates marked est.</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:12px">
+          <sc-for list="{{ opps }}" as="o" hint-placeholder-count="3">
+            <div style="padding:18px;border-radius:20px;background:rgba(255,255,255,.04);border:1px solid {{ o.bd }};display:flex;flex-direction:column;gap:12px;min-width:0">
+              <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+                <span style="font:500 10.5px/1 'Geist Mono',monospace;letter-spacing:.08em;padding:5px 8px;border-radius:7px;background:{{ o.tb }};color:{{ o.tc }}">{{ o.tag }}</span>
+                <span style="font:400 11px/1 'Geist Mono',monospace;color:#8A93AD">{{ o.conf }}</span>
+              </div>
+              <span style="font:500 16.5px/1.3 Geist;letter-spacing:-.01em;color:#E8ECF5;text-wrap:pretty">{{ o.title }}</span>
+              <span style="font:400 20px/1.1 Geist;letter-spacing:-.01em;color:#53E2C1">{{ o.impact }}</span>
+              <span style="font:400 13px/1.5 Geist;color:#AEB6CC;text-wrap:pretty">{{ o.evidence }}</span>
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <sc-for list="{{ o.agents }}" as="a" hint-placeholder-count="2"><span style="font:400 11px/1 Geist;padding:6px 9px;border-radius:999px;background:rgba(173,156,255,.10);color:#C9BEFF">{{ a }}</span></sc-for>
+              </div>
+              <sc-if value="{{ o.showPv }}" hint-placeholder-val="{{ false }}">
+                <div style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px 12px;padding:12px 14px;border-radius:14px;background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.06);font:400 11.5px/1.4 'Geist Mono',monospace">
+                  <sc-for list="{{ o.rows }}" as="r" hint-placeholder-count="4"><span style="color:#8A93AD">{{ r.k }}</span><span style="color:#E8ECF5">{{ r.v }}</span></sc-for>
+                </div>
+              </sc-if>
+              <div style="margin-top:auto;padding-top:2px">
+                <sc-if value="{{ o.pending }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;gap:6px">
+                    <button onClick="{{ o.explain }}" style="flex:1;height:38px;border-radius:11px;border:1px solid rgba(255,255,255,.10);background:transparent;color:#E8ECF5;font:500 12.5px/1 Geist;cursor:pointer" style-hover="background:rgba(255,255,255,.06)">Explain</button>
+                    <button onClick="{{ o.preview }}" style="flex:1;height:38px;border-radius:11px;border:1px solid rgba(255,255,255,.10);background:{{ o.pvBg }};color:#E8ECF5;font:500 12.5px/1 Geist;cursor:pointer" style-hover="background:rgba(255,255,255,.06)">Preview</button>
+                    <button onClick="{{ o.approve }}" style="flex:1.3;height:38px;border-radius:11px;border:0;background:#53E2C1;color:#06231C;font:600 12.5px/1 Geist;cursor:pointer;white-space:nowrap">{{ o.approveL }}</button>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ o.done }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;align-items:center;gap:8px;height:38px;padding:0 12px;border-radius:11px;background:rgba(83,226,193,.10);font:500 12px/1 'Geist Mono',monospace;color:#53E2C1">✓ {{ o.doneText }}</div>
+                </sc-if>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </section>
+
+      <section data-screen-label="Activity" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px">
+        <div style="padding:18px;border-radius:20px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);display:flex;flex-direction:column;gap:14px;min-width:0">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><span style="font:500 11px/1 'Geist Mono',monospace;letter-spacing:.12em;color:#AEB6CC">AGENT ACTIVITY</span><span style="font:400 11px/1 'Geist Mono',monospace;color:#7C86A2">{{ agentMeta }}</span></div>
+          <sc-for list="{{ agents }}" as="a" hint-placeholder-count="5">
+            <div style="display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:11px;align-items:center">
+              <span style="width:32px;height:32px;border-radius:50%;background:rgba(173,156,255,.13);color:#C9BEFF;font:500 11px/32px 'Geist Mono',monospace;text-align:center">{{ a.ini }}</span>
+              <div style="display:flex;flex-direction:column;gap:3px;min-width:0"><span style="font:500 13px/1.2 Geist;color:#E8ECF5">{{ a.name }}</span><span style="font:400 12px/1.3 Geist;color:#8A93AD;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ a.doing }}</span></div>
+              <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
+                <span style="display:flex;gap:6px;align-items:center;font:400 10.5px/1 'Geist Mono',monospace;color:{{ a.sc }}"><sc-if value="{{ a.live }}" hint-placeholder-val="{{ false }}">{{ liveDot }}</sc-if>{{ a.st }}</span>
+                <span style="font:400 10.5px/1 'Geist Mono',monospace;color:#7C86A2">{{ a.cost }}</span>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="padding:18px;border-radius:20px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);display:flex;flex-direction:column;gap:16px;min-width:0">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><span style="font:500 11px/1 'Geist Mono',monospace;letter-spacing:.12em;color:#AEB6CC">EXECUTION</span><span style="font:400 11px/1 'Geist Mono',monospace;color:#7C86A2">on home-studio</span></div>
+          <sc-for list="{{ runs }}" as="r" hint-placeholder-count="4">
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline"><span style="font:500 13px/1.3 Geist;color:#E8ECF5;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.title }}</span><span style="font:500 11px/1 'Geist Mono',monospace;color:{{ r.sc }};white-space:nowrap">{{ r.pct }}</span></div>
+              <div style="display:flex;gap:3px"><sc-for list="{{ r.segs }}" as="s" hint-placeholder-count="6"><span style="flex:1;height:4px;border-radius:2px;background:{{ s }}"></span></sc-for></div>
+              <span style="font:400 11px/1.3 'Geist Mono',monospace;color:#8A93AD">{{ r.meta }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="padding:18px;border-radius:20px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);display:flex;flex-direction:column;gap:14px;min-width:0">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><span style="font:500 11px/1 'Geist Mono',monospace;letter-spacing:.12em;color:#AEB6CC">RESULTS · THIS WEEK</span><span style="font:400 11px/1 'Geist Mono',monospace;color:#7C86A2">source-verified</span></div>
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 14px">
+            <sc-for list="{{ results }}" as="x" hint-placeholder-count="4">
+              <div style="display:flex;flex-direction:column;gap:5px;min-width:0">
+                <span style="font:300 26px/1 Geist;letter-spacing:-.02em;color:#E8ECF5">{{ x.v }}</span>
+                <span style="font:500 12px/1.3 Geist;color:#AEB6CC">{{ x.k }}</span>
+                <span style="font:400 11.5px/1.35 Geist;color:#8A93AD;text-wrap:pretty">{{ x.d }}</span>
+                <span style="font:400 10.5px/1.3 'Geist Mono',monospace;color:#53E2C1">✓ {{ x.src }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <aside data-screen-label="Cofounder" style="position:{{ cf.pos }};top:{{ cf.top }};right:{{ cf.right }};bottom:{{ cf.bottom }};width:{{ cf.w }};max-width:{{ cf.mw }};height:{{ cf.h }};flex:{{ cf.flex }};display:{{ cf.disp }};z-index:{{ cf.z }};box-shadow:{{ cf.sh }};flex-direction:column;min-width:{{ cf.minw }};border-radius:24px;background:rgba(17,24,44,.82);backdrop-filter:blur(26px) saturate(1.4);-webkit-backdrop-filter:blur(26px) saturate(1.4);border:1px solid rgba(255,255,255,.08);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:12px;padding:16px 16px 14px;border-bottom:1px solid rgba(255,255,255,.06)">
+        {{ orbHead }}
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px">
+          <span style="font:500 15px/1 Geist;color:#E8ECF5">Cofounder</span>
+          <span style="font:400 11px/1.2 'Geist Mono',monospace;color:#8A93AD;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ cfSub }}</span>
+        </div>
+        <button onClick="{{ toggleMode }}" style="border:1px solid rgba(255,255,255,.10);background:transparent;color:#AEB6CC;border-radius:10px;padding:8px 10px;font:500 11.5px/1 Geist;cursor:pointer;white-space:nowrap">{{ modeLabel }}</button>
+        <sc-if value="{{ floating }}" hint-placeholder-val="{{ false }}"><button onClick="{{ closeFloat }}" style="border:0;background:rgba(255,255,255,.06);color:#AEB6CC;border-radius:10px;width:30px;height:30px;cursor:pointer;font:400 15px/1 Geist">×</button></sc-if>
+      </div>
+      <div data-thread="1" ref="{{ threadRef }}" style="flex:1;min-height:0;overflow:auto;padding:18px 16px;display:flex;flex-direction:column;gap:18px">
+        <sc-for list="{{ turns }}" as="m" hint-placeholder-count="4">
+          <div style="display:flex;flex-direction:column;gap:8px;align-items:{{ m.al }}">
+            <span style="font:400 10.5px/1 'Geist Mono',monospace;color:#7C86A2">{{ m.meta }}</span>
+            <sc-if value="{{ m.text }}" hint-placeholder-val="{{ true }}"><div style="max-width:94%;padding:{{ m.pad }};border-radius:16px 16px 6px 16px;background:{{ m.bg }};font:400 14px/1.55 Geist;color:#E8ECF5;text-wrap:pretty">{{ m.text }}</div></sc-if>
+            <sc-if value="{{ m.srcs }}" hint-placeholder-val="{{ false }}"><div style="display:flex;gap:5px;flex-wrap:wrap"><sc-for list="{{ m.srcs }}" as="s" hint-placeholder-count="2"><span style="display:flex;gap:6px;align-items:center;font:400 10.5px/1.2 'Geist Mono',monospace;padding:5px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.08);color:#AEB6CC"><span style="width:6px;height:6px;border-radius:50%;background:{{ s.c }}"></span>{{ s.k }} · {{ s.l }}</span></sc-for></div></sc-if>
+            <sc-if value="{{ m.rec }}" hint-placeholder-val="{{ false }}">
+              <div style="width:100%;padding:14px;border-radius:16px;background:rgba(255,255,255,.04);border:1px solid {{ m.rec.bd }};display:flex;flex-direction:column;gap:9px">
+                <div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><span style="font:500 10px/1 'Geist Mono',monospace;letter-spacing:.08em;padding:4px 7px;border-radius:6px;background:{{ m.rec.tb }};color:{{ m.rec.tc }}">{{ m.rec.tag }}</span><span style="font:400 10.5px/1 'Geist Mono',monospace;color:#8A93AD">{{ m.rec.conf }}</span></div>
+                <span style="font:500 14.5px/1.3 Geist;color:#E8ECF5">{{ m.rec.title }}</span>
+                <span style="font:400 13px/1.2 Geist;color:#53E2C1">{{ m.rec.impact }}</span>
+                <sc-if value="{{ m.rec.pending }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;gap:6px;padding-top:2px">
+                    <button onClick="{{ m.rec.explain }}" style="flex:1;height:34px;border-radius:10px;border:1px solid rgba(255,255,255,.10);background:transparent;color:#E8ECF5;font:500 12px/1 Geist;cursor:pointer">Explain</button>
+                    <button onClick="{{ m.rec.preview }}" style="flex:1;height:34px;border-radius:10px;border:1px solid rgba(255,255,255,.10);background:transparent;color:#E8ECF5;font:500 12px/1 Geist;cursor:pointer">Preview</button>
+                    <button onClick="{{ m.rec.approve }}" style="flex:1;height:34px;border-radius:10px;border:0;background:#53E2C1;color:#06231C;font:600 12px/1 Geist;cursor:pointer">Approve</button>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ m.rec.done }}" hint-placeholder-val="{{ false }}"><span style="font:500 11.5px/1.3 'Geist Mono',monospace;color:#53E2C1">✓ {{ m.rec.doneText }}</span></sc-if>
+              </div>
+            </sc-if>
+            <sc-if value="{{ m.pv }}" hint-placeholder-val="{{ false }}">
+              <div style="width:100%;padding:14px;border-radius:16px;background:rgba(0,0,0,.24);border:1px solid rgba(255,255,255,.08);display:flex;flex-direction:column;gap:10px">
+                <span style="font:500 10.5px/1 'Geist Mono',monospace;letter-spacing:.08em;color:#AD9CFF">EXACTLY WHAT WILL HAPPEN</span>
+                <div style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px 12px;font:400 11.5px/1.4 'Geist Mono',monospace"><sc-for list="{{ m.pv.rows }}" as="r" hint-placeholder-count="4"><span style="color:#8A93AD">{{ r.k }}</span><span style="color:#E8ECF5">{{ r.v }}</span></sc-for></div>
+                <sc-if value="{{ m.pv.pending }}" hint-placeholder-val="{{ true }}"><button onClick="{{ m.pv.approve }}" style="height:36px;border-radius:10px;border:0;background:#53E2C1;color:#06231C;font:600 12.5px/1 Geist;cursor:pointer">{{ m.pv.approveL }}</button></sc-if>
+                <sc-if value="{{ m.pv.done }}" hint-placeholder-val="{{ false }}"><span style="font:500 11.5px/1.3 'Geist Mono',monospace;color:#53E2C1">✓ {{ m.pv.doneText }}</span></sc-if>
+              </div>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+      <div style="flex:none;padding:12px 14px 14px;border-top:1px solid rgba(255,255,255,.06);display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <sc-for list="{{ chips }}" as="c" hint-placeholder-count="3"><button onClick="{{ c.go }}" style="border:1px solid rgba(255,255,255,.09);background:transparent;color:#C9D0E2;border-radius:999px;padding:7px 11px;font:400 12px/1 Geist;cursor:pointer;white-space:nowrap" style-hover="background:rgba(255,255,255,.06)">{{ c.l }}</button></sc-for>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;height:46px;padding:0 5px 0 14px;border-radius:14px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.07)">
+          <input value="{{ cfText }}" onChange="{{ setCfText }}" onKeyDown="{{ cfKey }}" placeholder="{{ cfPh }}" style="flex:1;min-width:0;border:0;outline:0;background:transparent;color:#E8ECF5;font:400 13.5px/1 Geist">
+          <button onClick="{{ toggleVoice }}" style="width:36px;height:36px;border-radius:10px;border:0;background:{{ micBg }};color:{{ micFg }};cursor:pointer;display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path></svg></button>
+          <button onClick="{{ cfSend }}" style="height:36px;padding:0 14px;border-radius:10px;border:0;background:#53E2C1;color:#06231C;font:600 12.5px/1 Geist;cursor:pointer">Send</button>
+        </div>
+        <span style="font:400 10.5px/1.4 'Geist Mono',monospace;color:#7C86A2">{{ cfFoot }}</span>
+      </div>
+    </aside>
+  </div>
+
+  <sc-if value="{{ floating }}" hint-placeholder-val="{{ false }}">
+    <sc-if value="{{ whisper }}" hint-placeholder-val="{{ false }}">
+      <div style="position:fixed;right:108px;bottom:34px;width:min(330px,calc(100vw - 140px));padding:14px 16px;border-radius:18px 18px 6px 18px;background:rgba(17,24,44,.9);backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);border:1px solid rgba(255,255,255,.09);box-shadow:0 20px 60px -20px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:10px;z-index:41">
+        <span style="font:400 10.5px/1 'Geist Mono',monospace;letter-spacing:.08em;color:#AD9CFF">COFOUNDER · JUST NOW</span>
+        <span style="font:400 14px/1.5 Geist;color:#E8ECF5;text-wrap:pretty">{{ whisper.text }}</span>
+        <div style="display:flex;gap:6px"><button onClick="{{ whisper.later }}" style="border:1px solid rgba(255,255,255,.10);background:transparent;color:#AEB6CC;border-radius:10px;padding:8px 12px;font:500 12px/1 Geist;cursor:pointer">Later</button><button onClick="{{ whisper.go }}" style="border:0;background:#53E2C1;color:#06231C;border-radius:10px;padding:8px 12px;font:600 12px/1 Geist;cursor:pointer">Tell me</button></div>
+      </div>
+    </sc-if>
+    <button onClick="{{ toggleFloat }}" title="Cofounder" style="position:fixed;right:24px;bottom:24px;width:68px;height:68px;border-radius:50%;border:1px solid rgba(255,255,255,.10);background:rgba(17,24,44,.85);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:42;box-shadow:0 0 0 6px rgba(83,226,193,.05),0 18px 50px -14px rgba(0,0,0,.7)">{{ orbBig }}</button>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;cofounderMode&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;docked&quot;,&quot;floating&quot;],&quot;default&quot;:&quot;docked&quot;,&quot;tsType&quot;:&quot;'docked'|'floating'&quot;,&quot;section&quot;:&quot;Cofounder&quot;},&quot;workspace&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Business&quot;,&quot;Dev&quot;],&quot;default&quot;:&quot;Business&quot;,&quot;tsType&quot;:&quot;'Business'|'Dev'&quot;,&quot;section&quot;:&quot;Cofounder&quot;},&quot;ambientGlow&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Look&quot;}}">
+class Component extends DCLogic {
+  state = { ws:((this.props||{}).workspace==='Dev')?'dev':'biz', cfMode:(this.props||{}).cofounderMode||'docked', cfOpen:false, wdis:{}, voice:'idle', cmd:'', cfText:'', ap:{}, pv:{}, extra:{biz:[],dev:[]}, tick:0, stopped:false };
+  threadRef = React.createRef();
+  componentDidMount(){ this._iv=setInterval(()=>this.setState(s=>({tick:(s.tick+1)%400})),1800); this.scrollThread(); }
+  componentWillUnmount(){ clearInterval(this._iv); clearTimeout(this._v1); clearTimeout(this._v2); }
+  componentDidUpdate(pp){
+    const p=this.props||{};
+    if(pp.cofounderMode!==p.cofounderMode && p.cofounderMode) this.setState({cfMode:p.cofounderMode,cfOpen:false});
+    if(pp.workspace!==p.workspace && p.workspace) this.setState({ws:p.workspace==='Dev'?'dev':'biz'});
+    if(this._tc!==this._lastTc){ this._lastTc=this._tc; this.scrollThread(); }
+  }
+  scrollThread(){ [40,260,600].forEach(t=>setTimeout(()=>{ const el=this.threadRef.current||document.querySelector('[data-thread]'); if(el) el.scrollTop=el.scrollHeight; },t)); }
+  push(turns,open){ this.setState(s=>{ const ex={...s.extra}; ex[s.ws]=[...ex[s.ws],...turns]; return {extra:ex,cfText:'',...(open&&s.cfMode==='floating'?{cfOpen:true}:{})}; }); this.scrollThread(); }
+  data(ws){
+    const T='#53E2C1',P='#AD9CFF',A='#F2C27B';
+    const tagC={RISK:[A,'rgba(242,194,123,.12)'],OPPORTUNITY:[T,'rgba(83,226,193,.11)'],READY:[T,'rgba(83,226,193,.11)'],OPTIMIZE:[P,'rgba(173,156,255,.13)']};
+    const O=(id,tag,title,short,impact,conf,evidence,agents,approveL,rows,explain,srcs)=>({id,tag,tc:tagC[tag][0],tb:tagC[tag][1],title,short,impact,conf,evidence,agents,approveL,rows,explain,srcs});
+    if(ws==='biz') return {
+      name:'ACME STORE', proj:'Acme Store',
+      hl:['Sales are strong today, but ','checkout is leaking','. One fix recovers most of it.'],
+      hlSub:'prepared 14:32 · 6 sources · 3 decisions waiting on you',
+      kpiMeta:'updated 14:30 GST · partial day',
+      kpis:[['Revenue today','AED 41.9k','+6.4%','up',[18,22,20,26,31,29,35,38,41,40,44],'gross via Stripe · net settles later'],['Orders','184','+12%','up',[9,12,11,15,19,22,21,26,29,31,33],'peak 11:00–13:00 · 61% repeat buyers'],['Checkout failures','11.1%','+6.2 pt','warn',[4,4,5,4,4,5,9,11,12,11,11],'jumped at 11:40, with checkout-api v2.31'],['AI spend · Oct','$62','41% of cap','flat',[10,14,19,24,29,35,40,46,51,57,62],'Developer agent is 71% of spend']],
+      opps:[
+        O('b1','RISK','Restore the 3DS timeout to 8 s','the 3DS timeout','≈ AED 4.1k / day recovered est.','62% confidence','Failures began 11:40 — the same minute checkout-api v2.31 cut the provider timeout from 8 s to 3 s.',['DevOps','Developer'],'Approve fix',[['does','revert timeout · run tests · open draft PR'],['runs on','home-studio · isolated container'],['budget','$3 cap · ~20 min'],['won’t do','deploy — that’s a separate approval'],['success','fail rate under 5% within 2 h of deploy']],'Two signals line up. Failed payments jumped from about 4% to 11.1% at 11:40, and 11 of the 23 are 3DS timeouts. checkout-api v2.31 shipped at 11:38, and commit e41b0a7 lowered the timeout to 3 s. Strong correlation with a clear mechanism — not yet proof. The fix is reversible.',[['observed','Stripe · 23 failures'],['observed','commit e41b0a7'],['inferred','causal link · 62%']]),
+        O('b2','OPPORTUNITY','Win back 61 quiet repeat buyers','the win-back','≈ AED 2.6k / week est.','48% confidence','61 customers with 3+ orders haven’t bought in 45 days. Comparable shops convert 9–14% of these with a personal note.',['Marketer','Support'],'Approve drafts',[['does','draft one personal email · no discount'],['to','61 customers · Acme Store only'],['sends','never on its own — you approve final copy'],['success','orders from this group over 14 days']],'These are your most valuable customers — average 4.2 orders, AED 690 lifetime. They went quiet around the same time delivery times slipped in September. A short, personal note usually beats a discount here. I’ll measure orders from exactly this group for 14 days.',[['observed','Supabase · 61 customers'],['inferred','9–14% benchmark']]),
+        O('b3','OPPORTUNITY','Make payout matching Ledgerly’s next feature','payout matching','14 complaints · 9 threads','55% confidence','Small shops say month-end matching eats a weekend. Ledgr shipped something similar last week; pricing isn’t public.',['Researcher','PM'],'Approve PRD',[['does','short PRD + 3 GitHub issues in ledgerly-app'],['risk','none · docs and issues only'],['next','you review before any build starts']],'The same complaint shows up in 14 support tickets and 9 forum threads: matching Stripe payouts to orders by hand. Ledgr’s launch confirms demand but leaves room — they target accountants, you target owners. This is a hypothesis worth a 1-week validation, not a bet.',[['observed','helpdesk · 14 tickets'],['observed','Ledgr launch page'],['inferred','demand signal']])
+      ],
+      thread:[{t:'14:31',text:'Good afternoon. Best Tuesday in six weeks — 184 orders and AED 41.9k gross.',srcs:[['observed','Supabase · Stripe · 14:30']]},{t:'14:31',text:'One thing needs you: checkout failures tripled after the 11:38 deploy. I’d fix that first.',rec:'b1'},{t:'14:32',text:'When you have a minute — 61 loyal customers have gone quiet. I drafted a win-back. Nothing is sent.',rec:'b2'}],
+      chips:[['Why is checkout failing?','x:b1'],['What should I do this week?','Three moves, in order: restore the 3DS timeout today, approve the win-back drafts this week, and let me scope payout matching next week. Together they target about AED 6–7k a week — estimates, not promises.',[['inferred','from 3 opportunities']]],['Compare with last Tuesday','Orders +12% and gross +6.4%, but failed payments are 23 vs 9. Without the checkout leak, today would be about +11% gross.',[['observed','Supabase · Stripe'],['inferred','leak-adjusted']]]],
+      agents:[['FA','Financial analyst','Watching payment failure rate',1,'$0.12'],['MK','Marketer','Drafting win-back · 61 recipients',1,'$0.31'],['AR','Researcher','Scanning Ledgr launch + pricing',1,'$0.22'],['SP','Support','4 tickets triaged · 2 drafts ready',0,'$0.08'],['CS','Chief of Staff','Ranking your 3 decisions',1,'$0.05']],
+      runs:[['Win-back email draft','Marketer · drafting copy',4,2,'run',40],['Competitor scan · Ledgr','Researcher · 9 of 14 sources',4,2,'run',58],['Payment failure watch','Financial analyst · hourly · next 15:00',3,3,'ok',100],['Weekly revenue report','Finance · scheduled 18:00',4,0,'queued',0]],
+      results:[['AED 6.4k','recovered','failed-payment retries you approved Thu','Stripe'],['11.5 h','saved','23 support replies drafted, you approved all','helpdesk log'],['+18%','repeat orders','after the loyalty note you approved','Supabase · 14 days'],['9.8×','return on AI spend','AED 2.2k AI cost vs AED 21.6k attributed','billing + orders']],
+      whisper:'Checkout failures tripled after the 11:38 deploy. Want the short version?', whisperAct:'b1',
+      ph:'Ask about Acme Store…', foot:'answers from Acme Store sources only · customer data stays in this workspace · sends need your approval'
+    };
+    return {
+      name:'STOREFRONT-WEB', proj:'storefront-web',
+      hl:['Two things are ','ready for you',', and one test keeps flaking.'],
+      hlSub:'prepared 14:32 · 3 repos · 14 runs today · 3 decisions waiting on you',
+      kpiMeta:'7-day window · home-studio',
+      kpis:[['Issue → review-ready','38 min','−22%','up',[52,50,49,47,48,45,44,42,40,39,38].map(x=>60-x),'median, 7 days · was 49 min'],['CI pass rate','94%','−3 pt','warn',[99,98,99,99,97,98,96,95,94,95,94],'checkout-api 3DS test flaking'],['Agent runs today','14','2 live','flat',[1,2,3,4,6,7,8,10,11,13,14],'11 passed · 1 failed · 2 running'],['Waiting on you','3','decisions','warn',[1,1,2,1,2,3,2,2,3,3,3],'#42 push · #118 review · migration 0042']],
+      opps:[
+        O('d1','READY','Open a draft PR for #42','#42','Unblocks multi-currency checkout','verified','148 of 148 tests pass, lint clean, 0 secrets found. Paused right before the push.',['Developer','QA'],'Approve push',[['repo','acme-labs/storefront-web'],['branch','nx/42-cart-rounding → main'],['reviewer','@lina-k · default'],['never','merges — main is protected'],['hash','7f3a…c91 · expires 14:58']],'Rounding now happens once at cart total, per currency minor unit. JPY and KWD carts can shift by one minor unit; no payment code changed and nothing is deployed. Five files, +142 −38, one new test file with six cases.',[['observed','run r_8f21'],['observed','test report · 148/148']]),
+        O('d2','RISK','Quarantine the flaky 3DS test','the flaky test','CI back to ~99% est.','71% confidence','checkout-api failed 3 of the last 8 runs on the same test — and passed on retry every time.',['QA','DevOps'],'Approve fix',[['does','tag test flaky · add 5 s retry · open issue'],['scope','checkout-api tests only'],['won’t do','touch payment logic'],['success','3 green runs in a row']],'The test calls the real 3DS sandbox with a 3 s timeout — the same setting that’s hurting production. It fails when the sandbox is slow, not when code is wrong. Quarantining it unblocks CI; the real fix is the timeout itself.',[['observed','CI · 3 of 8 failed'],['inferred','sandbox latency · 71%']]),
+        O('d3','OPTIMIZE','Adopt Agent SDK session forking','session forking','≈ 400 lines removed est.','70% confidence','Released today: native session fork + permission hooks could replace NEXUS’s own pause/resume code.',['Researcher','Developer'],'Approve spike',[['does','2-hour spike on a branch · write findings'],['budget','$2 cap'],['won’t do','change the running NEXUS'],['success','pause/resume tests pass on SDK']],'NEXUS keeps ~400 lines to pause agents at approval gates and resume them. The new SDK does this natively, with permission hooks. Lower maintenance and fewer edge cases — if the hooks behave as documented. A spike will tell.',[['observed','SDK release notes'],['inferred','line estimate']])
+      ],
+      thread:[{t:'14:31',text:'#42 is ready for review — 5 files changed and 148 tests passed. No PR has been opened yet.',srcs:[['observed','run r_8f21 · test report']],rec:'d1'},{t:'14:32',text:'checkout-api CI is red again — same 3DS test, third time today. I think it’s flaky, not broken.',rec:'d2'}],
+      chips:[['What’s waiting on me?','Three things: the #42 push (about 5 minutes), PR #118 review on GitHub, and migration 0042 for shop-prod. I’d do #42 first — it unblocks checkout.',[['observed','approval queue']]],['Summarize today’s runs','14 runs: 11 passed, 1 failed on the flaky 3DS test, 2 still running. Median issue-to-review is 38 minutes. Spend so far $4.10.',[['observed','run history']]],['Explain #42','x:d1']],
+      agents:[['DV','Developer','#57 CSV export · implementing',1,'$0.31'],['QA','QA engineer','Reviewing PR #118 · 3 scenarios',1,'$0.18'],['DO','DevOps / SRE','Triaging checkout-api CI',1,'$0.40'],['AR','Researcher','Reading Agent SDK release',0,'$0.09'],['CS','Chief of Staff','Planning Ledgerly 2.0',1,'$0.05']],
+      runs:[['#57 CSV export on invoices','Developer · implement · ledgerly-app',6,2,'run',46],['#42 cart rounding','Developer · paused before push',6,5,'wait',83],['QA · PR #118 wishlist merge','QA · 3 of 3 scenarios passed',6,6,'ok',100],['#44 LCP fix on mobile','Developer · queued next · ~15 min',6,0,'queued',0]],
+      results:[['3','PRs merged','0 regressions after 7 days','GitHub + Sentry'],['38 min','issue → review-ready','down from 49 min last week','run history'],['148','tests added','coverage 84.1%, up 2.3 pt','CI'],['$2.90','per merged PR','$41 dev AI spend this week','billing']],
+      whisper:'#42 is ready and waiting on you. Open the draft PR?', whisperAct:'d1',
+      ph:'Ask about storefront-web…', foot:'runs execute on home-studio, never this browser · pushes and merges need on-screen approval'
+    };
+  }
+  renderVals(){
+    const S=this.state, p=this.props||{}, v={}, h=React.createElement;
+    const D=this.data(S.ws), T='#53E2C1', P='#AD9CFF', A='#F2C27B';
+    const orb=(sz,live)=>h('span',{style:{position:'relative',width:sz,height:sz,flex:'none',display:'inline-block',borderRadius:'50%',boxShadow:`0 0 ${Math.round(sz*0.6)}px rgba(83,226,193,.16)`}},
+      h('span',{style:{position:'absolute',inset:0,borderRadius:'50%',background:'conic-gradient(from 0deg,#53E2C1,#AD9CFF,#3A5BD9,#53E2C1)',animation:`nxspin ${live?2.4:7}s linear infinite`,filter:`blur(${Math.max(0.5,sz*0.04)}px)`}}),
+      h('span',{style:{position:'absolute',inset:Math.round(sz*0.14),borderRadius:'50%',background:'radial-gradient(circle at 35% 30%,#1B2647,#0B1020 72%)'}}),
+      h('span',{style:{position:'absolute',inset:Math.round(sz*0.36),borderRadius:'50%',background:'radial-gradient(circle,#B8FFF0,#53E2C1 60%)',animation:`nxbreath ${live?1.1:3.6}s ease-in-out infinite`}}));
+    const live=S.voice!=='idle';
+    v.orbMark=orb(22,live); v.orbHead=orb(34,live); v.orbBig=orb(44,live);
+    v.liveDot=h('span',{style:{width:6,height:6,borderRadius:'50%',background:T,animation:'nxpulse 1.6s infinite',display:'inline-block'}});
+    const wc=S.voice==='listening'?'#FF8A7A':P;
+    v.wave=h('span',{style:{display:'flex',gap:3,alignItems:'center',height:22,flex:'none'}},Array.from({length:16},(_, i)=>h('span',{key:i,style:{width:3,height:22,borderRadius:2,background:wc,animation:`nxbar ${0.5+((i*37)%7)/10}s ease-in-out ${i*0.04}s infinite`,transformOrigin:'center'}})));
+    v.glow=p.ambientGlow!==false;
+    v.wsList=[['dev','Dev'],['biz','Business']].map(([id,label])=>({label,go:()=>this.setState({ws:id,cmd:''}),bg:S.ws===id?'rgba(83,226,193,.14)':'transparent',fg:S.ws===id?'#E8ECF5':'#8A93AD'}));
+    v.proj=D.proj; v.wsName=D.name;
+    v.hostDot=S.stopped?'#FF8A7A':T; v.hostSub=S.stopped?'stopped · nothing running':'online · 2/3 workers';
+    v.toggleStop=()=>this.setState(s=>({stopped:!s.stopped}));
+    v.stopLabel=S.stopped?'RESUME':'STOP'; v.stopBd=S.stopped?'#FF8A7A':'rgba(255,138,122,.35)'; v.stopBg=S.stopped?'rgba(255,138,122,.16)':'transparent'; v.stopFg='#FF8A7A';
+    v.bellN=String(Object.keys(D.opps).length-D.opps.filter(o=>S.ap[o.id]).length+1);
+    v.cmd=S.cmd; v.setCmd=e=>this.setState({cmd:e.target.value});
+    const ask=q=>{ if(!q) return; this.push([{me:1,via:'text',t:'now',text:q},{t:'now',text:`On it — I’ll answer from ${D.proj} sources only and mark anything I infer.`,srcs:[['pending','working · home-studio']]}],true); this.setState({cmd:''}); };
+    v.cmdKey=e=>{ if(e.key==='Enter') ask(S.cmd.trim()); };
+    v.voiceIdle=S.voice==='idle'; v.voiceActive=!v.voiceIdle;
+    const VQ=S.ws==='biz'?'What’s hurting checkout today?':'What’s ready for me to review?';
+    v.voiceCaption=S.voice==='listening'?`“${VQ}”`:S.ws==='biz'?'Checking Stripe failures against today’s deploys…':'Checking runs and approvals on home-studio…';
+    v.voiceState=S.voice==='listening'?'LISTENING':'THINKING'; v.voiceColor=S.voice==='listening'?'#FF8A7A':P;
+    v.vbBorder=S.voice==='listening'?'rgba(255,138,122,.45)':S.voice==='thinking'?'rgba(173,156,255,.45)':'rgba(255,255,255,.08)';
+    v.micBg=S.voice==='listening'?'#FF8A7A':'rgba(255,255,255,.07)'; v.micFg=S.voice==='listening'?'#1A0B08':'#E8ECF5';
+    const opp=id=>D.opps.find(o=>o.id===id);
+    const srcV=a=>a?a.map(([k,l])=>({k,l,c:k==='observed'?T:k==='inferred'?A:'#7C86A2'})):null;
+    const explain=id=>{ const o=opp(id); this.push([{me:1,via:'text',t:'now',text:`Explain ${o.short}.`},{t:'now',text:o.explain,srcs:o.srcs}],true); };
+    const preview=id=>{ const was=S.pv[id]; this.setState(s=>({pv:{...s.pv,[id]:!s.pv[id]}})); if(!was) this.push([{me:1,via:'text',t:'now',text:`Preview ${o2(id)}.`},{t:'now',pv:id}],true); };
+    const o2=id=>opp(id).short;
+    const approve=id=>{ if(S.ap[id]) return; const n=Object.keys(S.ap).length; const run='r_8f3'+(n+1); this.setState(s=>({ap:{...s.ap,[id]:{run,t:'14:3'+(4+n)}}})); this.push([{t:'now',text:`Approved. Queued on home-studio as ${run}. I’ll report back with evidence — nothing ships without you.`,srcs:[['observed','audit · approval bound to preview']]}],true); };
+    v.toggleVoice=()=>{ clearTimeout(this._v1); clearTimeout(this._v2); if(S.voice!=='idle'){ this.setState({voice:'idle'}); return; } this.setState({voice:'listening'}); this._v1=setTimeout(()=>this.setState({voice:'thinking'}),2200); this._v2=setTimeout(()=>{ const id=S.ws==='biz'?'b1':'d1', o=opp(id); this.setState({voice:'idle'}); this.push([{me:1,via:'voice',t:'now',text:VQ},{t:'now',text:o.explain,srcs:o.srcs,rec:id}],true); },3800); };
+    v.dateLine='TUESDAY 27 OCTOBER · 14:32 GST · YOUR COFOUNDER’S READ';
+    v.hl={a:D.hl[0],b:D.hl[1],c:D.hl[2]}; v.hlSub=D.hlSub; v.kpiMeta=D.kpiMeta;
+    const spark=arr=>{ const mn=Math.min(...arr), mx=Math.max(...arr), r=mx-mn||1; const pts=arr.map((y,i)=>[i/(arr.length-1)*200, 36-((y-mn)/r)*30]); const line='M'+pts.map(q=>q[0].toFixed(1)+','+q[1].toFixed(1)).join(' L'); return {line,area:line+' L200,40 L0,40 Z'}; };
+    v.kpis=D.kpis.map(([label,value,delta,tone,arr,note])=>({label,value,delta,note,...spark(arr),sc:tone==='warn'?A:tone==='up'?T:P,dc:tone==='warn'?A:tone==='up'?T:'#AEB6CC',db:tone==='warn'?'rgba(242,194,123,.12)':tone==='up'?'rgba(83,226,193,.10)':'rgba(255,255,255,.06)'}));
+    const kv=a=>a.map(([k,v2])=>({k,v:v2}));
+    v.opps=D.opps.map(o=>{ const ap=S.ap[o.id]; return {...o,rows:kv(o.rows),showPv:!!S.pv[o.id]&&!ap,pvBg:S.pv[o.id]?'rgba(255,255,255,.08)':'transparent',pending:!ap,done:!!ap,doneText:ap?`Approved ${ap.t} · ${ap.run} queued`:'',bd:ap?'rgba(83,226,193,.30)':'rgba(255,255,255,.08)',explain:()=>explain(o.id),preview:()=>preview(o.id),approve:()=>approve(o.id)}; });
+    v.agentMeta=D.agents.filter(a=>a[3]).length+' live · '+D.agents.length+' assigned';
+    v.agents=D.agents.map(([ini,name,doing,lv,cost])=>({ini,name,doing,live:!!lv,st:lv?'live':'idle',sc:lv?T:'#7C86A2',cost:cost+' today'}));
+    const apRuns=D.opps.filter(o=>S.ap[o.id]).map(o=>[o.title,o.agents.join(' + ')+' · '+S.ap[o.id].run+' · queued',6,0,'queued',0]);
+    v.runs=apRuns.concat(D.runs).map(([title,meta,n,d,st,pct])=>{ const pc=st==='run'?Math.min(94,pct+S.tick):pct; const dd=st==='run'?Math.max(d,Math.floor(pc/100*n)):d; return {title,meta,segs:Array.from({length:n},(_, i)=>i<dd?(st==='wait'?(i===n-2?A:T):T):(i===dd&&st==='run'?'rgba(83,226,193,.45)':i===dd&&st==='wait'?A:'rgba(255,255,255,.08)')),pct:st==='ok'?'done':st==='queued'?'queued':st==='wait'?'needs you':pc+'%',sc:st==='wait'?A:st==='queued'?'#8A93AD':T}; });
+    v.results=D.results.map(([v2,k,d,src])=>({v:v2,k,d,src}));
+    const turnsRaw=D.thread.concat(S.extra[S.ws]||[]);
+    this._tc=S.ws+turnsRaw.length;
+    v.turns=turnsRaw.map(m=>{ const rec=m.rec?opp(m.rec):null, pvo=m.pv?opp(m.pv):null; const apR=rec&&S.ap[rec.id], apP=pvo&&S.ap[pvo.id];
+      return { al:m.me?'flex-end':'flex-start', meta:m.me?`You · ${m.via} · ${m.t}`:`Cofounder · ${m.t}`, text:m.text||null, pad:m.me?'10px 14px':'0', bg:m.me?'rgba(255,255,255,.07)':'transparent', srcs:srcV(m.srcs),
+        rec:rec?{tag:rec.tag,tc:rec.tc,tb:rec.tb,conf:rec.conf,title:rec.title,impact:rec.impact,pending:!apR,done:!!apR,doneText:apR?`approved ${apR.t} · ${apR.run}`:'',bd:apR?'rgba(83,226,193,.3)':'rgba(255,255,255,.08)',explain:()=>explain(rec.id),preview:()=>preview(rec.id),approve:()=>approve(rec.id)}:null,
+        pv:pvo?{rows:kv(pvo.rows),pending:!apP,done:!!apP,approveL:pvo.approveL,approve:()=>approve(pvo.id),doneText:apP?`approved ${apP.t} · ${apP.run} queued`:''}:null }; });
+    v.chips=D.chips.map(([l,a,srcs])=>({l,go:()=>{ if(a.indexOf('x:')===0) explain(a.slice(2)); else this.push([{me:1,via:'text',t:'now',text:l},{t:'now',text:a,srcs}],true); }}));
+    v.cfText=S.cfText; v.setCfText=e=>this.setState({cfText:e.target.value});
+    v.cfSend=()=>ask((this.state.cfText||'').trim()); v.cfKey=e=>{ if(e.key==='Enter') v.cfSend(); };
+    v.cfPh=D.ph; v.cfFoot=D.foot;
+    const pend=D.opps.filter(o=>!S.ap[o.id]).length;
+    v.cfSub=(S.voice!=='idle'?'listening · mic on this Mac':`watching ${D.proj} · ${pend} decision${pend===1?'':'s'} waiting`);
+    const fl=S.cfMode==='floating';
+    v.floating=fl;
+    v.cf=fl?{pos:'fixed',top:'auto',right:'24px',bottom:'108px',w:'min(410px,calc(100vw - 48px))',mw:'none',h:'min(640px,calc(100vh - 150px))',flex:'none',disp:S.cfOpen?'flex':'none',z:'40',sh:'0 30px 90px -20px rgba(0,0,0,.7)',minw:'0'}:{pos:'sticky',top:'92px',right:'auto',bottom:'auto',w:'auto',mw:'420px',h:'max(560px,calc(100vh - 116px))',flex:'0 1 360px',disp:'flex',z:'1',sh:'none',minw:'320px'};
+    v.modeLabel=fl?'Dock':'Float';
+    v.toggleMode=()=>this.setState(s=>({cfMode:s.cfMode==='floating'?'docked':'floating',cfOpen:s.cfMode!=='floating'}));
+    v.closeFloat=()=>this.setState({cfOpen:false});
+    v.toggleFloat=()=>this.setState(s=>({cfOpen:!s.cfOpen,wdis:{...s.wdis,[s.ws]:1}}));
+    v.whisper=fl&&!S.cfOpen&&!S.wdis[S.ws]&&!S.ap[D.whisperAct]?{text:D.whisper,later:()=>this.setState(s=>({wdis:{...s.wdis,[s.ws]:1}})),go:()=>{ this.setState(s=>({wdis:{...s.wdis,[s.ws]:1},cfOpen:true})); explain(D.whisperAct); }}:null;
+    return v;
+  }
+}
+</script>
+</body>
+</html>

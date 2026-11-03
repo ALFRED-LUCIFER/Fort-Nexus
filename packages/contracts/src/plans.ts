@@ -2,6 +2,7 @@ import { z } from "zod";
 import { AgentKey, type AgentTool } from "./agents.ts";
 import { SourceRef } from "./conversations.ts";
 import { CreateJobRequest } from "./jobs.ts";
+import { CreateDeepDiveRequest } from "./research-deep.ts";
 
 // EPIC AGT FR-AGT-01 (Chief of Staff planner) + FR-AGT-09 (handoff contracts), PRD §11.7. The model drafts a typed plan;
 // the owner approves its exact hash; steps run only through existing typed paths, one at a time; a step succeeds only
@@ -10,6 +11,11 @@ import { CreateJobRequest } from "./jobs.ts";
 export const PlanStepAction = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("jobs.create"), request: CreateJobRequest }),
   z.strictObject({ type: z.literal("research.run"), watchlistId: z.uuid() }),
+  // The plan's project is the dive's project; succeeds only when the dive is COMPLETED with a report.
+  z.strictObject({
+    type: z.literal("research.deep_dive"),
+    request: CreateDeepDiveRequest.omit({ projectId: true }),
+  }),
   z.strictObject({
     type: z.literal("business.sales_summary"),
     connectorId: z.uuid(),
@@ -22,11 +28,13 @@ export type PlanStepAction = z.infer<typeof PlanStepAction>;
 export const toolForAction = (a: PlanStepAction): AgentTool =>
   a.type === "research.run"
     ? "research.run"
-    : a.type === "business.sales_summary"
-      ? "business.metrics"
-      : a.request.jobType === "DEV_ISSUE_TO_PR"
-        ? "jobs.create.issue_run"
-        : "jobs.create.diagnostic";
+    : a.type === "research.deep_dive"
+      ? "research.deep_dive"
+      : a.type === "business.sales_summary"
+        ? "business.metrics"
+        : a.request.jobType === "DEV_ISSUE_TO_PR"
+          ? "jobs.create.issue_run"
+          : "jobs.create.diagnostic";
 
 export const MAX_PLAN_STEPS = 8;
 
@@ -35,7 +43,7 @@ export type PlanStepStatus = z.infer<typeof PlanStepStatus>;
 
 // FR-AGT-09: what a finished step hands on. Built by the server from the source record only.
 export const StepArtifact = z.object({
-  kind: z.enum(["job", "research_run", "metric"]),
+  kind: z.enum(["job", "research_run", "deep_dive", "metric"]),
   id: z.string(),
   evidence: z.array(SourceRef).min(1),
   verifiedAt: z.iso.datetime({ offset: true }),

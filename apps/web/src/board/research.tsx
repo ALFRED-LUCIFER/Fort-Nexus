@@ -51,6 +51,8 @@ const SKIP: Record<SkipReason, string> = {
   TOO_LARGE: "Larger than 2 MB",
   INVALID_FEED: "Not an RSS or Atom feed",
   RATE_LIMITED: "Source asked NEXUS to slow down",
+  BLOCKED_HOST: "Points at a private network address, not fetched",
+  UNSUPPORTED_TYPE: "Not a web page or feed",
 };
 
 const STATUS: Record<ResearchRun["status"], string> = {

@@ -462,6 +462,9 @@ export async function decideProposal(
 
   let finished: ProposalRow;
   try {
+    // shortcut: wave 5 agent D executes research.deep_dive proposals; nothing creates one before that lands.
+    if (decided.action.type !== "jobs.create")
+      throw new HttpError(409, "CONFLICT", "Deep-dive proposals can't run yet.");
     const job = await createJob(db, {
       ownerId: input.ownerId,
       idempotencyKey: `proposal:${decided.id}`,

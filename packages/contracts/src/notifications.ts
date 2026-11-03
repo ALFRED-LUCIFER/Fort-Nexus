@@ -30,6 +30,9 @@ export const Notification = z.object({
     approvalId: z.uuid().nullable(),
     incidentId: z.uuid().nullable().optional(), // EPIC MON incidents (P1)
     planId: z.uuid().nullable().optional(), // EPIC AGT Chief of Staff plans (P1)
+    researchRunId: z.uuid().nullable().optional(), // FR-RES-08 brief ready (P1 wave 5)
+    deepDiveId: z.uuid().nullable().optional(), // RESEARCH_DEEP_DIVE finished (P1 wave 5)
+    opportunityId: z.uuid().nullable().optional(), // FR-RES-10 opportunity noticed (P1 wave 5)
   }),
   status: NotificationStatus,
   createdAt: z.iso.datetime(),

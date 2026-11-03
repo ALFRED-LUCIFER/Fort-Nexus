@@ -126,6 +126,8 @@ function targetBlock(t: Targets, a: PlanStepAction): string | null {
     return t.watchlists.has(a.watchlistId) ? null : "unknown watchlist: it isn't in this project";
   if (a.type === "business.sales_summary")
     return t.connectors.has(a.connectorId) ? null : "unknown business connector: it isn't in this project";
+  // shortcut: wave 5 agent D makes deep dives plannable; until then a drafted one blocks the plan.
+  if (a.type === "research.deep_dive") return "deep dives can't be planned yet";
   const r = a.request;
   if (r.projectId !== t.scope.projectId) return "the job targets another project";
   if (r.runnerId) return "plans don't pin a runner";

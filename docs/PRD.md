@@ -178,6 +178,26 @@ Other drawers: **Inbox** (tabs All, Approvals, Failures, Blocked, Business, Secu
 
 **Implementation notes:** the board must also have a non-canvas, keyboard- and screen-reader-friendly path (list view per zone) to satisfy WCAG 2.2 AA; at phone width the board collapses to the mobile layout in §8 instead of a scaled canvas.
 
+### D.4 Cofounder home (adopted 2026-11-03)
+
+**Source:** `docs/design/NEXUS-Cofounder.dc.html`, imported from the same Claude Design project. The owner adopted it as the target **Home**. The v2 board, its zones and its drawers (§D.3) remain the detail views.
+
+- **Tokens:** the Cofounder file uses its own dark navy palette and Geist fonts. Implement it with the NEXUS v2 tokens and typography (§D.1), not its literal colors, so the product has one design system.
+- **Demo data:** all data in it is demo data, as in v2.
+
+| Area | Contents in design | Requirements |
+|---|---|---|
+| **Brief headline** | Date line, one-sentence read of the day with the key phrase highlighted, "prepared HH:MM · N sources · N decisions waiting" | FR-INB-07, FR-AWA-06 |
+| **Live KPIs** | 4 cards per workspace: value, delta chip, sparkline, an "AI ·" note (labelled inference) | FR-BIZ-*, FR-OBS-*, FR-DATA-07 |
+| **"Your cofounder noticed"** | Ranked cards: kind tag (Risk / Opportunity / Ready / Optimize), confidence, title, impact "est.", evidence line, agent chips, **Explain / Preview / Approve** | FR-NTF-13, FR-RES-10, FR-BIZ-08, FR-CXR-09 |
+| **Preview** | "Exactly what will happen" rows (does · runs on · budget · won't do · success). Approval binds to the previewed hash | §13.8, C-09 |
+| **Agent activity** | Per agent: what it is doing now, live/idle, cost today | FR-AGT-*, FR-SEC-08 |
+| **Execution** | Runs as segmented stage bars with %, "needs you", queued | FR-RUN-*, FR-OBS-01 |
+| **Results · this week** | Source-verified outcomes (recovered, hours saved, return on AI spend), each with its source | FR-INB-07, truth hierarchy |
+| **Cofounder panel** | Docked or floating; thread with observed / inferred source chips, recommendation and preview cards inline, suggestion chips, text + mic + Send, scope footer ("answers from <project> sources only") | FR-CWV-*, FR-CXR-*, FR-NTF-12 (whisper "Later / Tell me") |
+
+**Deviation from the design:** confidence is shown as the LOW / MEDIUM / HIGH label (§9 RES: scores are triage aids, not probabilities), not as a percentage. P1 wave 5 builds the opportunity cards (`docs/specs/p1-wave-5-researcher.md`); the rest of the Cofounder home is a later wave.
+
 ## 1. Executive summary
 
 

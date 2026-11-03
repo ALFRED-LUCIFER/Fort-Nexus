@@ -6,6 +6,11 @@ import {
   HealthUrl,
   TriggerRequest,
   BriefSchedule,
+  CreateDeepDiveRequest,
+  DomainName,
+  PlanStepAction,
+  ProposedAction,
+  TOOL_RISK,
   ChangesetFile,
   Intent,
   QualifiedTable,
@@ -221,5 +226,60 @@ describe("P1 wave 3 contracts", () => {
     };
     expect(MetricDictionary.safeParse(d).success).toBe(false);
     expect(MetricDictionary.safeParse({ ...d, orders: { ...d.orders, idColumn: "id" } }).success).toBe(true);
+  });
+});
+
+describe("researcher (P1 wave 5)", () => {
+  it("normalises domains and rejects URLs, ports and bare labels", () => {
+    expect(DomainName.parse(" Docs.Anthropic.com ")).toBe("docs.anthropic.com");
+    for (const bad of [
+      "https://example.com",
+      "example.com:443",
+      "example.com/x",
+      "localhost",
+      "-a.com",
+      "a..com",
+    ])
+      expect(DomainName.safeParse(bad).success).toBe(false);
+  });
+
+  it("bounds a deep dive request and defaults depth and seeds", () => {
+    const ok = CreateDeepDiveRequest.parse({
+      projectId: PID,
+      question: "What changed in agent SDKs?",
+      maxCostUsd: 2,
+    });
+    expect(ok).toMatchObject({ depth: "STANDARD", findingIds: [] });
+    expect(
+      CreateDeepDiveRequest.safeParse({ projectId: PID, question: "short", maxCostUsd: 2 }).success,
+    ).toBe(false);
+    expect(
+      CreateDeepDiveRequest.safeParse({
+        projectId: PID,
+        question: "What changed in agent SDKs?",
+        maxCostUsd: 51,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rates the new tools and maps the deep-dive step to its tool", () => {
+    expect(TOOL_RISK["research.deep_dive"]).toBe("R1");
+    expect(TOOL_RISK["github.issues.create"]).toBe("R2");
+    const step = PlanStepAction.parse({
+      type: "research.deep_dive",
+      request: { question: "Who competes with payout matching?", maxCostUsd: 1 },
+    });
+    expect(toolForAction(step)).toBe("research.deep_dive");
+  });
+
+  it("accepts a deep-dive proposal only with a full, typed request", () => {
+    const request = { projectId: PID, question: "What changed in agent SDKs?", maxCostUsd: 2 };
+    expect(ProposedAction.safeParse({ type: "research.deep_dive", request, preview: "p" }).success).toBe(
+      true,
+    );
+    expect(
+      ProposedAction.safeParse({ type: "research.deep_dive", request: { ...request, sh: "x" }, preview: "p" })
+        .success,
+    ).toBe(false);
   });
 });

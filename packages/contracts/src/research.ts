@@ -157,6 +157,10 @@ export const SkipReason = z.enum([
   "TOO_LARGE",
   "INVALID_FEED",
   "RATE_LIMITED",
+  // The host resolves to a private, loopback, link-local or otherwise non-public address (SSRF guard, FR-RES-12).
+  "BLOCKED_HOST",
+  // Not HTML, plain text or a feed (e.g. PDF, images).
+  "UNSUPPORTED_TYPE",
 ]);
 export type SkipReason = z.infer<typeof SkipReason>;
 

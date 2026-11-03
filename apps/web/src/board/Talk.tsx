@@ -355,11 +355,16 @@ function ProposalCard({
     },
   });
   const card = CARD[p.status];
-  const { request } = p.action;
+  const action = p.action;
   const error =
     decide.error instanceof ApiRequestError && decide.error.status === 409 ? CHANGED : decide.error?.message;
   const facts: [string, string][] = [
-    ["action", `${p.action.type} · ${request.jobType}`],
+    [
+      "action",
+      action.type === "jobs.create"
+        ? `${action.type} · ${action.request.jobType}`
+        : `${action.type} · ${action.request.depth}`,
+    ],
     ["risk", p.riskTier],
     ["hash", shortHash(p.actionHash)],
   ];
@@ -405,10 +410,10 @@ function ProposalCard({
           </button>
         </div>
       )}
-      {p.status === "EXECUTED" && p.result && (
+      {p.status === "EXECUTED" && p.result && "jobId" in p.result && (
         <button
           type="button"
-          onClick={() => onOpenRun(p.result!.jobId)}
+          onClick={() => onOpenRun((p.result as { jobId: string }).jobId)}
           className="self-start text-[12.5px] font-medium text-teal underline"
         >
           Open the queued run
