@@ -22,7 +22,7 @@ pnpm --filter @nexus/api github:setup --org acme --owner your-login # app owned 
 
 The command gives up after 10 minutes. It refuses to replace an existing file; `--force` replaces it (the old app stays on GitHub — delete it under Settings → Developer settings → GitHub Apps). With `--org`, GitHub reports the organization as the owner, so `--owner` names the person who may sign in.
 
-Permissions requested (least privilege, PRD EPIC GH): metadata read, issues read, pull requests write, contents write, checks read, and the account permission email addresses read (for sign-in). The webhook is created **inactive**: GitHub can't reach the home host, so NEXUS polls first.
+Permissions requested (least privilege, PRD EPIC GH): metadata read, issues read, pull requests write, contents write, checks read, and the account permission email addresses read (for sign-in). The app is created **without a webhook**: GitHub rejects a webhook URL it can't reach (localhost), and it can't reach the home host anyway, so NEXUS polls first.
 
 ## 3. Install the app on your repositories
 
@@ -46,7 +46,7 @@ The board's **Code** zone lists the repositories of the app's installations; a r
 - **"NEXUS can't access … anymore"** — the repository was removed from the installation, or the installation was suspended or uninstalled. NEXUS never falls back to other credentials; re-grant access on GitHub.
 - **Rate limit** — NEXUS stops calling GitHub until the reset time it shows, then continues.
 
-Data is cached for 60 seconds (the drawers show "synced … ago"); changes on GitHub appear within a minute. Webhook-driven sync comes with FR-GH-10 — the app's webhook stays inactive until then.
+Data is cached for 60 seconds (the drawers show "synced … ago"); changes on GitHub appear within a minute. Webhook-driven sync comes with FR-GH-10 — the app has no webhook until then.
 
 ## Origins and callback URLs
 

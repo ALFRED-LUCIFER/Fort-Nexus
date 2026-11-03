@@ -36,16 +36,17 @@ export function buildManifest(publicOrigin: string, redirectUrl: string, name = 
     redirect_url: redirectUrl,
     callback_urls: [`${publicOrigin}/api/auth/callback/github`],
     public: false,
-    // shortcut: webhook inactive because GitHub can't reach the home host; NEXUS polls first. Activate it with a relay for FR-GH-10.
-    hook_attributes: { url: `${publicOrigin}/v1/webhooks/github`, active: false },
+    // shortcut: no webhook. GitHub rejects a manifest whose hook URL isn't publicly reachable (even inactive), and it
+    // can't reach the home host anyway; NEXUS polls first. Add the webhook with a relay for FR-GH-10.
     // Least privilege (PRD EPIC GH): browse repos/issues, push branches, open PRs, read CI; email for sign-in.
+    // Manifest permission names differ from the REST responses: the account email permission is `emails` here.
     default_permissions: {
       metadata: "read",
       issues: "read",
       pull_requests: "write",
       contents: "write",
       checks: "read",
-      email_addresses: "read",
+      emails: "read",
     },
   };
 }

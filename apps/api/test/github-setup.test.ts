@@ -59,7 +59,7 @@ const conversion = () => ({
 });
 
 describe("github:setup", () => {
-  it("builds a least-privilege manifest with a short unique name and an inactive webhook", () => {
+  it("builds a least-privilege manifest with a short unique name and no webhook", () => {
     const m = buildManifest(
       ORIGIN,
       "http://127.0.0.1:5000/callback",
@@ -71,16 +71,16 @@ describe("github:setup", () => {
       url: ORIGIN,
       public: false,
       callback_urls: [`${ORIGIN}/api/auth/callback/github`],
-      hook_attributes: { url: `${ORIGIN}/v1/webhooks/github`, active: false },
       default_permissions: {
         metadata: "read",
         issues: "read",
         pull_requests: "write",
         contents: "write",
         checks: "read",
-        email_addresses: "read",
+        emails: "read",
       },
     });
+    expect(m).not.toHaveProperty("hook_attributes");
   });
 
   it("runs the manifest flow: form post to GitHub, state check, conversion, 0600 file", async () => {
