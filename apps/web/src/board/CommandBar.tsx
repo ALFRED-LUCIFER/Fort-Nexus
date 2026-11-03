@@ -9,6 +9,8 @@ import {
 } from "@nexus/contracts";
 import { api, keys } from "../lib/api.ts";
 import { preferredRunner } from "../lib/queries.ts";
+import { AiError } from "./aiInference.tsx";
+import { jobTextProblem, useCreateJobDraft } from "./newJob.tsx";
 import { P1Button } from "./P1Button.tsx";
 import { useCreatePlan } from "./plans.tsx";
 import { useScope } from "./scope.tsx";
@@ -63,8 +65,9 @@ function useAsk(onOpened: () => void) {
 }
 
 /**
- * Command bar (top centre). Under it, in one column: `children` (status banners), then the
- * Execute preview, the Ask status or the Plan status (Plan drafts a plan from the typed goal and opens it).
+ * Command bar (top centre). Under it, in one column: `children` (status banners), then the Execute panel, the Ask
+ * status or the Plan status (Plan drafts a plan from the typed goal and opens it). Execute with text drafts a job
+ * (as New job does) and opens its draft; Execute with no text shows the runner diagnostic preview.
  */
 export function CommandBar({
   runners,
@@ -82,7 +85,7 @@ export function CommandBar({
 }) {
   const [text, setText] = useState("");
   const [mode, setMode] = useState<Mode>("Execute");
-  const [panel, setPanel] = useState<"preview" | "plan" | "ask" | null>(null);
+  const [panel, setPanel] = useState<"preview" | "job" | "plan" | "ask" | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const done = () => {
     setPanel(null);
@@ -90,15 +93,18 @@ export function CommandBar({
   };
   const asking = useAsk(done);
   const planning = useCreatePlan(done);
+  const drafting = useCreateJobDraft(done);
 
   const close = () => {
     setPanel(null);
     inputRef.current?.focus();
   };
+  const typed = text.trim();
   const submit = () => {
-    setPanel(mode === "Execute" ? "preview" : mode === "Ask" ? "ask" : "plan");
-    if (mode === "Ask") asking.ask(text.trim());
-    if (mode === "Plan") planning.create(text.trim());
+    setPanel(mode === "Execute" ? (typed ? "job" : "preview") : mode === "Ask" ? "ask" : "plan");
+    if (mode === "Execute" && typed) drafting.create(typed);
+    if (mode === "Ask") asking.ask(typed);
+    if (mode === "Plan") planning.create(typed);
   };
   const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") submit();
@@ -153,7 +159,7 @@ export function CommandBar({
           onClick={submit}
           className="h-10 flex-none rounded-xl bg-teal px-4 text-[13px] font-medium text-onacc"
         >
-          {mode === "Execute" ? "Preview" : mode}
+          {mode === "Execute" ? (typed ? "Draft job" : "Preview") : mode}
         </button>
       </div>
       <div className="absolute top-[62px] right-0 left-0 z-[12] flex flex-col gap-2.5">
@@ -217,10 +223,43 @@ export function CommandBar({
             </div>
           </Panel>
         )}
+        {panel === "job" && (
+          <Panel label="Execute">
+            {drafting.blocked || jobTextProblem(typed) ? (
+              <p role="status" className="m-0 text-[13.5px] leading-snug text-ink2">
+                {drafting.blocked ?? jobTextProblem(typed)}
+              </p>
+            ) : drafting.pending ? (
+              <p role="status" className="m-0 font-serif text-[22px] leading-tight italic">
+                The Developer agent is drafting the job…
+              </p>
+            ) : (
+              drafting.error && (
+                <div className="flex flex-col gap-1">
+                  <AiError error={drafting.error} />
+                  <p className="m-0 text-[12.5px] text-ink2">
+                    Press Enter to try again; the same words are drafted once.
+                  </p>
+                </div>
+              )
+            )}
+            <p className="m-0 text-[12.5px] text-ink3">
+              Nothing is created or started until you approve the exact preview in its drawer.
+            </p>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={close}
+                className="rounded-xl border border-hair px-3.5 py-2.5 text-[12.5px] font-medium text-ink2"
+              >
+                Close
+              </button>
+            </div>
+          </Panel>
+        )}
         {panel === "preview" && (
           <ExecutePreview
             key={projectId ?? "none"} // another project is another request: fresh Idempotency-Key
-            freeText={text.trim()}
             runners={runners}
             projectId={blocked ? undefined : projectId}
             blocked={blocked}
@@ -249,14 +288,12 @@ function Panel({ children, label }: { children: ReactNode; label?: string }) {
 }
 
 function ExecutePreview({
-  freeText,
   runners,
   projectId,
   blocked,
   onAdjust,
   onQueued,
 }: {
-  freeText: string;
   runners: readonly Runner[] | undefined;
   projectId: string | undefined;
   blocked: string | null;
@@ -319,11 +356,6 @@ function ExecutePreview({
           </div>
         ))}
       </dl>
-      {freeText && (
-        <p className="m-0 font-mono text-[11px] leading-snug text-ink3">
-          Execute runs a preset only; switch to Ask to send free text. “{freeText}” is not sent.
-        </p>
-      )}
       {blocked && (
         <p id="execute-blocked" className="m-0 text-[12.5px] leading-snug text-ink2">
           {blocked}
