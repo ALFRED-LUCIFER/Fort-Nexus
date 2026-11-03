@@ -13,6 +13,7 @@ import { clock, shortHash, until, useNow } from "../lib/queries.ts";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { PICK_PROJECT, useScope, type Scope } from "./scope.tsx";
 import { EmptyZone } from "./zones.tsx";
+import { AGENT_LABEL } from "./agentLabels.ts";
 
 // FR-RES-10 / FR-CXR-09, PRD §D.3 `opp` and §D.4 "Your cofounder noticed": the researcher's ranked opportunities as
 // Cofounder cards. Everything on a card comes from the server; impact is an estimate and confidence a label (never a
@@ -32,15 +33,6 @@ const CLAIM: Record<ClaimLabel, { text: string; tone: string }> = {
   CORROBORATED: { text: "Corroborated", tone: "var(--teal)" },
   CONTESTED: { text: "Contested", tone: "var(--coral)" },
   UNVERIFIED: { text: "Unverified", tone: "var(--amber)" },
-};
-const AGENT: Record<AgentKey, string> = {
-  CHIEF_OF_STAFF: "Chief of Staff",
-  DEVELOPER: "Developer",
-  QA: "QA",
-  DEVOPS: "DevOps",
-  PRODUCT: "Product",
-  AI_RESEARCHER: "AI researcher",
-  FINANCIAL_ANALYST: "Financial analyst",
 };
 
 const ghostBtn =
@@ -108,7 +100,7 @@ function AgentChips({ agents }: { agents: AgentKey[] }) {
           className="rounded-full px-2.5 py-1.5 text-[11px] leading-none text-violet"
           style={{ background: "color-mix(in oklch, var(--violet) 12%, transparent)" }}
         >
-          {AGENT[a]}
+          {AGENT_LABEL[a]}
         </li>
       ))}
     </ul>

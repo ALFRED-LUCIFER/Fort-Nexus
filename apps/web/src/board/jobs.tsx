@@ -23,6 +23,7 @@ import {
 import { field, ghostBtn, primaryBtn } from "./deepDive.tsx";
 import { Drawer, DrawerHeader } from "./Drawer.tsx";
 import { useScope } from "./scope.tsx";
+import { AGENT_LABEL } from "./agentLabels.ts";
 
 // Jobs wave C: every job with its evidence (FR-OBS-03/04) and per-agent results. Everything shown comes from the API's
 // source records; costs are provider-reported estimates, never invoices.
@@ -32,16 +33,6 @@ const PAGE = 25;
 const HISTORY_POLL_MS = 15_000;
 const PERFORMANCE_POLL_MS = 60_000;
 const OFFLINE = "You're offline. NEXUS will load this when the connection is back.";
-
-const AGENT: Record<AgentKey, string> = {
-  CHIEF_OF_STAFF: "Chief of Staff",
-  DEVELOPER: "Developer",
-  QA: "QA",
-  DEVOPS: "DevOps",
-  PRODUCT: "Product",
-  AI_RESEARCHER: "AI researcher",
-  FINANCIAL_ANALYST: "Financial analyst",
-};
 
 const GROUP: Record<JobStatusGroup, string> = {
   ACTIVE: "Active",
@@ -266,9 +257,9 @@ function AllJobs() {
             className={field}
           >
             <option value="">Any agent</option>
-            {(Object.keys(AGENT) as AgentKey[]).map((a) => (
+            {(Object.keys(AGENT_LABEL) as AgentKey[]).map((a) => (
               <option key={a} value={a}>
-                {AGENT[a]}
+                {AGENT_LABEL[a]}
               </option>
             ))}
           </select>
@@ -402,7 +393,7 @@ function JobRow({
       <dl className="m-0 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
         {project && <Fact term="Project">{project}</Fact>}
         <Fact term="Repository">{item.repositoryFullName ?? "—"}</Fact>
-        <Fact term="Agent">{AGENT[job.agent]}</Fact>
+        <Fact term="Agent">{AGENT_LABEL[job.agent]}</Fact>
         <Fact term="Created">
           <time dateTime={job.createdAt}>{created(job.createdAt)}</time>
         </Fact>
@@ -499,7 +490,7 @@ function AgentCard({ r }: { r: AgentPerformanceRow }) {
   const a = r.approvals;
   return (
     <li className="flex flex-col gap-3 rounded-2xl border border-hair px-4 py-3.5">
-      <h4 className="m-0 text-[15px] font-medium text-ink">{AGENT[r.agent]}</h4>
+      <h4 className="m-0 text-[15px] font-medium text-ink">{AGENT_LABEL[r.agent]}</h4>
       <dl className="m-0 grid grid-cols-2 gap-x-4 gap-y-2">
         <Fact term="Jobs">{r.jobs}</Fact>
         <Fact term="Success rate">

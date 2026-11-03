@@ -16,6 +16,7 @@ import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { useWatchlists } from "./research.tsx";
 import { PICK_PROJECT, useScope, type Scope } from "./scope.tsx";
 import { EmptyZone, Node } from "./zones.tsx";
+import { AGENT_LABEL } from "./agentLabels.ts";
 
 // EPIC AGT FR-AGT-01/09: the Plans & queue zone and the plan:<uuid> drawer. The model only drafts; the owner approves
 // the exact hash; each step succeeds only on its source record, which the drawer cites.
@@ -27,16 +28,6 @@ const ZONE_PLANS = 4;
 const ghostBtn =
   "rounded-xl border border-hair px-3.5 py-2.5 text-[12.5px] font-medium text-ink disabled:opacity-45";
 const primaryBtn = "rounded-xl bg-teal px-4 py-2.5 text-[12.5px] font-medium text-onacc disabled:opacity-60";
-
-const AGENT: Record<AgentKey, string> = {
-  CHIEF_OF_STAFF: "Chief of Staff",
-  DEVELOPER: "Developer",
-  QA: "QA",
-  DEVOPS: "DevOps",
-  PRODUCT: "Product",
-  AI_RESEARCHER: "AI researcher",
-  FINANCIAL_ANALYST: "Financial analyst",
-};
 
 // Colour is always paired with text (WCAG 1.4.1).
 const PLAN: Record<PlanStatus, { text: string; tone: string }> = {
@@ -380,7 +371,7 @@ function StepRow({ s, action, onOpen }: { s: PlanStep; action: string; onOpen: (
         <span className="font-serif text-[20px] leading-none">{s.index + 1}</span>
         <Chip tone={STEP[s.status].tone}>{STEP[s.status].text}</Chip>
         <span className="font-mono text-[11px] text-ink3">
-          {AGENT[s.agent]}
+          {AGENT_LABEL[s.agent]}
           {s.dependsOn.length ? ` · after ${s.dependsOn.map((d) => `step ${d + 1}`).join(", ")}` : ""}
         </span>
       </div>
