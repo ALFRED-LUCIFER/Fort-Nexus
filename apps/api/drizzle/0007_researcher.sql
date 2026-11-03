@@ -67,6 +67,8 @@ CREATE TABLE "research_opportunities" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+ALTER TABLE "action_proposals" ADD COLUMN "result_deep_dive_id" uuid;--> statement-breakpoint
+ALTER TABLE "plan_steps" ADD COLUMN "deep_dive_id" uuid;--> statement-breakpoint
 ALTER TABLE "opportunity_issue_previews" ADD CONSTRAINT "opportunity_issue_previews_opportunity_id_research_opportunities_id_fk" FOREIGN KEY ("opportunity_id") REFERENCES "public"."research_opportunities"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "opportunity_issue_requests" ADD CONSTRAINT "opportunity_issue_requests_opportunity_id_research_opportunities_id_fk" FOREIGN KEY ("opportunity_id") REFERENCES "public"."research_opportunities"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "research_domains_workspace_domain_uq" ON "research_domains" USING btree ("workspace_id","domain");--> statement-breakpoint

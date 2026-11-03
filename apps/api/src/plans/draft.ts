@@ -42,6 +42,7 @@ Rules:
 - Use only the actions, ids, repositories, issue numbers, watchlists and connectors listed in the catalog. Never invent an id.
 - jobs.create: RUNNER_DIAGNOSTIC (a fixed read-only preset) or DEV_ISSUE_TO_PR (a listed repositoryId and one of its listed open issue numbers). Set projectId to the catalog's projectId and never set runnerId.
 - research.run: one of the listed watchlist ids. business.sales_summary: one of the listed connector ids and a day ("today", "yesterday" or YYYY-MM-DD).
+- research.deep_dive: the AI researcher investigates one specific question on the public web (it writes nothing outside NEXUS). request: question (one complete question, 10 to 2000 characters, no invented facts), depth (QUICK, STANDARD or THOROUGH; deepDiveDepths in the catalog lists the searches and page reads each allows), maxCostUsd (NEXUS lowers it to the agent's cap) and findingIds left empty. It has no projectId: it runs in the plan's project.
 - Give each step to an agent whose tools include the tool its action needs (see toolForAction in the catalog).
 - dependsOn lists the 0-based indices of earlier steps whose success this step needs; leave it empty otherwise.
 - Titles are short and factual. NEXUS checks every step, blocks anything not allowed, and the owner approves the exact plan before anything runs.

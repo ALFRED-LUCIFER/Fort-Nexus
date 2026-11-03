@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { FastifyInstance } from "fastify";
 import type {
   ActionProposal,
+  CreateDeepDiveRequest,
   Intent,
   PostTurnResponse,
   Project,
@@ -17,7 +18,34 @@ import type {
 } from "@nexus/contracts";
 import { createDb } from "../src/db/index.ts";
 import { canonical, sha256 } from "../src/jobs.ts";
+import type { DeepDives } from "../src/plans/deep-dives.ts";
+import { fakeDeepDives } from "./helpers/fake-deep-dives.ts";
 import { createTestApp, ownerSession, type TestApp } from "./helpers/owner-session.ts";
+
+// The app's deep-dive service is a scripted fake behind its seam; agent profiles can be narrowed per test.
+const seams = vi.hoisted(() => ({
+  dives: null as ReturnType<typeof fakeDeepDives> | null,
+  profile: new Map<string, Record<string, unknown>>(),
+}));
+vi.mock("../src/plans/deep-dives.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/plans/deep-dives.ts")>()),
+  deepDiveOps: () => ({
+    create: (...a: Parameters<DeepDives["create"]>) => seams.dives!.ops.create(...a),
+    get: (...a: Parameters<DeepDives["get"]>) => seams.dives!.ops.get(...a),
+    cancel: (...a: Parameters<DeepDives["cancel"]>) => seams.dives!.ops.cancel(...a),
+  }),
+}));
+vi.mock("../src/agents/service.ts", async (importOriginal) => {
+  const m = await importOriginal<typeof import("../src/agents/service.ts")>();
+  return {
+    ...m,
+    resolveAgentProfile: async (...args: Parameters<typeof m.resolveAgentProfile>) => {
+      const p = await m.resolveAgentProfile(...args);
+      const o = seams.profile.get(args[3]);
+      return o ? { ...p, settings: { ...p.settings, ...o } } : p;
+    },
+  };
+});
 
 // The model provider and GitHub are stubbed at fetch level; the Anthropic SDK, Octokit and the API are real.
 const MODEL = "claude-test-model";
@@ -230,6 +258,8 @@ afterAll(async () => {
 beforeEach(() => {
   fake = fakeProviders();
   ip = `127.0.1.${++tests}`;
+  seams.dives = fakeDeepDives();
+  seams.profile.clear();
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -544,6 +574,149 @@ describe("proposals (FR-CWV-05, FR-CXR-05)", () => {
     );
     expect(closed.proposal).toBeNull();
     expect(closed.assistantTurn.text).toMatch(/is closed/);
+  });
+});
+
+describe("deep-dive proposals (PRD §10.1 RESEARCH_DEEP_DIVE)", () => {
+  const QUESTION = "Why do shoppers abandon carts at the shipping step?";
+  const proposeDive = async (threadId: string, depth = "THOROUGH") => {
+    const r = await turn(
+      threadId,
+      "dig into why carts are abandoned at shipping",
+      toolCall({ kind: "RESEARCH_DEEP_DIVE", question: `  ${QUESTION}\n`, depth }),
+    );
+    expect(r.proposal, r.assistantTurn.text).not.toBeNull();
+    return r;
+  };
+
+  it("the router knows the intent; the card is R1 with a server-built preview and the researcher's cap", async () => {
+    const thread = await newThread();
+    seams.profile.set("AI_RESEARCHER", { maxCostUsdPerTask: 1.5, maxTurns: 12 });
+    const r = await proposeDive(thread.id);
+    const tools = fake.modelRequests.at(-1)!.tools as { input_schema: unknown }[];
+    expect(JSON.stringify(tools[0]!.input_schema)).toContain("RESEARCH_DEEP_DIVE");
+    expect(fake.modelRequests.at(-1)!.system).toMatch(
+      /RESEARCH_DEEP_DIVE: the owner asks NEXUS to investigate/,
+    );
+
+    const p = r.proposal!;
+    expect(r.assistantTurn).toMatchObject({ basis: "PENDING", proposalId: p.id, sources: [] });
+    expect(r.assistantTurn.text).toMatch(/Nothing starts until you confirm/);
+    expect(p).toMatchObject({
+      riskTier: "R1",
+      status: "AWAITING_APPROVAL",
+      result: null,
+      action: {
+        type: "research.deep_dive",
+        request: {
+          projectId: home.id,
+          question: QUESTION,
+          depth: "THOROUGH",
+          findingIds: [],
+          maxCostUsd: 1.5,
+        },
+      },
+    });
+    expect(p.actionHash).toBe(sha256(canonical(p.action)));
+    expect(p.action.preview).toBe(
+      `Deep dive (thorough) by the AI researcher: "${QUESTION}". At most 20 web searches, 30 page reads, 12 model turns and $1.5, reserved against today's budget when it starts. It reads the public web; writes nothing outside NEXUS. Its report labels each claim by the evidence NEXUS found on the pages it read.`,
+    );
+    expect(seams.dives!.calls.create).toHaveLength(0); // nothing starts on its own
+  });
+
+  it("approve creates exactly one dive with key proposal:<id>; a repeat returns it; the thread subject stays", async () => {
+    const subject = await diagnosticJob();
+    const thread = await newThread({ subjectJobId: subject });
+    const p = (await proposeDive(thread.id, "QUICK")).proposal!;
+    const [first, second] = await Promise.all([decide(p, "approve"), decide(p, "approve")]);
+    expect(first.statusCode, first.body).toBe(200);
+    expect(second.statusCode, second.body).toBe(200);
+    const executed = first.json() as ActionProposal;
+    const dive = [...seams.dives!.byId.values()];
+    expect(dive).toHaveLength(1);
+    expect(executed).toMatchObject({ status: "EXECUTED", error: null, result: { deepDiveId: dive[0]!.id } });
+    expect(second.json<ActionProposal>().result).toEqual(executed.result);
+    expect((await decide(p, "approve")).json<ActionProposal>().result).toEqual(executed.result);
+    const creates = seams.dives!.calls.create;
+    expect(creates.filter((c) => c.created)).toHaveLength(1);
+    expect(new Set(creates.map((c) => c.key))).toEqual(new Set([`proposal:${p.id}`]));
+    expect(creates[0]!.body).toEqual(p.action.request as CreateDeepDiveRequest);
+    expect(creates[0]!.ctx).toMatchObject({ actor: expect.stringMatching(/^user:/) });
+
+    const detail = (await call("GET", `/v1/conversations/${thread.id}`)).json() as ThreadDetail;
+    expect(detail.thread.subjectJobId).toBe(subject);
+    expect(detail.proposals).toEqual([
+      expect.objectContaining({ id: p.id, status: "EXECUTED", result: { deepDiveId: dive[0]!.id } }),
+    ]);
+    const audits = await sql.query(
+      `select action, metadata from audit_records where resource_type = 'action_proposal' and resource_id = $1 order by occurred_at`,
+      [p.id],
+    );
+    expect(audits.rows.map((a: { action: string }) => a.action)).toEqual([
+      "action_proposal.propose",
+      "action_proposal.approve",
+      "action_proposal.execute",
+    ]);
+    expect(audits.rows[2].metadata).toMatchObject({ deepDiveId: dive[0]!.id });
+    expect(JSON.stringify(audits.rows)).not.toContain("shipping"); // ids and outcome, never the question
+  });
+
+  it("deny and expiry start nothing; a refusal from the dive path fails the proposal with its message", async () => {
+    const thread = await newThread();
+    const denied = (await proposeDive(thread.id)).proposal!;
+    expect((await decide(denied, "deny")).json()).toMatchObject({ status: "DENIED", result: null });
+    expect((await decide(denied, "approve")).statusCode).toBe(409);
+
+    const late = (await proposeDive(thread.id)).proposal!;
+    await sql.query(`update action_proposals set expires_at = now() - interval '1 second' where id = $1`, [
+      late.id,
+    ]);
+    const expired = await decide(late, "approve");
+    expect(expired.statusCode).toBe(409);
+    expect(expired.json().error.message).toMatch(/expired/);
+    expect(seams.dives!.calls.create).toHaveLength(0);
+
+    const refused = (await proposeDive(thread.id)).proposal!;
+    const { HttpError } = await import("../src/errors.ts");
+    seams.dives!.ops.create = async () => {
+      throw new HttpError(409, "BUDGET_EXHAUSTED", "Today's AI budget is spent.");
+    };
+    const res = await decide(refused, "approve");
+    expect(res.json()).toMatchObject({
+      status: "FAILED",
+      result: null,
+      error: "Today's AI budget is spent.",
+    });
+  });
+
+  it("proposes nothing when the researcher's profile lacks the tool or only drafts, or the question is too short", async () => {
+    const thread = await newThread();
+    seams.profile.set("AI_RESEARCHER", { tools: ["research.search"] });
+    const noTool = await turn(
+      thread.id,
+      "research carts",
+      toolCall({ kind: "RESEARCH_DEEP_DIVE", question: QUESTION, depth: "STANDARD" }),
+    );
+    expect(noTool).toMatchObject({ proposal: null, assistantTurn: { basis: "NONE" } });
+    expect(noTool.assistantTurn.text).toBe(
+      "I can't propose a deep dive here: the AI researcher's profile doesn't allow research.deep_dive. Change it in Agents → AI researcher.",
+    );
+    seams.profile.set("AI_RESEARCHER", { autonomy: "DRAFT" });
+    const drafts = await turn(
+      thread.id,
+      "research carts",
+      toolCall({ kind: "RESEARCH_DEEP_DIVE", question: QUESTION, depth: "STANDARD" }),
+    );
+    expect(drafts.proposal).toBeNull();
+    expect(drafts.assistantTurn.text).toMatch(/autonomy is DRAFT/);
+    seams.profile.clear();
+    const vague = await turn(
+      thread.id,
+      "research",
+      toolCall({ kind: "RESEARCH_DEEP_DIVE", question: "carts", depth: "STANDARD" }),
+    );
+    expect(vague.proposal).toBeNull();
+    expect(vague.assistantTurn.text).toMatch(/What exactly should the deep dive find out/);
   });
 });
 

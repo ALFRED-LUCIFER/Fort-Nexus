@@ -167,6 +167,50 @@ describe("Talk drawer", () => {
     expect(decision?.body).toEqual({ decision: "approve", actionHash: HASH });
   });
 
+  it("a deep-dive proposal shows its facts; once confirmed it opens the deep dive in Research", async () => {
+    const DIVE = "44444444-4444-4444-8444-444444444444";
+    const dive = (over: Partial<ActionProposal> = {}) =>
+      proposal({
+        action: {
+          type: "research.deep_dive",
+          request: {
+            projectId: PROJECT_ID,
+            question: "Why do shoppers abandon carts at shipping?",
+            depth: "THOROUGH",
+            findingIds: [],
+            maxCostUsd: 2,
+          },
+          preview:
+            'Deep dive (thorough) by the AI researcher: "Why do shoppers abandon carts at shipping?". It reads the public web; writes nothing outside NEXUS.',
+        },
+        ...over,
+      });
+    let current = dive();
+    mockFetch({
+      ...base,
+      [`GET /v1/conversations/${THREAD}`]: () => json(detail(current)),
+      [`POST /v1/conversations/proposals/${PROPOSAL}/decision`]: () => {
+        current = dive({ status: "EXECUTED", decidedAt: T0, result: { deepDiveId: DIVE } });
+        return json(current);
+      },
+      "GET /v1/research/deep-dives": () => json({ items: [], nextCursor: null }),
+      "GET /v1/research/search-provider": () => json({ configured: true, provider: "brave" }),
+    });
+    const { router } = renderApp(`${IN_PROJECT}&drawer=talk:${THREAD}`);
+    const card = await screen.findByRole("region", { name: /^Proposal: Deep dive \(thorough\)/ });
+    const facts = card.querySelector("dl")!;
+    expect(facts.textContent).toContain("actionresearch.deep_dive · thorough");
+    expect(facts.textContent).toContain("limits20 searches · 30 page reads · cap $2");
+    expect(facts.textContent).toContain("writesnothing outside NEXUS");
+    expect(facts.textContent).toContain("riskR1");
+    const user = userEvent.setup();
+    await user.click(within(card).getByRole("button", { name: "Confirm" }));
+    expect(await screen.findByText("Confirmed · deep dive started")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Open the deep dive" }));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ drawer: `research:${DIVE}` }));
+    expect(await screen.findByRole("tab", { name: "Deep dives", selected: true })).toBeTruthy();
+  });
+
   it("sends with an Idempotency-Key, reuses it when resending after a network failure, and explains setup", async () => {
     let fail: "network" | "setup" | null = "network";
     const calls = mockFetch({

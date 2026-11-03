@@ -226,6 +226,55 @@ describe("plan drawer", () => {
     await waitFor(() => expect(screen.getByRole("dialog").textContent).toMatch(/node-version/));
   });
 
+  it("a deep-dive step shows the exact question and cap; its evidence opens the dive in Research", async () => {
+    const DIVE = "44444444-4444-4444-8444-444444444444";
+    current = planOf({
+      status: "COMPLETED",
+      steps: [
+        stepOf({
+          title: "Dig into carts",
+          agent: "AI_RESEARCHER",
+          action: {
+            type: "research.deep_dive",
+            request: {
+              question: "Why do shoppers abandon carts at shipping?",
+              depth: "STANDARD",
+              findingIds: [],
+              maxCostUsd: 2,
+            },
+          },
+          status: "SUCCEEDED",
+          artifact: {
+            kind: "deep_dive",
+            id: DIVE,
+            evidence: [
+              {
+                kind: "DEEP_DIVE",
+                id: DIVE,
+                label: "deep dive · completed · 3 claims, 2 with verified evidence",
+                asOf: T0,
+              },
+            ],
+            verifiedAt: T0,
+          },
+        }),
+      ],
+    });
+    board();
+    const { router } = renderApp(`${IN_PROJECT}&drawer=plan:${PLAN_ID}`);
+    const d = await drawer();
+    expect(
+      await within(d).findByText(
+        "Deep dive · standard · up to $2 · reads the public web, writes nothing outside NEXUS · “Why do shoppers abandon carts at shipping?”",
+      ),
+    ).toBeTruthy();
+    const user = userEvent.setup();
+    await user.click(
+      within(d).getByRole("button", { name: "deep dive · completed · 3 claims, 2 with verified evidence" }),
+    );
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ drawer: `research:${DIVE}` }));
+  });
+
   it("another project's plan is read-only here", async () => {
     current = planOf({ projectId: "77777777-7777-4777-8777-777777777777" });
     board();

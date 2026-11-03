@@ -1,5 +1,5 @@
 {
-  "id": "67643882-3140-4d13-90b8-e9a098c490b1",
+  "id": "6176b244-7f1a-432e-a1c2-deeb82238d53",
   "prevId": "2d1a3237-1961-4447-a14a-bc92812bb7c3",
   "version": "7",
   "dialect": "postgresql",
@@ -2655,6 +2655,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "result_deep_dive_id": {
+          "name": "result_deep_dive_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "error": {
           "name": "error",
           "type": "text",
@@ -5088,6 +5094,12 @@
         },
         "research_run_id": {
           "name": "research_run_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "deep_dive_id": {
+          "name": "deep_dive_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": false

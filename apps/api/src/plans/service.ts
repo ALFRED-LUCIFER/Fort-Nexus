@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import {
   AgentKey,
+  DEEP_DIVE_DEPTH_LIMITS,
   IssueListQuery,
   toolForAction,
   type CreatePlanRequest,
@@ -92,11 +93,24 @@ export function profileBlock(p: EffectiveAgentProfile, action: PlanStepAction): 
     action.type === "jobs.create" && action.request.jobType === "DEV_ISSUE_TO_PR" && action.request.budget;
   if (budget && (budget.maxCostUsd > p.settings.maxCostUsdPerTask || budget.maxTurns > p.settings.maxTurns))
     return `${who}'s profile caps a task at $${p.settings.maxCostUsdPerTask} and ${p.settings.maxTurns} turns`;
+  if (action.type === "research.deep_dive" && action.request.maxCostUsd > p.settings.maxCostUsdPerTask)
+    return `${who}'s profile caps a task at $${p.settings.maxCostUsdPerTask}`;
   return null;
 }
 
-/** Narrows an issue run's budget to the agent's caps before hashing, so the owner approves the budget that will run. */
+/**
+ * Narrows an issue run's budget, or a deep dive's cost cap, to the agent's caps before hashing, so the owner approves
+ * the budget that will run.
+ */
 export function fitBudget(p: EffectiveAgentProfile, action: PlanStepAction): PlanStepAction {
+  if (action.type === "research.deep_dive")
+    return {
+      ...action,
+      request: {
+        ...action.request,
+        maxCostUsd: Math.min(action.request.maxCostUsd, p.settings.maxCostUsdPerTask),
+      },
+    };
   if (action.type !== "jobs.create" || action.request.jobType !== "DEV_ISSUE_TO_PR") return action;
   const b = action.request.budget;
   return {
@@ -126,8 +140,11 @@ function targetBlock(t: Targets, a: PlanStepAction): string | null {
     return t.watchlists.has(a.watchlistId) ? null : "unknown watchlist: it isn't in this project";
   if (a.type === "business.sales_summary")
     return t.connectors.has(a.connectorId) ? null : "unknown business connector: it isn't in this project";
-  // shortcut: wave 5 agent D makes deep dives plannable; until then a drafted one blocks the plan.
-  if (a.type === "research.deep_dive") return "deep dives can't be planned yet";
+  // The dive runs in the plan's own project; the catalog lists no findings, so any finding id was invented.
+  if (a.type === "research.deep_dive")
+    return a.request.findingIds.length > 0
+      ? "unknown findings: plans don't seed deep dives with findings"
+      : null;
   const r = a.request;
   if (r.projectId !== t.scope.projectId) return "the job targets another project";
   if (r.runnerId) return "plans don't pin a runner";
@@ -193,10 +210,12 @@ async function catalog(deps: Pick<Deps, "db" | "github" | "config">, ownerId: st
     repositories,
     watchlists: watchlists.map((w) => ({ id: w.id, name: w.name, keywords: w.keywords })),
     connectors: connectors.map((c) => ({ id: c.id, name: c.name, environment: c.environment })),
+    deepDiveDepths: DEEP_DIVE_DEPTH_LIMITS,
     toolForAction: {
       "jobs.create RUNNER_DIAGNOSTIC": "jobs.create.diagnostic",
       "jobs.create DEV_ISSUE_TO_PR": "jobs.create.issue_run",
       "research.run": "research.run",
+      "research.deep_dive": "research.deep_dive",
       "business.sales_summary": "business.metrics",
     },
   };
@@ -434,9 +453,12 @@ export async function decidePlan(
   });
 }
 
-/** Pending steps stop; running jobs are cancelled through the jobs cancel path and settle from their own state. */
+/**
+ * Pending steps stop; running jobs and deep dives are cancelled through their own cancel paths and settle from their
+ * own state.
+ */
 export async function cancelPlan(
-  db: Db,
+  { db, deepDives }: Pick<Deps, "db" | "deepDives">,
   input: { ownerId: string; id: string; correlationId: string },
 ): Promise<Plan> {
   const running = await db.transaction(async (tx) => {
@@ -462,15 +484,23 @@ export async function cancelPlan(
       .from(planSteps)
       .where(and(eq(planSteps.planId, p.id), eq(planSteps.status, "RUNNING")));
   });
+  // A run or dive that can't be cancelled any more (finished, or its approved push is executing) settles on its own.
+  const settled = (err: unknown) => {
+    if (!(err instanceof HttpError)) throw err;
+  };
   for (const s of running)
     if (s.jobId)
-      // A run that can't be cancelled any more (finished, or its approved push is executing) settles on its own.
       await cancelJob(db, {
         ownerId: input.ownerId,
         jobId: s.jobId,
         correlationId: input.correlationId,
-      }).catch((err: unknown) => {
-        if (!(err instanceof HttpError)) throw err;
-      });
+      }).catch(settled);
+    else if (s.deepDiveId)
+      await deepDives
+        .cancel(
+          { ownerId: input.ownerId, actor: ownerActor(input.ownerId), correlationId: input.correlationId },
+          s.deepDiveId,
+        )
+        .catch(settled);
   return getPlan(db, input.ownerId, input.id);
 }
