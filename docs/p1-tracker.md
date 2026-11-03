@@ -86,6 +86,24 @@ Owner checks: one live draft → issue → run (needs `ai.json` and Issues: read
 
 Known follow-ups: the preview of a new issue checks the issues permission only, not contents/pull requests (the run then fails FAILED and resumes once fixed); Recent drafts shows the newest 20 without load more; "Rewrite" passes the text through the query cache (no router param); the Cofounder "Results · this week" panel can now be built on `GET /v1/agents/performance`.
 
+## Cofounder wave (on `main`; spec: `docs/specs/cofounder-wave.md`)
+
+The owner asked (2026-11-04) for the Cofounder home and "calling": talking with the Cofounder by voice, done the best way for Microsoft Foundry.
+
+| Builder | Delivered | Tests |
+|---|---|---|
+| A — Home summary API | `home.ts`: `GET /v1/home` — deterministic headline (no model call), decisions waiting (+ top 5), 4 KPIs with 7-day series and previous week (review-ready median, NEXUS test pass rate, runs today, waiting on you), per-agent activity with server-built "doing" and cost today, execution with the latest run stage, results for 7 days | KPIs incl. null days and a UTC+5:30 boundary, agent states, headline variants, decoy project/owner |
+| B — Voice gateway API | `voice/**`: `~/.nexus/voice.json` (Foundry resource + key; transcribe deployment; Azure AI Speech region/voice), `GET /v1/voice/status` (provider + retention disclosure), settings (mic and spoken replies off by default), `POST /v1/voice/transcribe` (raw webm/mp4/ogg/wav/mpeg ≤ 10 MB / 120 s → Azure OpenAI transcribe), `POST /v1/voice/speak` (escaped SSML → Azure AI Speech mp3), usage counters, per-owner rate limit, owner-safe provider errors; `docs/runbooks/voice.md` | exact request shapes against a fake provider, every error mapping, limits, SSML escaping, no text/keys in audit, decoy |
+| C — Cofounder home | `home.tsx`: Home is the landing view (`view=board` for the zone board): brief, KPI cards (eased numbers, drawn sparklines, worded deltas), Waiting on you, Noticed, Agent activity, Execution stage bars, Results · this week, docked Cofounder panel; Motion, reduced motion respected | every section, Business variant, All view, drawers, states, a11y |
+| D — Cofounder panel + voice | `cofounder.tsx`, `voice.tsx`: push-to-talk (command bar, panel, Talk drawer; mic only on a press, every track stopped; transcript fills the input, never sent by itself), voice HUD with captions and End, spoken replies (Azure voice, browser voice fallback, replay), "Talk with your cofounder" conversation mode, Settings → Voice & consent | mic lifecycle, permission denied, not set up, mic off, fallback voice, conversation mode, a11y |
+
+Coordinator: contracts first (`home.ts`, `voice.ts`, `NEXUS_VOICE_FILE`), `view=home|board` with the default view in the router context (tests default to the board), the three provider-key file readers folded into `secret-file.ts`, the unused APPROVAL home ref dropped, one microphone at a time across the page. Migration `0009_jazzy_vertigo.sql` (voice tables) keeps the builder's generated name: the running dev API had already applied it.
+Checks on the merged tree: typecheck, lint, prettier, tests (api 389, web 246, runner 165+1 skipped, contracts 23), web build, secret scan.
+
+Owner setup for voice: deploy a transcribe model (e.g. `gpt-4o-mini-transcribe`) on the Foundry resource, write `~/.nexus/voice.json` (mode 600, `docs/runbooks/voice.md`), then turn the mic on in Settings → Voice & consent.
+
+Known follow-ups: phone calls (PSTN) and realtime voice with barge-in are later phases; WAITING_ON_YOU has no history yet (drafts and opportunities keep no status history); issue/PR result dates use row `updated_at` / `decidedAt`; Business KPIs reuse the Business zone tiles.
+
 ## Next
 
 - Owner check: one live Talk turn on Anthropic and on Foundry.
