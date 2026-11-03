@@ -172,6 +172,28 @@ describe("board", () => {
     expect(document.activeElement).toBe(inbox);
   });
 
+  it("a zone zooms in from its Expand button or a click on its empty area; Esc and Overview zoom back out", async () => {
+    board([runner()]);
+    const user = userEvent.setup();
+    renderApp("/");
+    const code = await screen.findByRole("region", { name: "Code" });
+    expect(screen.getByRole("button", { name: "Fit" })).toBeTruthy();
+
+    await user.click(within(code).getByRole("button", { name: "Expand" }));
+    expect(screen.getByRole("button", { name: /Overview/ })).toBeTruthy();
+    // The focused zone has nothing left to expand.
+    expect(within(code).queryByRole("button", { name: "Expand" })).toBeNull();
+    await user.keyboard("{Escape}");
+    expect(await screen.findByRole("button", { name: "Fit" })).toBeTruthy();
+
+    const research = screen.getByRole("region", { name: "Research" });
+    await user.click(research);
+    expect(screen.getByRole("button", { name: /Overview/ })).toBeTruthy();
+    expect(within(research).queryByRole("button", { name: "Expand" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /Overview/ }));
+    expect(screen.getByRole("button", { name: "Fit" })).toBeTruthy();
+  });
+
   it("keeps workspace scope in the URL; a workspace with one active project opens on it", async () => {
     board([runner()]);
     const user = userEvent.setup();

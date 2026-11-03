@@ -1,7 +1,25 @@
-import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type PointerEvent,
+  type ReactNode,
+} from "react";
 import { getRouteApi } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { AnimatePresence, m } from "motion/react";
+import {
+  AnimatePresence,
+  animate,
+  m,
+  useMotionTemplate,
+  useMotionValue,
+  useMotionValueEvent,
+  useReducedMotion,
+  useTransform,
+  type MotionValue,
+} from "motion/react";
 import { AgentKey, type Runner } from "@nexus/contracts";
 import { authClient } from "../lib/auth.ts";
 import { currentTheme, toggleTheme } from "../lib/theme.ts";
@@ -41,6 +59,37 @@ const BOARD_W = 2080;
 const BOARD_H = 2340;
 const MIN_Z = 0.22;
 const MAX_Z = 1.8;
+// The camera's glide to a zone or back to the overview; reduced motion jumps instead.
+const GLIDE = { type: "spring", stiffness: 170, damping: 26, mass: 1 } as const;
+// Screen space a focused zone keeps clear: the header above, the controls below.
+const TOP = 84;
+const BOTTOM = 76;
+const PAD = 28;
+// A press that moves further than this is a pan, not a click on the zone.
+const CLICK_SLOP = 5;
+
+type View = { x: number; y: number; z: number };
+type Camera = { x: MotionValue<number>; y: MotionValue<number>; z: MotionValue<number> };
+
+const viewOf = (c: Camera): View => ({ x: c.x.get(), y: c.y.get(), z: c.z.get() });
+const jumpTo = (c: Camera, v: View) => {
+  for (const k of ["x", "y", "z"] as const) {
+    c[k].stop();
+    c[k].set(v[k]);
+  }
+};
+/** The whole board, centred under the header. */
+function overviewOf(el: HTMLElement): View {
+  const w = el.clientWidth;
+  const h = el.clientHeight - 90;
+  const z = Math.max(MIN_Z, Math.min(w / 2120, h / 2360));
+  return { z, x: (w - BOARD_W * z) / 2, y: TOP + (h - BOARD_H * z) / 2 };
+}
+/** Zoom by `f` around the screen point (cx, cy), which stays put. */
+function zoomedAt(v: View, f: number, cx: number, cy: number): View {
+  const z = Math.min(MAX_Z, Math.max(MIN_Z, v.z * f));
+  return { z, x: cx - ((cx - v.x) * z) / v.z, y: cy - ((cy - v.y) * z) / v.z };
+}
 
 type ZoneDef = Omit<ZoneProps, "dim" | "children"> & { ws?: "dev" | "business"; body: ReactNode };
 
@@ -90,48 +139,96 @@ export function Board() {
     void navigate({ search: { ...scope.keep, drawer: `opp:${id}${focus ? `:${focus}` : ""}` } });
   const closeDrawer = () => void navigate({ search: scope.keep });
 
-  // Pan / zoom. Positions are in screen px; the board is scaled around its top-left corner.
+  // Pan / zoom. Positions are in screen px; the board is scaled around its top-left corner. Motion values, so a
+  // glide animates the transform and the dot grid without re-rendering the board every frame.
   const vpRef = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState({ x: 40, y: 90, z: 0.62 });
-  const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null);
+  const vx = useMotionValue(40);
+  const vy = useMotionValue(90);
+  const vz = useMotionValue(0.62);
+  const reduced = useReducedMotion();
+  const [focused, setFocused] = useState<string | null>(null);
+  const drag = useRef<{ x: number; y: number; vx: number; vy: number; moved: boolean } | null>(null);
+  const moved = useRef(false);
+  const camera: Camera = { x: vx, y: vy, z: vz };
+  const glide = (v: View) => {
+    if (reduced) return jumpTo(camera, v);
+    for (const k of ["x", "y", "z"] as const) void animate(camera[k], v[k], GLIDE);
+  };
   const fit = () => {
+    if (!vpRef.current) return;
+    setFocused(null);
+    glide(overviewOf(vpRef.current));
+  };
+  /** Flies the camera to one zone so it fills the screen (design: click a zone to work in it). */
+  const focusZone = (zone: Pick<ZoneProps, "id" | "x" | "y" | "w" | "h">) => {
     const el = vpRef.current;
     if (!el) return;
-    const w = el.clientWidth;
-    const h = el.clientHeight - 90;
-    const z = Math.max(MIN_Z, Math.min(w / 2120, h / 2360));
-    setView({ z, x: (w - BOARD_W * z) / 2, y: 84 + (h - BOARD_H * z) / 2 });
-  };
-  const zoomAt = (f: number, cx: number, cy: number) =>
-    setView((v) => {
-      const z = Math.min(MAX_Z, Math.max(MIN_Z, v.z * f));
-      return { z, x: cx - ((cx - v.x) * z) / v.z, y: cy - ((cy - v.y) * z) / v.z };
+    const w = el.clientWidth - 2 * PAD;
+    const h = el.clientHeight - TOP - BOTTOM - 2 * PAD;
+    const z = Math.max(MIN_Z, Math.min(MAX_Z, w / zone.w, h / zone.h));
+    setFocused(zone.id);
+    glide({
+      z,
+      x: PAD + (w - zone.w * z) / 2 - zone.x * z,
+      y: TOP + PAD + (h - zone.h * z) / 2 - zone.y * z,
     });
-  const zoomBy = (f: number) =>
-    zoomAt(f, (vpRef.current?.clientWidth ?? 1200) / 2, (vpRef.current?.clientHeight ?? 800) / 2);
-  useLayoutEffect(fit, []);
+  };
+  const zoomBy = (f: number) => {
+    const el = vpRef.current;
+    glide(zoomedAt(viewOf(camera), f, (el?.clientWidth ?? 1200) / 2, (el?.clientHeight ?? 800) / 2));
+  };
+  useLayoutEffect(() => {
+    if (vpRef.current) jumpTo({ x: vx, y: vy, z: vz }, overviewOf(vpRef.current));
+  }, [vx, vy, vz]);
   useEffect(() => {
     const el = vpRef.current;
     if (!el) return;
+    const c = { x: vx, y: vy, z: vz };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const r = el.getBoundingClientRect();
-      zoomAt(e.deltaY < 0 ? 1.08 : 0.926, e.clientX - r.left, e.clientY - r.top);
+      jumpTo(c, zoomedAt(viewOf(c), e.deltaY < 0 ? 1.08 : 0.926, e.clientX - r.left, e.clientY - r.top));
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, []);
+  }, [vx, vy, vz]);
+  // Esc leaves a focused zone, unless a drawer or a field has it (they close or clear themselves first).
+  const hasDrawer = !!search.drawer;
+  useEffect(() => {
+    if (!focused || hasDrawer) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if ((e.target as Element | null)?.closest?.("input,textarea,select,[role=dialog]")) return;
+      fit();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
   const panStart = (e: PointerEvent) => {
+    moved.current = false;
     if ((e.target as Element).closest("button,input,select,a,[data-nopan]")) return;
-    drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
+    drag.current = { x: e.clientX, y: e.clientY, vx: vx.get(), vy: vy.get(), moved: false };
   };
   const panMove = (e: PointerEvent) => {
     const d = drag.current;
-    if (d) setView((v) => ({ ...v, x: d.vx + e.clientX - d.x, y: d.vy + e.clientY - d.y }));
+    if (!d) return;
+    const dx = e.clientX - d.x;
+    const dy = e.clientY - d.y;
+    if (!d.moved && Math.hypot(dx, dy) < CLICK_SLOP) return;
+    d.moved = moved.current = true;
+    jumpTo(camera, { z: vz.get(), x: d.vx + dx, y: d.vy + dy });
   };
   const panEnd = () => {
     drag.current = null;
   };
+  /** A click on a zone's empty area focuses it; a drag that started there was a pan. */
+  const zoneClick = (zone: ZoneDef) => (e: MouseEvent) => {
+    if (moved.current) return;
+    if ((e.target as Element).closest("button,input,select,textarea,a,label,[data-nopan]")) return;
+    if (focused !== zone.id) focusZone(zone);
+  };
+  const gridSize = useTransform(vz, (z) => `${22 * z}px ${22 * z}px`);
+  const gridPos = useMotionTemplate`${vx}px ${vy}px`;
 
   const [theme, setTheme] = useState(currentTheme);
   const signOut = async () => {
@@ -288,7 +385,7 @@ export function Board() {
   const glass = "glass pointer-events-auto flex items-center rounded-[18px]";
   return (
     <div className="fixed inset-0 overflow-hidden">
-      <div
+      <m.div
         ref={vpRef}
         onPointerDown={panStart}
         onPointerMove={panMove}
@@ -297,34 +394,40 @@ export function Board() {
         className="absolute inset-0 cursor-grab overflow-hidden touch-none"
         style={{
           backgroundImage: "radial-gradient(var(--dot) 1px, transparent 1.3px)",
-          backgroundSize: `${22 * view.z}px ${22 * view.z}px`,
-          backgroundPosition: `${view.x}px ${view.y}px`,
+          backgroundSize: gridSize,
+          backgroundPosition: gridPos,
         }}
       >
         {/* shortcut: phone width still shows the scaled canvas; the §8 mobile layout (bottom nav) replaces it in P1. */}
-        <main
+        <m.main
           aria-label="Board"
-          className="absolute top-0 left-0 origin-top-left will-change-transform"
-          style={{
-            width: BOARD_W,
-            height: BOARD_H,
-            transform: `translate(${view.x}px,${view.y}px) scale(${view.z})`,
-          }}
+          className="absolute top-0 left-0 will-change-transform"
+          style={{ width: BOARD_W, height: BOARD_H, x: vx, y: vy, scale: vz, originX: 0, originY: 0 }}
         >
           {/* Regrouping cross-fades the zone sets (opacity only, so it also suits reduced motion). */}
           <AnimatePresence initial={false} mode="wait">
             <m.div key={group} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               {(group === "agents" ? agentLanes(agents, projectId, openAgent) : zones).map(
-                ({ ws: zws, body, ...z }: ZoneDef) => (
-                  <Zone key={z.id} {...z} dim={ws !== "all" && !!zws && zws !== ws}>
-                    {body}
-                  </Zone>
-                ),
+                (zone: ZoneDef) => {
+                  const { ws: zws, body, ...z } = zone;
+                  return (
+                    <Zone
+                      key={z.id}
+                      {...z}
+                      dim={ws !== "all" && !!zws && zws !== ws}
+                      focused={focused === z.id}
+                      onZoneClick={zoneClick(zone)}
+                      onFocusZone={() => focusZone(z)}
+                    >
+                      {body}
+                    </Zone>
+                  );
+                },
               )}
             </m.div>
           </AnimatePresence>
-        </main>
-      </div>
+        </m.main>
+      </m.div>
 
       <header className="pointer-events-none absolute top-3.5 right-4 left-4 flex items-center gap-2.5">
         <div className={`${glass} h-[52px] gap-2.5 pr-1.5 pl-3.5`}>
@@ -442,9 +545,7 @@ export function Board() {
           >
             −
           </button>
-          <span aria-live="polite" className="min-w-[46px] text-center font-mono text-[11.5px] text-ink2">
-            {Math.round(view.z * 100)}%
-          </span>
+          <ZoomLevel z={vz} />
           <button
             type="button"
             aria-label="Zoom in"
@@ -455,10 +556,11 @@ export function Board() {
           </button>
           <button
             type="button"
-            onClick={fit}
-            className="h-8 rounded-[10px] px-2.5 text-[12px] font-medium text-ink2"
+            onClick={() => fit()}
+            className={`h-8 rounded-[10px] px-2.5 text-[12px] font-medium ${focused ? "bg-teal text-onacc" : "text-ink2"}`}
           >
-            Fit
+            {focused ? "Overview" : "Fit"}
+            {focused && <span className="ml-1.5 font-mono text-[10.5px] opacity-80">esc</span>}
           </button>
         </div>
         <ScopeNav />
@@ -562,15 +664,42 @@ function sysSub(runners: readonly Runner[] | undefined) {
 // Zones move by transform, not `layout`: layout measures screen px, which the zoomed board scale would skew.
 const ZONE_MOVE = { duration: 0.7, ease: [0.2, 0.8, 0.2, 1] } as const;
 
-function Zone({ id, label, sub, x, y, w, h, tint, dim, children }: ZoneProps) {
+/** The zoom % for the controls; subscribes to the camera itself so a glide re-renders only this. */
+function ZoomLevel({ z }: { z: MotionValue<number> }) {
+  const [pct, setPct] = useState(() => Math.round(z.get() * 100));
+  useMotionValueEvent(z, "change", (v) => setPct(Math.round(v * 100)));
+  return (
+    <span className="min-w-[46px] text-center font-mono text-[11.5px] text-ink2" aria-label={`Zoom ${pct}%`}>
+      {pct}%
+    </span>
+  );
+}
+
+function Zone({
+  id,
+  label,
+  sub,
+  x,
+  y,
+  w,
+  h,
+  tint,
+  dim,
+  focused,
+  onZoneClick,
+  onFocusZone,
+  children,
+}: ZoneProps & { focused: boolean; onZoneClick: (e: MouseEvent) => void; onFocusZone: () => void }) {
   return (
     <m.section
       aria-labelledby={`zone-${id}`}
-      className="absolute top-0 left-0 rounded-[32px] border border-hair"
+      onClick={onZoneClick}
+      className={`absolute top-0 left-0 rounded-[32px] border ${focused ? "border-teal" : "border-hair"} ${focused ? "" : "cursor-zoom-in"}`}
       style={{ width: w, height: h, background: tint }}
       initial={false}
       animate={{ x, y, opacity: dim ? 0.35 : 1 }}
       transition={ZONE_MOVE}
+      whileHover={focused ? undefined : { boxShadow: "0 0 0 2px var(--teal)" }}
     >
       <div className="absolute top-[22px] left-7 flex items-baseline gap-3 whitespace-nowrap">
         <h2
@@ -580,6 +709,15 @@ function Zone({ id, label, sub, x, y, w, h, tint, dim, children }: ZoneProps) {
           {label}
         </h2>
         <span className="font-mono text-[12px] text-ink3">{sub}</span>
+        {!focused && (
+          <button
+            type="button"
+            onClick={onFocusZone}
+            className="self-center rounded-lg bg-hair px-2 py-1 font-sans text-[12px] font-medium text-ink2 opacity-70 hover:opacity-100 focus-visible:opacity-100"
+          >
+            Expand
+          </button>
+        )}
       </div>
       <div className="absolute inset-x-10 top-[90px] bottom-8 overflow-hidden">{children}</div>
     </m.section>
