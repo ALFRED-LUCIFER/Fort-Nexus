@@ -25,6 +25,7 @@ import { IssueDrawer, RepoDrawer } from "./github.tsx";
 import { InboxDrawer } from "./Inbox.tsx";
 import { AppNodes, IncidentDrawer, SystemsDrawer, appsSub, useMonitoredApps } from "./monitoring.tsx";
 import { NotificationToasts, useScopeNotifications } from "./notifications.tsx";
+import { NoticedZone, OpportunityDrawer, noticedSub, useOpportunities } from "./opportunities.tsx";
 import { PlanDrawer, PlansZone, plansSub, usePlans } from "./plans.tsx";
 import { ResearchDrawer, ResearchZone, researchSub, useWatchlists } from "./research.tsx";
 import { RunDrawer } from "./RunDrawer.tsx";
@@ -74,6 +75,7 @@ export function Board() {
   const [group, setGroup] = useState<"domains" | "agents">("domains");
   const agentKey = AgentKey.safeParse(drawerId);
   const plans = usePlans();
+  const noticed = useOpportunities();
 
   const openRun = (id: string) => void navigate({ search: { ...scope.keep, drawer: `run:${id}` } });
   const openRepo = (id: string) => void navigate({ search: { ...scope.keep, drawer: `repo:${id}` } });
@@ -82,6 +84,8 @@ export function Board() {
   const openSystems = () => void navigate({ search: { ...scope.keep, drawer: "systems" } });
   const openAgent = (k: AgentKey) => void navigate({ search: { ...scope.keep, drawer: `agent:${k}` } });
   const openPlan = (id: string) => void navigate({ search: { ...scope.keep, drawer: `plan:${id}` } });
+  const openOpportunity = (id: string, focus?: "preview") =>
+    void navigate({ search: { ...scope.keep, drawer: `opp:${id}${focus ? `:${focus}` : ""}` } });
   const closeDrawer = () => void navigate({ search: scope.keep });
 
   // Pan / zoom. Positions are in screen px; the board is scaled around its top-left corner.
@@ -169,13 +173,13 @@ export function Board() {
     {
       id: "opp",
       label: "Noticed for you",
-      sub: "not connected",
+      sub: noticedSub(noticed.data),
       x: 40,
       y: 40,
       w: 2000,
       h: 400,
       tint: "oklch(0.86 0.07 85 / .22)",
-      body: <EmptyZone>Nothing noticed yet. Risk and opportunity detection arrives in P1.</EmptyZone>,
+      body: <NoticedZone onOpen={openOpportunity} />,
     },
     {
       id: "code",
@@ -511,6 +515,14 @@ export function Board() {
       )}
       {drawerKind === "plan" && drawerId && (
         <PlanDrawer id={drawerId} banner={banner} onClose={closeDrawer} />
+      )}
+      {drawerKind === "opp" && drawerId && (
+        <OpportunityDrawer
+          id={drawerId}
+          focus={drawerNumber === "preview" ? "preview" : undefined}
+          banner={banner}
+          onClose={closeDrawer}
+        />
       )}
       {drawerKind === "issue" && drawerId && drawerNumber && (
         <IssueDrawer repoId={drawerId} number={Number(drawerNumber)} banner={banner} onClose={closeDrawer} />

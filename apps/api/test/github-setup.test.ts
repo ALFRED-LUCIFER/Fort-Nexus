@@ -73,7 +73,7 @@ describe("github:setup", () => {
       callback_urls: [`${ORIGIN}/api/auth/callback/github`],
       default_permissions: {
         metadata: "read",
-        issues: "read",
+        issues: "write",
         pull_requests: "write",
         contents: "write",
         checks: "read",

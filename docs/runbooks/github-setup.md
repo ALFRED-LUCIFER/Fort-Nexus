@@ -22,7 +22,7 @@ pnpm --filter @nexus/api github:setup --org acme --owner your-login # app owned 
 
 The command gives up after 10 minutes. It refuses to replace an existing file; `--force` replaces it (the old app stays on GitHub — delete it under Settings → Developer settings → GitHub Apps). With `--org`, GitHub reports the organization as the owner, so `--owner` names the person who may sign in.
 
-Permissions requested (least privilege, PRD EPIC GH): metadata read, issues read, pull requests write, contents write, checks read, and the account permission email addresses read (for sign-in). The app is created **without a webhook**: GitHub rejects a webhook URL it can't reach (localhost), and it can't reach the home host anyway, so NEXUS polls first.
+Permissions requested (least privilege, PRD EPIC GH): metadata read, issues read & write (only for issues you approve, see [Issues from the AI researcher](#6-issues-from-the-ai-researcher)), pull requests write, contents write, checks read, and the account permission email addresses read (for sign-in). The app is created **without a webhook**: GitHub rejects a webhook URL it can't reach (localhost), and it can't reach the home host anyway, so NEXUS polls first.
 
 ## 3. Install the app on your repositories
 
@@ -47,6 +47,23 @@ The board's **Code** zone lists the repositories of the app's installations; a r
 - **Rate limit** — NEXUS stops calling GitHub until the reset time it shows, then continues.
 
 Data is cached for 60 seconds (the drawers show "synced … ago"); changes on GitHub appear within a minute. Webhook-driven sync comes with FR-GH-10 — the app has no webhook until then.
+
+## 6. Issues from the AI researcher
+
+A deep dive can end in a **Noticed for you** card (a risk, opportunity or optimisation with verified evidence). **Preview** builds the exact issue on the server for a repository bound to the card's Dev project; **Approve** creates exactly that issue (R2: your click on that preview's hash, valid for 15 minutes). NEXUS never assigns, labels or mentions anyone, and links only to the pages whose quotes it verified. The issue ends with a hidden marker `<!-- nexus:opportunity:<id> -->`: if GitHub created it but NEXUS never saw the answer, approving again finds that issue instead of creating a second one.
+
+This needs the **Issues: read & write** permission. Apps created by `github:setup` from wave 5 on ask for it. For an app created earlier, until you change it, Preview and Approve answer 409 naming "Issues: read & write":
+
+1. GitHub → Settings → Developer settings → GitHub Apps → your NEXUS app → **Permissions & events** → Repository permissions → **Issues: Read and write** → **Save changes**.
+2. GitHub asks the installation owner to accept the new permission: open the installation (`<app URL>/installations/new`, or the account's Settings → Applications → Installed GitHub Apps → NEXUS) and click **Review request** → **Accept new permissions**. Do this for each installation that should receive issues.
+3. Wait up to a minute (NEXUS caches the installation list for 60 seconds), then preview again.
+
+Other answers:
+
+- **"The AI researcher's profile in this project doesn't allow github.issues.create"** — allow the tool in Settings → Agent profiles → AI researcher for that project.
+- **"This repository isn't bound to this project"** — bind it in Settings → Workspaces; a Business project can't create issues.
+- **"Emergency stop is engaged"** — release the stop first; nothing is sent to GitHub while it is engaged.
+- **"NEXUS is creating this issue right now"** — an approval is in flight; it shows "Created #n" once GitHub answers. If NEXUS restarted mid-call, approve again after 5 minutes.
 
 ## Origins and callback URLs
 

@@ -25,6 +25,7 @@ import {
   IncidentTriage,
   IssueDetail,
   IssueList,
+  IssuePreview,
   Job,
   JobList,
   Me,
@@ -33,6 +34,8 @@ import {
   MonitoredAppList,
   Notification,
   NotificationList,
+  Opportunity,
+  OpportunityList,
   OwnerSessionList,
   PairingCodeResponse,
   PaymentFailuresResponse,
@@ -63,12 +66,14 @@ import {
   type CreateConnectorRequest,
   type CreateJobRequest,
   type CreateMonitoredAppRequest,
+  type CreateOpportunityIssueRequest,
   type CreatePlanRequest,
   type CreateProjectRequest,
   type CreateThreadRequest,
   type CreateWatchlistRequest,
   type FindingSearchQuery,
   type JobStatus,
+  type OpportunityStatus,
   type PlanDecisionRequest,
   type ProposalDecisionRequest,
   type SetAgentProfileRequest,
@@ -341,6 +346,28 @@ export const api = {
   decidePlan: (id: string, body: PlanDecisionRequest) =>
     request(`/v1/plans/${encodeURIComponent(id)}/decision`, Plan, post({}, body)),
   cancelPlan: (id: string) => request(`/v1/plans/${encodeURIComponent(id)}/cancel`, Plan, post()),
+  // projectId omitted = the read-only "All" view. Ranked by the server (confidence, verified evidence, newest).
+  opportunities: (q: { projectId?: string; status?: OpportunityStatus }) =>
+    request(
+      `/v1/research/opportunities?${new URLSearchParams({ limit: "20", ...(q.projectId && { projectId: q.projectId }), ...(q.status && { status: q.status }) })}`,
+      OpportunityList,
+    ).then((l) => l.items),
+  opportunity: (id: string) => request(`/v1/research/opportunities/${encodeURIComponent(id)}`, Opportunity),
+  dismissOpportunity: (id: string) =>
+    request(`/v1/research/opportunities/${encodeURIComponent(id)}/dismiss`, Opportunity, post()),
+  previewIssue: (id: string, repositoryId: string) =>
+    request(
+      `/v1/research/opportunities/${encodeURIComponent(id)}/issue-preview`,
+      IssuePreview,
+      post({}, { repositoryId }),
+    ),
+  // Answers only after GitHub did: ISSUE_CREATED with the issue, or an error.
+  createOpportunityIssue: (id: string, body: CreateOpportunityIssueRequest, idempotencyKey: string) =>
+    request(
+      `/v1/research/opportunities/${encodeURIComponent(id)}/issue`,
+      Opportunity,
+      post({ [IDEMPOTENCY_HEADER]: idempotencyKey }, body),
+    ),
 };
 
 export type FindingFilters = Partial<Omit<FindingSearchQuery, "cursor">>;
@@ -392,4 +419,9 @@ export const keys = {
   plans: ["plans"] as const,
   plansOf: (projectId: string | undefined) => ["plans", "list", projectId ?? "all"] as const,
   plan: (id: string) => ["plans", id] as const,
+  opportunities: ["research", "opportunities"] as const,
+  opportunitiesOf: (projectId: string | undefined) =>
+    ["research", "opportunities", "list", projectId ?? "all"] as const,
+  opportunity: (id: string) => ["research", "opportunities", id] as const,
+  issuePreview: (id: string) => ["research", "opportunities", id, "preview"] as const,
 };
