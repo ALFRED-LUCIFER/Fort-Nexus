@@ -188,7 +188,9 @@ export function HomeView() {
             {!business && (
               <Section
                 id="home-repos"
-                title={`Repositories · ${scope.project?.name ?? "all installed"}`}
+                title={
+                  scope.project ? `Your repositories · ${scope.project.name}` : "Repositories · all installed"
+                }
                 meta="failing CI and pull requests to review first · GitHub"
               >
                 <RepoAttention onOpenAll={() => open("repos")} />

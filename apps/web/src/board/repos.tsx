@@ -1,12 +1,11 @@
 import { useId, useState, type ReactNode } from "react";
 import { getRouteApi } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import type { CiSummary, Repository, RepositoryHealth } from "@nexus/contracts";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { CiSummary, Project, Repository, RepositoryHealth } from "@nexus/contracts";
 import { api, keys } from "../lib/api.ts";
-import { ago, useGithubStatus, useNow, useRepositoryHealth } from "../lib/queries.ts";
+import { ago, useGithubStatus, useNow, useRepositories, useRepositoryHealth } from "../lib/queries.ts";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { githubSetupHint } from "./github.tsx";
-import { useOpenSettings } from "./Settings.tsx";
 import { useScope } from "./scope.tsx";
 
 // FR-GH-05: every repository at a glance (CI of the default branch, open pull requests and issues), ordered by what
@@ -118,22 +117,133 @@ export function RepoHealthRow({ h, now, onOpen }: { h: RepositoryHealth; now: nu
   );
 }
 
+/** Opens the repository picker of the current project (`drawer=repos:choose`). */
+export function useChooseRepositories() {
+  const { keep } = useScope();
+  const navigate = route.useNavigate();
+  return () => void navigate({ search: { ...keep, drawer: "repos:choose" } });
+}
+
 /** Why the list is empty, with the way out. */
 function NoRepos({ projectName }: { projectName?: string }) {
-  const openSettings = useOpenSettings();
+  const choose = useChooseRepositories();
   return (
     <div className="flex flex-col items-start gap-3">
       <p className="m-0 max-w-[560px] text-[14px] leading-relaxed text-ink2">
         {projectName
-          ? `No repositories are bound to ${projectName} yet. Bind the ones you work on, and their CI, pull requests and issues show here.`
+          ? `You haven't chosen the repositories you work on in ${projectName} yet. Pick the two or three you work on; only those show here, and only those can be worked on.`
           : "The NEXUS app's installations have no repositories yet. Add some in the installation settings on GitHub."}
       </p>
       {projectName && (
-        <button type="button" onClick={() => openSettings("ws")} className={ghostBtn}>
-          Bind repositories
+        <button type="button" onClick={choose} className={ghostBtn}>
+          Choose repositories
         </button>
       )}
     </div>
+  );
+}
+
+/**
+ * The project's working set: which installed repositories it works on. Choosing binds the repository to the project
+ * (audited, FR-WKS-03); only bound repositories show on Home and in the Code zone, and only they can take jobs.
+ */
+export function RepoPicker({ project, onDone }: { project: Project; onDone: () => void }) {
+  const queryClient = useQueryClient();
+  const searchId = useId();
+  const [q, setQ] = useState("");
+  const github = useGithubStatus();
+  const installed = github.data?.configured === true && github.data.installations.length > 0;
+  const all = useRepositories(installed);
+  const bind = useMutation({
+    mutationFn: ({ repoId, bound }: { repoId: string; bound: boolean }) =>
+      api.bindRepository(project.id, repoId, bound),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: keys.workspaces });
+      void queryClient.invalidateQueries({ queryKey: keys.repositories });
+      void queryClient.invalidateQueries({ queryKey: ["github", "health"] });
+      void queryClient.invalidateQueries({ queryKey: ["setup"] });
+    },
+  });
+  const archived = project.archivedAt !== null;
+  if (!all.data) return <DrawerState error={all.error} />;
+  const chosen = all.data.items.filter((r) => project.repositoryIds.includes(r.id));
+  const needle = q.trim().toLowerCase();
+  const listed = all.data.items.filter((r) => r.fullName.toLowerCase().includes(needle));
+  return (
+    <section aria-labelledby="repo-picker" className="flex flex-col gap-3">
+      <h3 id="repo-picker" className="kicker m-0">
+        Repositories you work on in {project.name} · {chosen.length} of {all.data.items.length}
+      </h3>
+      <p className="m-0 text-[13.5px] leading-[1.55] text-ink2">
+        Only the ones you choose show on Home and in the Code zone, and only they can take jobs. The rest stay
+        on GitHub, untouched. Each change is audited.
+      </p>
+      {archived && (
+        <p role="alert" className="m-0 text-[13px] text-coral">
+          {project.name} is archived: unarchive it in Settings → Workspaces to choose more.
+        </p>
+      )}
+      {chosen.length > 0 && (
+        <ul aria-label="Chosen" className="m-0 flex list-none flex-wrap gap-1.5 p-0">
+          {chosen.map((r) => (
+            <li key={r.id} className="rounded-full bg-hair px-2.5 py-[5px] font-mono text-[11.5px] text-ink">
+              {r.fullName}
+            </li>
+          ))}
+        </ul>
+      )}
+      <label htmlFor={searchId} className="flex flex-col gap-1 text-[11.5px] text-ink3">
+        Find a repository
+        <input
+          id={searchId}
+          type="search"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          className="min-w-0 rounded-xl border border-hair bg-card px-3 py-2 text-[13px] text-ink"
+        />
+      </label>
+      <fieldset className="m-0 flex flex-col gap-1 border-0 p-0">
+        <legend className="sr-only">Repositories of the NEXUS app&apos;s installations</legend>
+        {listed.length === 0 && <span className="text-[13px] text-ink2">No repository matches.</span>}
+        {listed.map((r) => {
+          const bound = project.repositoryIds.includes(r.id);
+          return (
+            <label
+              key={r.id}
+              className="flex items-center gap-2.5 rounded-xl px-2 py-1.5 text-[13px] text-ink hover:bg-hair"
+            >
+              <input
+                type="checkbox"
+                aria-label={r.fullName}
+                checked={bound}
+                disabled={bind.isPending || (archived && !bound)}
+                onChange={() => bind.mutate({ repoId: r.id, bound: !bound })}
+                className="size-4 accent-teal"
+              />
+              <span className="truncate font-mono text-[12.5px]">{r.fullName}</span>
+              <span className="ml-auto font-mono text-[10.5px] text-ink3">
+                {r.private ? "private" : "public"}
+              </span>
+            </label>
+          );
+        })}
+      </fieldset>
+      {bind.error && (
+        <p role="alert" className="m-0 text-[12.5px] text-coral">
+          {bind.error.message}
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={onDone}
+        disabled={chosen.length === 0}
+        className="self-start rounded-xl bg-teal px-4 py-2.5 text-[12.5px] font-medium text-onacc disabled:opacity-60"
+      >
+        {chosen.length === 0
+          ? "Choose at least one"
+          : `Done · show my ${plural(chosen.length, "repository", "repositories")}`}
+      </button>
+    </section>
   );
 }
 
@@ -150,16 +260,46 @@ export function useScopeRepositoryHealth() {
   };
 }
 
-/** Home: the repositories that need the owner now (at most 5), or a line saying they're quiet. */
+/**
+ * Home. In a project: the repositories the owner chose to work on (at most 6), needs-attention first. In All: only
+ * the ones that need the owner now (at most 5), or a line saying they're quiet.
+ */
 export function RepoAttention({ onOpenAll }: { onOpenAll: () => void }) {
   const { keep } = useScope();
   const navigate = route.useNavigate();
+  const choose = useChooseRepositories();
   const now = useNow(30_000);
   const { hint, health, projectName } = useScopeRepositoryHealth();
   if (hint) return <div className="text-[14px] text-ink2">{hint}</div>;
   if (!health.data) return <DrawerState error={health.error} />;
   const items = health.data.items;
   if (items.length === 0) return <NoRepos projectName={projectName} />;
+  const open = (h: RepositoryHealth) =>
+    void navigate({ search: { ...keep, drawer: `repo:${h.repository.id}` } });
+  if (projectName) {
+    const mine = byAttention(items);
+    return (
+      <div className="flex flex-col gap-2.5">
+        <ul aria-label="Your repositories" className="m-0 flex list-none flex-col gap-2 p-0">
+          {mine.slice(0, 6).map((h) => (
+            <li key={h.repository.id}>
+              <RepoHealthRow h={h} now={now} onOpen={() => open(h)} />
+            </li>
+          ))}
+        </ul>
+        <div className="flex flex-wrap gap-2">
+          {mine.length > 6 && (
+            <button type="button" onClick={onOpenAll} className={ghostBtn}>
+              All {plural(mine.length, "repository", "repositories")}
+            </button>
+          )}
+          <button type="button" onClick={choose} className={ghostBtn}>
+            Choose repositories
+          </button>
+        </div>
+      </div>
+    );
+  }
   const needing = byAttention(items).filter((h) => attentionReasons(h).length > 0);
   return (
     <div className="flex flex-col gap-2.5">
@@ -191,23 +331,62 @@ export function RepoAttention({ onOpenAll }: { onOpenAll: () => void }) {
 
 // ---------------------------------------------------------------- `drawer=repos`
 
-export function RepositoriesDrawer({ banner, onClose }: { banner?: ReactNode; onClose: () => void }) {
+export function RepositoriesDrawer({
+  choose,
+  banner,
+  onClose,
+}: {
+  /** `drawer=repos:choose`: open on the picker. */
+  choose: boolean;
+  banner?: ReactNode;
+  onClose: () => void;
+}) {
   return (
     <Drawer banner={banner} onClose={onClose}>
-      <RepositoriesBody />
+      {choose ? <ChooseBody /> : <RepositoriesBody />}
     </Drawer>
+  );
+}
+
+function ChooseBody() {
+  const { keep, project } = useScope();
+  const navigate = route.useNavigate();
+  const github = useGithubStatus();
+  const hint = githubSetupHint(github);
+  return (
+    <>
+      <DrawerHeader
+        kicker={`Repositories · ${project?.name ?? "all projects"} · GitHub`}
+        title="Choose your repositories"
+      />
+      <div className="nx-stagger flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-6 pt-5 pb-6">
+        {hint ? (
+          <div>{hint}</div>
+        ) : project ? (
+          <RepoPicker
+            project={project}
+            onDone={() => void navigate({ search: { ...keep, drawer: "repos" } })}
+          />
+        ) : (
+          <p className="m-0 text-[14px] leading-relaxed text-ink2">
+            Repositories are chosen per project. Pick a Dev project in the SCOPE menu first.
+          </p>
+        )}
+      </div>
+    </>
   );
 }
 
 function RepositoriesBody() {
   const { keep } = useScope();
   const navigate = route.useNavigate();
+  const choose = useChooseRepositories();
   const now = useNow(30_000);
   const searchId = useId();
   const { hint, health, projectName } = useScopeRepositoryHealth();
   const [only, setOnly] = useState<"attention" | "all">("all");
   const [q, setQ] = useState("");
-  const where = projectName ?? "all installed repositories";
+  const where = projectName ? `your repositories in ${projectName}` : "all installed repositories";
   const header = <DrawerHeader kicker={`Repositories · ${where} · GitHub`} title="Repositories" />;
   if (hint)
     return (
@@ -246,10 +425,17 @@ function RepositoriesBody() {
           <NoRepos projectName={projectName} />
         ) : (
           <>
-            <p className="m-0 font-mono text-[12px] text-ink2">
-              {healthSummary(items)} · synced {ago(new Date(oldest).toISOString(), now)}
-              {health.isFetching ? " · refreshing…" : ""}
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="m-0 font-mono text-[12px] text-ink2">
+                {healthSummary(items)} · synced {ago(new Date(oldest).toISOString(), now)}
+                {health.isFetching ? " · refreshing…" : ""}
+              </p>
+              {projectName && (
+                <button type="button" onClick={choose} className={ghostBtn}>
+                  Choose repositories
+                </button>
+              )}
+            </div>
             <div className="flex flex-wrap items-end gap-3">
               <div role="group" aria-label="Show" className="flex rounded-[14px] bg-hair p-1">
                 <button

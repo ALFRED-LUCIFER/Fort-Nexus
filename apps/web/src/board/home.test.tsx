@@ -544,7 +544,7 @@ describe("Cofounder home", () => {
       "4 things are ready for you: a push for #42 and 1 opportunity.",
       "Live · Home",
       "Waiting on you",
-      "Repositories · Home",
+      "Your repositories · Home",
       "Your cofounder noticed",
       "Agent activity",
       "Execution",

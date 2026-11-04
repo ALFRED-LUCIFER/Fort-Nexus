@@ -64,8 +64,8 @@ async function repositoriesStep(db: Db, ownerId: string, projectId: string | und
     const n = (await boundRepositoryIds(db, ownerId, projectId)).size;
     const [p] = await db.select({ name: projects.name }).from(projects).where(eq(projects.id, projectId));
     return n > 0
-      ? step(true, `${n} ${n === 1 ? "repository is" : "repositories are"} bound to ${p!.name}.`)
-      : step(false, `No repositories are bound to ${p!.name} yet. Bind some in Settings → Workspaces.`);
+      ? step(true, `You work on ${n} ${n === 1 ? "repository" : "repositories"} in ${p!.name}.`)
+      : step(false, `Choose the repositories you work on in ${p!.name}; only those show and can take jobs.`);
   }
   const [row] = await db
     .select({ n: count() })
@@ -75,8 +75,11 @@ async function repositoriesStep(db: Db, ownerId: string, projectId: string | und
     .where(and(eq(workspaces.ownerId, ownerId), eq(workspaces.mode, "DEV"), isNull(projects.archivedAt)));
   const n = row?.n ?? 0;
   return n > 0
-    ? step(true, `Your Dev projects have ${n} repository ${n === 1 ? "binding" : "bindings"}.`)
-    : step(false, "No repository is bound to a Dev project yet. Bind some in Settings → Workspaces.");
+    ? step(true, `Your Dev projects work on ${n} ${n === 1 ? "repository" : "repositories"}.`)
+    : step(
+        false,
+        "No Dev project has repositories chosen yet. Pick a project and choose the ones you work on.",
+      );
 }
 
 async function aiStep(file: string): Promise<SetupStep> {

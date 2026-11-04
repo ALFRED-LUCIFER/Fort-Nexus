@@ -67,6 +67,13 @@ PRD: FR-GH-05 (repository details: branches, issues, PRs, CI summary), FR-WKS-01
   - Drawers say "Close" (they open over Home too).
   - The Automations zone links to Settings → Automations.
 
+## Follow-up: your repositories (working set)
+
+- `drawer=repos:choose` is a picker over every installed repository; a checkbox binds or unbinds it for the current project (audited).
+- In a project, Home lists every chosen repository, needs-attention first; in All it lists only those needing attention.
+- The setup step "Your repositories" opens the picker.
+- Scope data waits for the workspaces, so a "Dev only" owner never triggers an All-repositories health load.
+
 ## Tests
 
 - API: `test/repository-health.test.ts` covers health, details, cache, project scope, rate limit and setup. `test/workspaces.test.ts` covers show/hide.

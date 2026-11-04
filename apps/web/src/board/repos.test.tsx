@@ -210,19 +210,17 @@ describe("repositories drawer (FR-GH-05)", () => {
     expect(router.state.location.search).toMatchObject({ drawer: "repo:101", project: PROJECT_ID });
   });
 
-  it("says why it is empty and how to bind repositories", async () => {
+  it("with nothing chosen yet, says so and opens the picker", async () => {
     app({ "GET /v1/repositories/health": () => json({ items: [] }) });
     const user = userEvent.setup();
     const { router } = renderApp(`${IN_PROJECT}&drawer=repos`);
     const drawer = await screen.findByRole("dialog");
-    expect(await within(drawer).findByText(/No repositories are bound to Home yet/)).toBeTruthy();
-    await user.click(within(drawer).getByRole("button", { name: "Bind repositories" }));
-    await waitFor(() => expect(router.state.location.hash).toBe("ws"));
-    expect(router.state.location.search).toMatchObject({ drawer: "settings" });
-    const settings = await screen.findByRole("dialog");
-    expect(within(settings).getByRole("button", { name: "Workspaces" }).getAttribute("aria-pressed")).toBe(
-      "true",
-    );
+    expect(
+      await within(drawer).findByText(/haven't chosen the repositories you work on in Home/),
+    ).toBeTruthy();
+    await user.click(within(drawer).getByRole("button", { name: "Choose repositories" }));
+    expect(router.state.location.search).toMatchObject({ drawer: "repos:choose", project: PROJECT_ID });
+    expect(await screen.findByRole("heading", { name: "Choose your repositories" })).toBeTruthy();
   });
 
   it("shows GitHub's error instead of an empty list", async () => {
@@ -236,6 +234,39 @@ describe("repositories drawer (FR-GH-05)", () => {
     renderApp(`${IN_PROJECT}&drawer=repos`);
     const drawer = await screen.findByRole("dialog");
     expect((await within(drawer).findByRole("alert")).textContent).toBe("GitHub is unavailable right now.");
+  });
+});
+
+describe("choosing the repositories you work on", () => {
+  it("lists every installed repository, the chosen ones checked; a click binds it to the project", async () => {
+    const calls = app({
+      [`PUT /v1/projects/${PROJECT_ID}/repositories/103`]: () =>
+        json(project({ repositoryIds: ["101", "103"] })),
+    });
+    const user = userEvent.setup();
+    const { router } = renderApp(`${IN_PROJECT}&drawer=repos:choose`);
+    const drawer = await screen.findByRole("dialog");
+    const picker = await within(drawer).findByRole("region", {
+      name: /Repositories you work on in Home · 1 of 4/,
+    });
+    expect(within(within(picker).getByRole("list", { name: "Chosen" })).getByText("acme/quiet")).toBeTruthy();
+    const boxes = within(picker).getAllByRole("checkbox");
+    expect(boxes.map((b) => (b as HTMLInputElement).checked)).toEqual([true, false, false, false]);
+
+    await user.type(within(picker).getByLabelText("Find a repository"), "brok");
+    await user.click(within(picker).getByRole("checkbox", { name: "acme/broken" }));
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === "PUT" && c.path.endsWith("/repositories/103"))).toBe(true),
+    );
+    await user.click(within(picker).getByRole("button", { name: /^Done · show my/ }));
+    expect(router.state.location.search).toMatchObject({ drawer: "repos" });
+  });
+
+  it("in the All view, asks to pick a project first", async () => {
+    app();
+    renderApp("/?drawer=repos:choose");
+    const drawer = await screen.findByRole("dialog");
+    expect(await within(drawer).findByText(/chosen per project/)).toBeTruthy();
   });
 });
 
@@ -289,22 +320,40 @@ describe("Home: setup checklist and repositories", () => {
       "Optional",
     ]);
     expect(within(items[2]!).getByText("docs/runbooks/ai-provider.md")).toBeTruthy();
-    await user.click(within(items[1]!).getByRole("button", { name: "Bind repositories" }));
-    await waitFor(() => expect(router.state.location.hash).toBe("ws"));
+    await user.click(within(items[1]!).getByRole("button", { name: "Choose repositories" }));
+    expect(router.state.location.search).toMatchObject({ drawer: "repos:choose" });
   });
 
   it("goes away once NEXUS is ready", async () => {
     home({ "GET /v1/setup": () => json({ ...NOT_READY, ready: true }) });
     renderApp(IN_PROJECT, { view: "home" });
-    await screen.findByRole("region", { name: "Repositories · Home" });
+    await screen.findByRole("region", { name: "Your repositories · Home" });
     expect(screen.queryByRole("region", { name: "Before NEXUS can work" })).toBeNull();
   });
 
-  it("shows the repositories that need the owner and opens the full list", async () => {
+  it("in a project, shows every chosen repository, the ones that need the owner first", async () => {
     home();
     const user = userEvent.setup();
     const { router } = renderApp(IN_PROJECT, { view: "home" });
-    const section = await screen.findByRole("region", { name: "Repositories · Home" });
+    const section = await screen.findByRole("region", { name: "Your repositories · Home" });
+    const rows = within(await within(section).findByRole("list", { name: "Your repositories" })).getAllByRole(
+      "listitem",
+    );
+    expect(rows.map((r) => r.textContent?.match(/^acme\/[a-z]+?(?=main|archived)/)?.[0])).toEqual([
+      "acme/broken",
+      "acme/prs",
+      "acme/quiet",
+      "acme/old",
+    ]);
+    await user.click(within(section).getByRole("button", { name: "Choose repositories" }));
+    expect(router.state.location.search).toMatchObject({ drawer: "repos:choose" });
+  });
+
+  it("in All, shows only what needs the owner and opens the full list", async () => {
+    home();
+    const user = userEvent.setup();
+    const { router } = renderApp("/", { view: "home" });
+    const section = await screen.findByRole("region", { name: "Repositories · all installed" });
     const rows = within(
       await within(section).findByRole("list", { name: "Repositories needing attention" }),
     ).getAllByRole("listitem");
@@ -316,10 +365,10 @@ describe("Home: setup checklist and repositories", () => {
     expect(router.state.location.search).toMatchObject({ drawer: "repos" });
   });
 
-  it("says when every repository is quiet", async () => {
+  it("in All, says when every repository is quiet", async () => {
     home({ "GET /v1/repositories/health": () => json({ items: [health(QUIET)] }) });
-    renderApp(IN_PROJECT, { view: "home" });
-    const section = await screen.findByRole("region", { name: "Repositories · Home" });
+    renderApp("/", { view: "home" });
+    const section = await screen.findByRole("region", { name: "Repositories · all installed" });
     expect(await within(section).findByText(/All 1 repository are quiet/)).toBeTruthy();
   });
 });

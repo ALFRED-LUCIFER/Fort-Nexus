@@ -1,6 +1,8 @@
 import type { SetupStatus, SetupStep, SetupStepKey } from "@nexus/contracts";
 import { useGithubStatus, useRunners } from "../lib/queries.ts";
+import { useChooseRepositories } from "./repos.tsx";
 import { useOpenSettings } from "./Settings.tsx";
+import { useScope } from "./scope.tsx";
 import { PairRunner } from "./zones.tsx";
 
 // The Home setup checklist: what NEXUS still needs before a job can go from words to a draft PR. Every line comes
@@ -8,7 +10,7 @@ import { PairRunner } from "./zones.tsx";
 
 const TITLE: Record<SetupStepKey, string> = {
   GITHUB: "GitHub App",
-  REPOSITORIES: "Repositories bound",
+  REPOSITORIES: "Your repositories",
   AI_PROVIDER: "AI provider",
   RUNNER: "Home runner",
   WEB_SEARCH: "Web search",
@@ -55,12 +57,15 @@ function Step({ step: s }: { step: SetupStep }) {
 
 function StepAction({ step: s }: { step: SetupStep }) {
   const openSettings = useOpenSettings();
+  const choose = useChooseRepositories();
+  const { project } = useScope();
   const github = useGithubStatus();
   const runners = useRunners();
+  // In a project the picker chooses its repositories; in All, Settings → Workspaces holds every project's.
   if (s.key === "REPOSITORIES")
     return (
-      <button type="button" onClick={() => openSettings("ws")} className={btn}>
-        Bind repositories
+      <button type="button" onClick={project ? choose : () => openSettings("ws")} className={btn}>
+        Choose repositories
       </button>
     );
   if (s.key === "GITHUB" && github.data?.configured)

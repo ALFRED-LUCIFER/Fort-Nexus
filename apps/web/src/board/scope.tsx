@@ -54,7 +54,8 @@ export function useScope(): Scope {
   return {
     ws,
     project,
-    ready: ws === "all" || !projectId || !workspaces.isPending,
+    // The workspaces decide the scope ("Dev only" picks Dev): nothing loads for a scope until they have arrived.
+    ready: !workspaces.isPending,
     blocked,
     keep: { ws: ws === fallback ? undefined : ws, project: projectId, view: search.view },
     fallback,

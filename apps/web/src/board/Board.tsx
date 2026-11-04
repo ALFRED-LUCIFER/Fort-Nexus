@@ -685,7 +685,9 @@ export function Board() {
         />
       )}
       {drawerKind === "jobs" && <JobsDrawer banner={banner} onClose={closeDrawer} />}
-      {drawerKind === "repos" && <RepositoriesDrawer banner={banner} onClose={closeDrawer} />}
+      {drawerKind === "repos" && (
+        <RepositoriesDrawer choose={drawerId === "choose"} banner={banner} onClose={closeDrawer} />
+      )}
       {drawerKind === "newjob" && <NewJobDrawer banner={banner} onClose={closeDrawer} />}
       {drawerKind === "jobdraft" && drawerId && (
         <JobDraftDrawer id={drawerId} banner={banner} onClose={closeDrawer} />

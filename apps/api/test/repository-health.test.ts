@@ -330,7 +330,7 @@ describe("setup checklist", () => {
     // An earlier test bound acme/web to Home.
     expect(by.REPOSITORIES).toMatchObject({ done: true });
     const scoped = await steps(`?projectId=${home().id}`);
-    expect(scoped.by.REPOSITORIES!.detail).toBe("1 repository is bound to Home.");
+    expect(scoped.by.REPOSITORIES!.detail).toBe("You work on 1 repository in Home.");
     expect((await call("GET", `/v1/setup?projectId=${randomUUID()}`)).statusCode).toBe(404);
   });
 
