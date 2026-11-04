@@ -9,6 +9,7 @@ import {
   type Issue,
   type IssueDetail,
   type Repository,
+  type RepositoryDetails,
 } from "@nexus/contracts";
 import {
   FakeEventSource,
@@ -82,6 +83,44 @@ const detail = (over: Partial<IssueDetail> = {}): IssueDetail => ({
   ...over,
 });
 
+const SHA = "a".repeat(40);
+const repoDetails = (r: Repository, over: Partial<RepositoryDetails> = {}): RepositoryDetails => ({
+  repository: r,
+  archived: false,
+  openIssues: 4,
+  pullRequests: [
+    {
+      number: 12,
+      title: "Fix cart totals",
+      draft: true,
+      author: "nexus-bot",
+      headBranch: "nexus/issue-42-x",
+      baseBranch: "main",
+      nexus: true,
+      updatedAt: SYNCED,
+      htmlUrl: `https://github.com/${r.fullName}/pull/12`,
+    },
+  ],
+  pullRequestsMore: false,
+  branches: [
+    { name: "main", protected: true, default: true, nexus: false },
+    { name: "nexus/issue-42-x", protected: false, default: false, nexus: true },
+  ],
+  branchesMore: false,
+  ci: { state: "FAILING", sha: SHA, total: 2, failing: ["test"], completedAt: SYNCED },
+  checks: [
+    {
+      name: "test",
+      status: "completed",
+      conclusion: "failure",
+      htmlUrl: "https://github.com/acme/web/runs/1",
+    },
+    { name: "lint", status: "completed", conclusion: "success", htmlUrl: null },
+  ],
+  syncedAt: SYNCED,
+  ...over,
+});
+
 let runners = [runner()];
 const mockRunners = (r: ReturnType<typeof runner>[]) => (runners = r);
 
@@ -92,6 +131,8 @@ function board(status: GithubStatus, extra: Parameters<typeof mockFetch>[0] = {}
     "GET /v1/jobs": () => json({ items: [], nextCursor: null }),
     "GET /v1/github/status": () => json(status),
     "GET /v1/repositories": () => json({ items: REPOS, syncedAt: SYNCED }),
+    "GET /v1/repositories/101/details": () => json(repoDetails(REPOS[0]!)),
+    "GET /v1/repositories/102/details": () => json(repoDetails(REPOS[1]!, { pullRequests: [], checks: [] })),
     ...extra,
   });
 }
@@ -135,10 +176,12 @@ describe("Code zone", () => {
     expect(within(drawer).getByRole("heading", { name: "acme/api" })).toBeTruthy();
     const accounts = within(drawer).getByRole("list", { name: "GitHub accounts" });
     expect(accounts.textContent).toMatch(/acme.*organization · selected repos · installation 1/);
-    const rows = within(within(drawer).getByRole("list", { name: "Repositories" })).getAllByRole("button");
-    expect(rows.map((r) => r.getAttribute("aria-current"))).toEqual([null, "true"]);
-    expect(rows[1]!.textContent).toMatch(/private · main · updated .*PR write/);
+    // One repository open: its facts and details, not the whole list (that is one click away).
+    expect(within(drawer).queryByRole("list", { name: "Repositories" })).toBeNull();
+    expect(within(drawer).getByText(/private · main · updated .*PR write/)).toBeTruthy();
     expect(await within(drawer).findByText("No issues match these filters.")).toBeTruthy();
+    await user.click(within(drawer).getByRole("button", { name: "← All repositories" }));
+    expect(router.state.location.search).toMatchObject({ drawer: "repos" });
   });
 });
 

@@ -14,12 +14,14 @@ import {
   type HomeSummary,
 } from "@nexus/contracts";
 import { api, keys } from "../lib/api.ts";
-import { ago, clock, statusLabel, until, useNow } from "../lib/queries.ts";
-import { AGENT_LABEL } from "./agentLabels.ts";
+import { ago, clock, statusLabel, until, useNow, useSetup } from "../lib/queries.ts";
+import { AGENT_LABEL, BUSINESS_AGENTS } from "./agentLabels.ts";
 import { BusinessZone } from "./business.tsx";
 import { CofounderPanel } from "./cofounder.tsx";
 import { KpiCards } from "./home/kpis.tsx";
 import { NoticedZone } from "./opportunities.tsx";
+import { RepoAttention } from "./repos.tsx";
+import { SetupSteps, setupMeta } from "./setup.tsx";
 import { useScope } from "./scope.tsx";
 
 // The Cofounder home (PRD §D.4): the landing view, one read of the owner's day from GET /v1/home. Every number and
@@ -107,7 +109,10 @@ export function HomeView() {
   const open = (drawer: string) => void navigate({ search: { ...scope.keep, drawer } });
   const openRef = (ref: HomeRef) => open(drawerOf(ref));
   const s = home.data;
+  const setup = useSetup(scope.ready, scope.project?.id);
   const business = scope.ws === "business";
+  // "Dev only": a hidden Business workspace hides its agents here too.
+  const agents = s?.agents.filter((a) => scope.shown.business || !BUSINESS_AGENTS.has(a.agent)) ?? [];
   const readOnly = !scope.project || !!scope.project.archivedAt;
   // GET /v1/home without a project reads every project of the owner, whichever workspace is picked.
   const where = scope.project?.name ?? "all projects";
@@ -154,6 +159,12 @@ export function HomeView() {
               <ReadState q={home} />
             </m.section>
 
+            {setup.data && !setup.data.ready && (
+              <Section id="home-setup" title="Before NEXUS can work" meta={setupMeta(setup.data)}>
+                <SetupSteps status={setup.data} />
+              </Section>
+            )}
+
             {(business || s) && (
               <Section
                 id="home-kpis"
@@ -174,6 +185,16 @@ export function HomeView() {
               </Section>
             )}
 
+            {!business && (
+              <Section
+                id="home-repos"
+                title={`Repositories · ${scope.project?.name ?? "all installed"}`}
+                meta="failing CI and pull requests to review first · GitHub"
+              >
+                <RepoAttention onOpenAll={() => open("repos")} />
+              </Section>
+            )}
+
             <Section
               id="home-noticed"
               title="Your cofounder noticed"
@@ -187,8 +208,8 @@ export function HomeView() {
 
             {s && (
               <div className="grid grid-cols-[repeat(auto-fit,minmax(290px,1fr))] gap-3">
-                <Section id="home-agents" title="Agent activity" meta={agentsMeta(s.agents)} className={card}>
-                  <Agents agents={s.agents} onOpen={open} onOpenRef={openRef} />
+                <Section id="home-agents" title="Agent activity" meta={agentsMeta(agents)} className={card}>
+                  <Agents agents={agents} onOpen={open} onOpenRef={openRef} />
                 </Section>
                 <Section id="home-execution" title="Execution" meta="on your home machine" className={card}>
                   <Execution runs={s.execution} now={now} onOpen={(id) => open(`run:${id}`)} />

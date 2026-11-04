@@ -25,7 +25,7 @@ const text = (max: number) =>
     .catch(undefined);
 
 // Deep-linkable board state: `/?ws=dev&project=<uuid>&drawer=run:<uuid>`, `drawer=repo:<repoId>` (with issue filters),
-// `drawer=issue:<repoId>:<number>`, `drawer=inbox`, `drawer=settings`, `drawer=business`, `drawer=research` / `drawer=research:<uuid>` (one deep dive), `drawer=talk` (threads) / `drawer=talk:<uuid>` (one thread), `drawer=systems`, `drawer=incident:<uuid>`, `drawer=agent:<AgentKey>`, `drawer=plan:<uuid>`, `drawer=opp:<uuid>` (`:preview` opens on the issue preview), `drawer=jobs` (Jobs page), `drawer=newjob` (New job form), `drawer=jobdraft:<uuid>` (one job draft). Bad values fall back instead of erroring.
+// `drawer=issue:<repoId>:<number>`, `drawer=inbox`, `drawer=settings`, `drawer=business`, `drawer=research` / `drawer=research:<uuid>` (one deep dive), `drawer=talk` (threads) / `drawer=talk:<uuid>` (one thread), `drawer=systems`, `drawer=incident:<uuid>`, `drawer=agent:<AgentKey>`, `drawer=plan:<uuid>`, `drawer=opp:<uuid>` (`:preview` opens on the issue preview), `drawer=jobs` (Jobs page), `drawer=newjob` (New job form), `drawer=jobdraft:<uuid>` (one job draft), `drawer=repos` (repository health). Bad values fall back instead of erroring.
 export const BoardSearch = z.object({
   ws: Workspace.optional().catch(undefined),
   // Cofounder home (the default) or the zone board (`view=board`); drawers open over either.
@@ -35,7 +35,7 @@ export const BoardSearch = z.object({
   drawer: z
     .string()
     .regex(
-      /^(run:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|repo:[1-9]\d{0,19}|issue:[1-9]\d{0,19}:[1-9]\d{0,9}|(?:incident|plan):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|opp:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?::preview)?|agent:[a-z_]{1,32}|jobdraft:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|jobs|newjob|inbox|settings|business|research(?::[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?|systems|talk(?::[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?)$/i,
+      /^(run:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|repo:[1-9]\d{0,19}|issue:[1-9]\d{0,19}:[1-9]\d{0,9}|(?:incident|plan):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|opp:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?::preview)?|agent:[a-z_]{1,32}|jobdraft:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|jobs|newjob|repos|inbox|settings|business|research(?::[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?|systems|talk(?::[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?)$/i,
     )
     .optional()
     .catch(undefined),

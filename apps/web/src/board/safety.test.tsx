@@ -171,7 +171,7 @@ describe("settings", () => {
     expect(within(drawer).getByText("this browser")).toBeTruthy();
 
     await user.click(within(drawer).getByRole("button", { name: "Backups" }));
-    expect(within(drawer).getByText(/Viewing them here arrives in P1/)).toBeTruthy();
+    expect(within(drawer).getByText(/can't be viewed from here yet/)).toBeTruthy();
     await user.click(within(drawer).getByRole("button", { name: "Budgets & limits" }));
     const meter = await within(drawer).findByRole("meter", { name: "Today's AI spend · estimate" });
     expect(meter.getAttribute("aria-valuetext")).toBe("$4.50 of $20.00");

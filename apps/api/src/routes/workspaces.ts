@@ -1,7 +1,15 @@
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
-import { CreateProjectRequest, Project, RepoId, UpdateProjectRequest, WorkspaceList } from "@nexus/contracts";
+import {
+  CreateProjectRequest,
+  Project,
+  RepoId,
+  UpdateProjectRequest,
+  UpdateWorkspaceRequest,
+  Workspace,
+  WorkspaceList,
+} from "@nexus/contracts";
 import type { Deps } from "../app.ts";
 import {
   bindRepository,
@@ -9,6 +17,7 @@ import {
   listWorkspaces,
   unbindRepository,
   updateProject,
+  updateWorkspace,
 } from "../workspaces.ts";
 import { requireGithub } from "./github.ts";
 import { owner } from "./owner.ts";
@@ -23,6 +32,18 @@ export async function workspaceRoutes(app: FastifyInstance, deps: Deps) {
 
   r.get("/v1/workspaces", { schema: { response: { 200: WorkspaceList } } }, async (req) =>
     listWorkspaces(db, owner(req).id),
+  );
+
+  r.patch(
+    "/v1/workspaces/:id",
+    { schema: { params: IdParams, body: UpdateWorkspaceRequest, response: { 200: Workspace } } },
+    async (req) =>
+      updateWorkspace(db, {
+        ownerId: owner(req).id,
+        workspaceId: req.params.id,
+        body: req.body,
+        correlationId: req.id,
+      }),
   );
 
   r.post(

@@ -131,7 +131,9 @@ describe("workspace switch and project menu", () => {
         .getByRole("button", { name: /All workspaces/ })
         .getAttribute("aria-current"),
     ).toBe("true");
-    expect(within(menu).getByRole("button", { name: /Shop/ }).textContent).toMatch(/no sources connected/);
+    expect(within(menu).getByRole("button", { name: /Shop/ }).textContent).toMatch(
+      /business · read-only sources/,
+    );
     await user.keyboard("{Escape}");
     expect(within(scope).queryByRole("list", { name: "Projects" })).toBeNull();
     expect(document.activeElement).toBe(button);

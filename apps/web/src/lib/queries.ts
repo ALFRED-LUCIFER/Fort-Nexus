@@ -49,6 +49,33 @@ export const useRepositories = (enabled: boolean, projectId?: string) =>
 /** Dev + Business and their projects (FR-WKS-01..03). */
 export const useWorkspaces = () => useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces });
 
+export type ShownWorkspaces = { dev: boolean; business: boolean };
+
+/** Which workspaces the owner shows (Settings → Workspaces, e.g. "Dev only for now"); both until the list loads. */
+export function useShownWorkspaces(): ShownWorkspaces {
+  const items = useWorkspaces().data?.items;
+  const on = (mode: "DEV" | "BUSINESS") => items?.find((w) => w.mode === mode)?.enabled ?? true;
+  return { dev: on("DEV"), business: on("BUSINESS") };
+}
+
+/** FR-GH-05: PRs, issues and CI per repository. The API keeps each repository's answer for 3 minutes. */
+export const useRepositoryHealth = (enabled: boolean, projectId?: string) =>
+  useQuery({
+    queryKey: keys.repositoryHealth(projectId),
+    queryFn: () => api.repositoryHealth(projectId),
+    enabled,
+    refetchInterval: 3 * GITHUB_POLL_MS,
+  });
+
+/** What NEXUS still needs before it can work; re-checked while it's on screen. */
+export const useSetup = (enabled: boolean, projectId?: string) =>
+  useQuery({
+    queryKey: keys.setup(projectId),
+    queryFn: () => api.setup(projectId),
+    enabled,
+    refetchInterval: 30_000,
+  });
+
 /** Newest runs of one project, or of all projects (the read-only "All" view) when projectId is undefined. */
 export const useRecentJobs = (projectId: string | undefined, enabled = true) =>
   useQuery({

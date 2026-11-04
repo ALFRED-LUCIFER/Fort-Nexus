@@ -131,10 +131,13 @@ export const project = (over: Partial<Project> = {}): Project => ({
   createdAt: T0,
   ...over,
 });
-export const workspaces = (dev: Project[], biz: Project[] = []): WorkspaceList => ({
+export const DEV_WORKSPACE_ID = DEV_WS;
+export const BIZ_WORKSPACE_ID = BIZ_WS;
+/** `businessShown: false` is the owner's "Dev only" setting. */
+export const workspaces = (dev: Project[], biz: Project[] = [], businessShown = true): WorkspaceList => ({
   items: [
-    { id: DEV_WS, mode: "DEV", name: "Dev", projects: dev },
-    { id: BIZ_WS, mode: "BUSINESS", name: "Business", projects: biz },
+    { id: DEV_WS, mode: "DEV", name: "Dev", enabled: true, projects: dev },
+    { id: BIZ_WS, mode: "BUSINESS", name: "Business", enabled: businessShown, projects: biz },
   ],
 });
 export const WORKSPACES = workspaces(

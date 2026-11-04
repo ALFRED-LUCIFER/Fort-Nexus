@@ -12,6 +12,7 @@ export type AuditEntry = {
     | "session"
     | "system"
     | "project"
+    | "workspace"
     | "notification"
     | "research_watchlist"
     | "research_run"

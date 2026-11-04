@@ -14,8 +14,10 @@ import {
   apiError,
   json,
   mockFetch,
+  project,
   renderApp,
   runner,
+  workspaces,
 } from "../test/helpers.tsx";
 import { kpiDelta } from "./home/kpis.tsx";
 import { PICK_PROJECT } from "./scope.tsx";
@@ -299,6 +301,15 @@ describe("Cofounder home", () => {
     expect(within(await section("Execution")).getByText("Nothing running.")).toBeTruthy();
   });
 
+  it("Dev only: a hidden Business workspace hides its agents from Agent activity", async () => {
+    home({ "GET /v1/workspaces": () => json(workspaces([project()], [], false)) });
+    renderApp(IN_PROJECT, { view: "home" });
+    const agents = await section("Agent activity");
+    const rows = within(agents).getAllByRole("listitem");
+    expect(rows).toHaveLength(AgentKey.options.length - 1);
+    expect(rows.some((r) => r.textContent?.includes("Financial analyst"))).toBe(false);
+  });
+
   it("shows every agent with its state in words, what it does and its est. cost; rows open drawers", async () => {
     home();
     const user = userEvent.setup();
@@ -533,6 +544,7 @@ describe("Cofounder home", () => {
       "4 things are ready for you: a push for #42 and 1 opportunity.",
       "Live · Home",
       "Waiting on you",
+      "Repositories · Home",
       "Your cofounder noticed",
       "Agent activity",
       "Execution",

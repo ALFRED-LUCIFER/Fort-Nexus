@@ -10,3 +10,6 @@ export const AGENT_LABEL: Record<AgentKey, string> = {
   AI_RESEARCHER: "AI researcher",
   FINANCIAL_ANALYST: "Financial analyst",
 };
+
+// Agents that only work on Business data: hidden while the owner hides the Business workspace.
+export const BUSINESS_AGENTS: ReadonlySet<AgentKey> = new Set<AgentKey>(["FINANCIAL_ANALYST"]);

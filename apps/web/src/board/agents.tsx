@@ -93,19 +93,24 @@ export function AgentsZone({
   query,
   projectId,
   onOpen,
+  hide,
 }: {
   query: UseQueryResult<AgentSummary[]>;
   projectId?: string;
   onOpen: (k: AgentKey) => void;
+  /** Agents of a hidden workspace. */
+  hide?: ReadonlySet<AgentKey>;
 }) {
   if (!query.data) return <AgentsState query={query} projectId={projectId} />;
   return (
     <ul aria-label="Agents" className="m-0 flex list-none flex-wrap content-start gap-[30px] p-0">
-      {query.data.map((a) => (
-        <li key={a.agent}>
-          <AgentCard a={a} onOpen={onOpen} wide />
-        </li>
-      ))}
+      {query.data
+        .filter((a) => !hide?.has(a.agent))
+        .map((a) => (
+          <li key={a.agent}>
+            <AgentCard a={a} onOpen={onOpen} wide />
+          </li>
+        ))}
     </ul>
   );
 }
@@ -117,6 +122,7 @@ export function agentLanes(
   query: UseQueryResult<AgentSummary[]>,
   projectId: string | undefined,
   onOpen: (k: AgentKey) => void,
+  hide?: ReadonlySet<AgentKey>,
 ): (Omit<ZoneProps, "dim" | "children"> & { body: ReactNode })[] {
   if (!query.data)
     return [
@@ -132,32 +138,34 @@ export function agentLanes(
         body: <AgentsState query={query} projectId={projectId} />,
       },
     ];
-  return query.data.map((a, i) => ({
-    id: `lane-${a.agent}`,
-    label: a.label,
-    sub: "",
-    x: 40 + i * 290,
-    y: 40,
-    w: 270,
-    h: 2260,
-    tint: LANE_TINT[i % 2]!,
-    body: (
-      <div className="flex flex-col gap-4">
-        <AgentCard a={a} onOpen={onOpen} />
-        <dl className="m-0 flex flex-col gap-1 font-mono text-[11.5px] leading-[1.45] text-ink2">
-          <dt className="kicker">Autonomy</dt>
-          <dd className="m-0 mb-2">{AUTONOMY[a.effective.settings.autonomy].label}</dd>
-          <dt className="kicker">Tools</dt>
-          {a.effective.settings.tools.length === 0 && <dd className="m-0">none</dd>}
-          {a.effective.settings.tools.map((t) => (
-            <dd key={t} className="m-0 break-all">
-              {t} · {TOOL_RISK[t]}
-            </dd>
-          ))}
-        </dl>
-      </div>
-    ),
-  }));
+  return query.data
+    .filter((a) => !hide?.has(a.agent))
+    .map((a, i) => ({
+      id: `lane-${a.agent}`,
+      label: a.label,
+      sub: "",
+      x: 40 + i * 290,
+      y: 40,
+      w: 270,
+      h: 2260,
+      tint: LANE_TINT[i % 2]!,
+      body: (
+        <div className="flex flex-col gap-4">
+          <AgentCard a={a} onOpen={onOpen} />
+          <dl className="m-0 flex flex-col gap-1 font-mono text-[11.5px] leading-[1.45] text-ink2">
+            <dt className="kicker">Autonomy</dt>
+            <dd className="m-0 mb-2">{AUTONOMY[a.effective.settings.autonomy].label}</dd>
+            <dt className="kicker">Tools</dt>
+            {a.effective.settings.tools.length === 0 && <dd className="m-0">none</dd>}
+            {a.effective.settings.tools.map((t) => (
+              <dd key={t} className="m-0 break-all">
+                {t} · {TOOL_RISK[t]}
+              </dd>
+            ))}
+          </dl>
+        </div>
+      ),
+    }));
 }
 
 /** The `agent:<KEY>` drawer: effective profile, autonomy dial, tools, limits, history and Save (FR-WKS-04/05). */

@@ -111,9 +111,18 @@ export function CodeZone({
   return (
     <div className="flex flex-col gap-6">
       <section aria-labelledby="code-repos" className="flex flex-col gap-3">
-        <h3 id="code-repos" className="kicker m-0">
-          Repositories
-        </h3>
+        <div className="flex items-center gap-3">
+          <h3 id="code-repos" className="kicker m-0">
+            Repositories
+          </h3>
+          <button
+            type="button"
+            onClick={() => void navigate({ search: { ...keep, drawer: "repos" } })}
+            className="text-[13px] font-medium text-teal underline"
+          >
+            Health of all
+          </button>
+        </div>
         {hint ??
           (items.length === 0 ? (
             <QueryState
@@ -141,7 +150,7 @@ export function CodeZone({
                 <li>
                   <button
                     type="button"
-                    onClick={() => onOpenRepo(items[0]!.id)}
+                    onClick={() => void navigate({ search: { ...keep, drawer: "repos" } })}
                     className="rounded-[20px] border border-line bg-card px-4 py-3.5 text-[13px] font-medium text-teal shadow-nx"
                   >
                     All {items.length} repositories →
@@ -268,7 +277,7 @@ export function SystemsZone({ query, children }: { query: UseQueryResult<Runner[
   );
 }
 
-function PairRunner() {
+export function PairRunner() {
   const pair = useMutation({ mutationFn: api.pairRunner });
   return (
     <div className="flex max-w-[500px] flex-col gap-3 rounded-[20px] border border-line bg-card p-5 shadow-nx">

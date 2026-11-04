@@ -29,9 +29,9 @@ const EMPTY: Record<Tab, string> = {
   failure: "No failed runs.",
   blocked:
     "Nothing is blocked. Runs don't wait for missing information today: missing acceptance criteria are recorded on the run.",
-  business: "No business alerts. Business connectors arrive in P1.",
+  business: "No business alerts.",
   security: "No security notices. Emergency stops and revoked runners show up here.",
-  connection: "No connection alerts. Connector health arrives in P1.",
+  connection: "No connection alerts.",
   notice: "No finished runs or notices yet.",
 };
 

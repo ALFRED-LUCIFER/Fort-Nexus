@@ -4,6 +4,8 @@ import type {
   CreateProjectRequest,
   Project,
   UpdateProjectRequest,
+  UpdateWorkspaceRequest,
+  Workspace,
   WorkspaceList,
   WorkspaceMode,
 } from "@nexus/contracts";
@@ -79,6 +81,7 @@ export async function listWorkspaces(db: Db, ownerId: string): Promise<Workspace
         id: w.id,
         mode: w.mode,
         name: w.name,
+        enabled: w.enabled,
         projects: ps
           .filter((p) => p.workspaceId === w.id)
           .map((p) =>
@@ -90,6 +93,46 @@ export async function listWorkspaces(db: Db, ownerId: string): Promise<Workspace
           ),
       })),
   };
+}
+
+/**
+ * Shows or hides a workspace (a display preference: projects, bindings and records stay). The owner's workspace rows
+ * are locked together so two requests can't turn off the last shown one. Setting the current value is a no-op.
+ */
+export async function updateWorkspace(
+  db: Db,
+  input: { ownerId: string; workspaceId: string; body: UpdateWorkspaceRequest; correlationId: string },
+): Promise<Workspace> {
+  await ensureWorkspaces(db, input.ownerId);
+  await db.transaction(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.ownerId, input.ownerId))
+      .orderBy(asc(workspaces.id))
+      .for("update");
+    const ws = rows.find((w) => w.id === input.workspaceId);
+    if (!ws) throw notFound("Workspace");
+    const { enabled } = input.body;
+    if (ws.enabled === enabled) return;
+    if (!enabled && !rows.some((w) => w.id !== ws.id && w.enabled))
+      throw new HttpError(
+        409,
+        "CONFLICT",
+        `${ws.name} is the only workspace shown; turn another one on before hiding it.`,
+      );
+    await tx.update(workspaces).set({ enabled }).where(eq(workspaces.id, ws.id));
+    await audit(tx, {
+      actor: ownerActor(input.ownerId),
+      action: enabled ? "workspace.show" : "workspace.hide",
+      resourceType: "workspace",
+      resourceId: ws.id,
+      correlationId: input.correlationId,
+      metadata: { mode: ws.mode },
+    });
+  });
+  const list = await listWorkspaces(db, input.ownerId);
+  return list.items.find((w) => w.id === input.workspaceId)!;
 }
 
 /** The owner's project and its workspace mode, or 404 (another owner's project doesn't exist for this caller). */

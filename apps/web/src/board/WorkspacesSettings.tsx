@@ -26,12 +26,14 @@ const slugify = (name: string) =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 63);
 
-/** Every change re-reads the workspaces and the project-scoped repository lists. */
+/** Every change re-reads the workspaces, the project-scoped repository lists and health, and the setup checklist. */
 function useRefresh() {
   const queryClient = useQueryClient();
   return () => {
     void queryClient.invalidateQueries({ queryKey: keys.workspaces });
     void queryClient.invalidateQueries({ queryKey: keys.repositories });
+    void queryClient.invalidateQueries({ queryKey: ["github", "health"] });
+    void queryClient.invalidateQueries({ queryKey: ["setup"] });
   };
 }
 
@@ -39,7 +41,13 @@ function useRefresh() {
 export function WorkspacesSettings() {
   const workspaces = useWorkspaces();
   const status = useGithubStatus();
-  const repos = useRepositories(status.data?.configured === true && status.data.installations.length > 0);
+  const installed = status.data?.configured === true && status.data.installations.length > 0;
+  const repos = useRepositories(installed);
+  // What the repository list says while there is no list: loading, or the app isn't installed anywhere.
+  const reposNote =
+    !status.data || (installed && repos.isPending)
+      ? "Loading repositories…"
+      : "Install the NEXUS GitHub App on an account to bind its repositories.";
   if (!workspaces.data) return <DrawerState error={workspaces.error} />;
   return (
     <>
@@ -49,7 +57,14 @@ export function WorkspacesSettings() {
         audited.
       </p>
       {workspaces.data.items.map((w) => (
-        <WorkspaceSection key={w.id} workspace={w} repos={w.mode === "DEV" ? repos.data : undefined} />
+        <WorkspaceSection
+          key={w.id}
+          workspace={w}
+          // At least one workspace stays shown (the API refuses hiding the last one).
+          lastShown={w.enabled && workspaces.data.items.every((o) => o.id === w.id || !o.enabled)}
+          repos={w.mode === "DEV" ? repos.data : undefined}
+          reposNote={reposNote}
+        />
       ))}
       {repos.error && (
         <p role="alert" className="m-0 text-[12.5px] text-coral">
@@ -60,16 +75,29 @@ export function WorkspacesSettings() {
   );
 }
 
-function WorkspaceSection({ workspace: w, repos }: { workspace: Workspace; repos?: RepositoryList }) {
+function WorkspaceSection({
+  workspace: w,
+  lastShown,
+  repos,
+  reposNote,
+}: {
+  workspace: Workspace;
+  lastShown: boolean;
+  repos?: RepositoryList;
+  reposNote: string;
+}) {
   const id = useId();
   return (
     <section aria-labelledby={id} className="flex flex-none flex-col gap-2">
-      <h3 id={id} className="kicker m-0">
-        {w.name} workspace
-      </h3>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 id={id} className="kicker m-0">
+          {w.name} workspace{w.enabled ? "" : " · hidden"}
+        </h3>
+        <ShowWorkspace workspace={w} lastShown={lastShown} />
+      </div>
       {w.mode === "BUSINESS" && (
         <p className="m-0 text-[12.5px] leading-[1.5] text-ink3">
-          Business projects hold no data yet: read-only connectors arrive in P1.
+          Business projects read their connected sources (read-only) in the Business drawer.
         </p>
       )}
       <ul
@@ -80,7 +108,12 @@ function WorkspaceSection({ workspace: w, repos }: { workspace: Workspace; repos
           <li className="px-4 py-[13px] text-[13px] text-ink2">No projects yet.</li>
         )}
         {w.projects.map((p) => (
-          <ProjectRow key={p.id} project={p} repos={w.mode === "DEV" ? repos : undefined} />
+          <ProjectRow
+            key={p.id}
+            project={p}
+            repos={w.mode === "DEV" ? repos : undefined}
+            reposNote={reposNote}
+          />
         ))}
       </ul>
       <NewProject workspace={w} />
@@ -88,9 +121,59 @@ function WorkspaceSection({ workspace: w, repos }: { workspace: Workspace; repos
   );
 }
 
-function ProjectRow({ project: p, repos }: { project: Project; repos?: RepositoryList }) {
+/**
+ * "Dev only for now": hiding a workspace removes its switch, zones and agents from the app. Its projects, bindings
+ * and records stay, and showing it again brings everything back. The change is audited.
+ */
+function ShowWorkspace({ workspace: w, lastShown }: { workspace: Workspace; lastShown: boolean }) {
   const refresh = useRefresh();
+  const hint = useId();
+  const set = useMutation({
+    mutationFn: (enabled: boolean) => api.setWorkspaceEnabled(w.id, enabled),
+    onSettled: refresh,
+  });
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={w.enabled}
+        aria-describedby={hint}
+        disabled={set.isPending || lastShown}
+        onClick={() => set.mutate(!w.enabled)}
+        className={`${rowBtn} ${w.enabled ? "" : "bg-hair"}`}
+      >
+        Show {w.name}: {w.enabled ? "on" : "off"}
+      </button>
+      <span id={hint} className="text-right text-[11.5px] text-ink3">
+        {lastShown
+          ? "The only workspace shown: show another one before hiding it."
+          : w.enabled
+            ? "Hide it while you don't use it; its projects and records stay."
+            : "Hidden from the app; its projects and records are kept."}
+      </span>
+      {set.error && (
+        <p role="alert" className="m-0 text-[12.5px] text-coral">
+          {set.error.message}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ProjectRow({
+  project: p,
+  repos,
+  reposNote,
+}: {
+  project: Project;
+  repos?: RepositoryList;
+  reposNote: string;
+}) {
+  const refresh = useRefresh();
+  const filterId = useId();
   const [renaming, setRenaming] = useState(false);
+  const [filter, setFilter] = useState("");
   const update = useMutation({
     mutationFn: (body: UpdateProjectRequest) => api.updateProject(p.id, body),
     onSuccess: () => setRenaming(false),
@@ -145,8 +228,8 @@ function ProjectRow({ project: p, repos }: { project: Project; repos?: Repositor
         <fieldset className="m-0 flex flex-col gap-1.5 border-0 p-0">
           <legend className="mb-1 p-0 font-mono text-[10.5px] text-ink3 uppercase">Repositories</legend>
           {!repos ? (
-            <span className="text-[12.5px] text-ink3">
-              Install the NEXUS GitHub App on an account to bind its repositories.
+            <span role="status" className="text-[12.5px] text-ink3">
+              {reposNote}
             </span>
           ) : (
             <>
@@ -155,25 +238,45 @@ function ProjectRow({ project: p, repos }: { project: Project; repos?: Repositor
                   The app&apos;s installations have no repositories.
                 </span>
               )}
+              {repos.items.length > 8 && (
+                <span className="mb-1 flex flex-col gap-1">
+                  <label htmlFor={filterId} className="text-[12px] text-ink3">
+                    Filter repositories (bound ones always stay listed)
+                  </label>
+                  <input
+                    id={filterId}
+                    type="search"
+                    value={filter}
+                    onChange={(e) => setFilter(e.target.value)}
+                    className={field}
+                  />
+                </span>
+              )}
               {[
                 ...repos.items.map((r) => [r.id, r.fullName] as const),
                 ...gone.map((id) => [id, `repository ${id} (no longer installed)`] as const),
-              ].map(([repoId, label]) => {
-                const bound = p.repositoryIds.includes(repoId);
-                return (
-                  <label key={repoId} className="flex items-center gap-2 text-[13px] text-ink">
-                    <input
-                      type="checkbox"
-                      checked={bound}
-                      // Archived projects keep their bindings frozen; unbinding stays possible.
-                      disabled={bind.isPending || (archived && !bound)}
-                      onChange={() => bind.mutate({ repoId, bound: !bound })}
-                      className="size-4 accent-teal"
-                    />
-                    <span className="truncate font-mono text-[12px]">{label}</span>
-                  </label>
-                );
-              })}
+              ]
+                .filter(
+                  ([repoId, label]) =>
+                    p.repositoryIds.includes(repoId) ||
+                    label.toLowerCase().includes(filter.trim().toLowerCase()),
+                )
+                .map(([repoId, label]) => {
+                  const bound = p.repositoryIds.includes(repoId);
+                  return (
+                    <label key={repoId} className="flex items-center gap-2 text-[13px] text-ink">
+                      <input
+                        type="checkbox"
+                        checked={bound}
+                        // Archived projects keep their bindings frozen; unbinding stays possible.
+                        disabled={bind.isPending || (archived && !bound)}
+                        onChange={() => bind.mutate({ repoId, bound: !bound })}
+                        className="size-4 accent-teal"
+                      />
+                      <span className="truncate font-mono text-[12px]">{label}</span>
+                    </label>
+                  );
+                })}
             </>
           )}
         </fieldset>

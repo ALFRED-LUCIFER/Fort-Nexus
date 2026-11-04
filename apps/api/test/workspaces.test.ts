@@ -220,6 +220,43 @@ describe("workspaces", () => {
     });
     expect(res.statusCode).toBe(403);
   });
+
+  it("hides and shows a workspace (audited, idempotent), keeps its projects, and never hides the last one", async () => {
+    expect(ws.items.map((w) => w.enabled)).toEqual([true, true]);
+    const hide = await call("PATCH", `/v1/workspaces/${bizId()}`, { enabled: false });
+    expect(hide.statusCode).toBe(200);
+    expect(hide.json()).toMatchObject({ id: bizId(), mode: "BUSINESS", enabled: false });
+    // Same value again: no change, no second audit record.
+    expect((await call("PATCH", `/v1/workspaces/${bizId()}`, { enabled: false })).statusCode).toBe(200);
+    expect(await audits("workspace.hide", bizId())).toHaveLength(1);
+
+    const last = await call("PATCH", `/v1/workspaces/${devId()}`, { enabled: false });
+    expect(last.statusCode).toBe(409);
+    expect(last.json().error.message).toMatch(/only workspace shown/);
+    const list = (await call("GET", "/v1/workspaces")).json() as WorkspaceList;
+    expect(list.items.map((w) => [w.mode, w.enabled])).toEqual([
+      ["DEV", true],
+      ["BUSINESS", false],
+    ]);
+
+    const show = await call("PATCH", `/v1/workspaces/${bizId()}`, { enabled: true });
+    expect(show.json()).toMatchObject({ enabled: true });
+    expect(await audits("workspace.show", bizId())).toHaveLength(1);
+  });
+
+  it("refuses an unknown workspace, an unknown field and a change without a trusted Origin", async () => {
+    expect((await call("PATCH", `/v1/workspaces/${randomUUID()}`, { enabled: false })).statusCode).toBe(404);
+    expect((await call("PATCH", `/v1/workspaces/${bizId()}`, { enabled: false, name: "x" })).statusCode).toBe(
+      400,
+    );
+    const res = await t.app.inject({
+      method: "PATCH",
+      url: `/v1/workspaces/${bizId()}`,
+      headers: { cookie, origin: "https://evil.example" },
+      payload: { enabled: false },
+    });
+    expect(res.statusCode).toBe(403);
+  });
 });
 
 describe("projects", () => {

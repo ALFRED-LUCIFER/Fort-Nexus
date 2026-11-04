@@ -7,7 +7,10 @@ import {
   IssueDetail,
   IssueList,
   IssueListQuery,
+  ProjectFilterQuery,
   RepoId,
+  RepositoryDetails,
+  RepositoryHealthList,
   RepositoryList,
   RepositoryQuery,
 } from "@nexus/contracts";
@@ -58,6 +61,24 @@ export async function githubRoutes(app: FastifyInstance, { github: catalog, db }
       const list = await need().repositories(q);
       return bound ? { ...list, items: list.items.filter((r) => bound.has(r.id)) } : list;
     },
+  );
+
+  // FR-GH-05: the project's bound repositories (every installed one in the All view) with PRs, issues and CI.
+  r.get(
+    "/v1/repositories/health",
+    { schema: { querystring: ProjectFilterQuery, response: { 200: RepositoryHealthList } } },
+    async (req) => {
+      const { projectId } = req.query;
+      const bound = projectId ? await boundRepositoryIds(db, owner(req).id, projectId) : null;
+      if (bound?.size === 0) return { items: [] }; // nothing bound: no GitHub call at all
+      return { items: await need().health(bound) };
+    },
+  );
+
+  r.get(
+    "/v1/repositories/:repoId/details",
+    { schema: { params: RepoParams, response: { 200: RepositoryDetails } } },
+    async (req) => need().details(req.params.repoId),
   );
 
   r.get(

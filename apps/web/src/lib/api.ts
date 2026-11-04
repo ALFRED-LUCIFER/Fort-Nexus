@@ -64,7 +64,11 @@ import {
   PlanList,
   PostTurnResponse,
   Project,
+  RepositoryDetails,
+  RepositoryHealthList,
   RepositoryList,
+  SetupStatus,
+  Workspace,
   ResearchBrief,
   ResearchRun,
   ResearchRunList,
@@ -217,6 +221,16 @@ export const api = {
   },
   issue: (repoId: string, number: number) =>
     request(`/v1/repositories/${encodeURIComponent(repoId)}/issues/${number}`, IssueDetail),
+  // FR-GH-05: PRs, issues and CI per repository (the project's bound ones, or every installed one in All).
+  repositoryHealth: (projectId?: string) =>
+    request(
+      `/v1/repositories/health${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`,
+      RepositoryHealthList,
+    ),
+  repositoryDetails: (repoId: string) =>
+    request(`/v1/repositories/${encodeURIComponent(repoId)}/details`, RepositoryDetails),
+  setup: (projectId?: string) =>
+    request(`/v1/setup${projectId ? `?${new URLSearchParams({ projectId })}` : ""}`, SetupStatus),
   approvals: (q: ApprovalQuery) =>
     request(`/v1/approvals?${new URLSearchParams(q)}`, ApprovalList).then((l) => l.items),
   // Answers only after the push finished: EXECUTED with result, or FAILED with error.
@@ -231,6 +245,8 @@ export const api = {
   setNotificationStatus: (id: string, status: "READ" | "ACKNOWLEDGED") =>
     request(`/v1/notifications/${encodeURIComponent(id)}/status`, Notification, post({}, { status })),
   workspaces: () => request("/v1/workspaces", WorkspaceList),
+  setWorkspaceEnabled: (id: string, enabled: boolean) =>
+    request(`/v1/workspaces/${encodeURIComponent(id)}`, Workspace, post({}, { enabled }, "PATCH")),
   createProject: (workspaceId: string, body: CreateProjectRequest) =>
     request(`/v1/workspaces/${encodeURIComponent(workspaceId)}/projects`, Project, post({}, body)),
   updateProject: (id: string, body: UpdateProjectRequest) =>
@@ -502,6 +518,9 @@ export const keys = {
   repositoriesOf: (projectId: string | undefined) => ["github", "repositories", projectId ?? "all"] as const,
   issues: (repoId: string, f: IssueFilters) => ["github", "issues", repoId, f] as const,
   issue: (repoId: string, number: number) => ["github", "issue", repoId, number] as const,
+  repositoryHealth: (projectId: string | undefined) => ["github", "health", projectId ?? "all"] as const,
+  repositoryDetails: (repoId: string) => ["github", "details", repoId] as const,
+  setup: (projectId: string | undefined) => ["setup", projectId ?? "all"] as const,
   approvals: ["approvals"] as const,
   approvalsBy: (q: ApprovalQuery) => ["approvals", q] as const,
   workspaces: ["workspaces"] as const,

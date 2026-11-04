@@ -3,9 +3,12 @@ import type { FastifyBaseLogger } from "fastify";
 import {
   ISSUE_MAX_PAGE,
   ISSUE_PAGE_SIZE,
+  REPO_LIST_CAP,
   WORK_BRANCH_PREFIX,
   type Approval,
   type ChangesetFile,
+  type CheckRunSummary,
+  type CiSummary,
   type GithubInstallation,
   type GithubStatus,
   type Issue,
@@ -16,6 +19,8 @@ import {
   type IssueToPrTask,
   type PushDraftPrAction,
   type Repository,
+  type RepositoryDetails,
+  type RepositoryHealth,
   type RepositoryList,
 } from "@nexus/contracts";
 import { HttpError, notFound } from "../errors.ts";
@@ -27,6 +32,51 @@ const TTL_MS = 60_000;
 const MAX_CACHE_ENTRIES = 500;
 // shortcut: first 100 installations, 1000 repos per installation and 100 comments per issue; paginate further when needed.
 const MAX_REPO_PAGES = 10;
+// Repository health costs two GitHub calls per repository: keep it longer, and ask for a few repositories at a time.
+const HEALTH_TTL_MS = 180_000;
+const HEALTH_CONCURRENCY = 4;
+
+// GitHub check-run conclusions that mean the commit's CI is broken.
+const FAILED = new Set(["failure", "timed_out", "startup_failure", "action_required"]);
+type GhCheckRun = {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  head_sha: string;
+  completed_at: string | null;
+  html_url: string | null;
+};
+
+/** The CI state of one commit from its latest check runs (see `CiState`). */
+export function ciSummary(runs: readonly GhCheckRun[], sha: string | null): CiSummary {
+  const failing = runs.filter((r) => r.status === "completed" && FAILED.has(r.conclusion ?? ""));
+  const running = runs.some((r) => r.status !== "completed");
+  const finished = runs.flatMap((r) => (r.completed_at ? [Date.parse(r.completed_at)] : []));
+  return {
+    state: runs.length === 0 ? "NONE" : failing.length ? "FAILING" : running ? "PENDING" : "PASSING",
+    sha: runs[0]?.head_sha ?? sha,
+    total: runs.length,
+    failing: [...new Set(failing.map((r) => r.name.slice(0, 200)))].slice(0, 10),
+    completedAt: finished.length ? new Date(Math.max(...finished)).toISOString() : null,
+  };
+}
+
+/** Maps `items` with at most `limit` calls in flight, keeping order. */
+async function mapLimited<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>) {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+const hasNext = (link: string | undefined) => /\brel="next"/.test(link ?? "");
+const httpUrl = (u: string | null | undefined) => (u && /^https:\/\//.test(u) ? u : null);
 
 type GithubError = Error & {
   status: number;
@@ -93,11 +143,17 @@ export function createGithubCatalog(config: GithubAppConfig, log: FastifyBaseLog
   const app = new App({ appId: config.appId, privateKey: config.privateKey });
   const installUrl = `${config.htmlUrl}/installations/new`;
   const cache = new Map<string, { at: number; value: unknown }>();
+  // What the repository list says beyond the `Repository` contract, refreshed with it.
+  const repoFacts = new Map<string, { archived: boolean; openIssuesAndPrs: number }>();
   let blockedUntil = 0;
 
-  async function cached<T>(key: string, load: () => Promise<T>): Promise<{ value: T; syncedAt: string }> {
+  async function cached<T>(
+    key: string,
+    load: () => Promise<T>,
+    ttl = TTL_MS,
+  ): Promise<{ value: T; syncedAt: string }> {
     const hit = cache.get(key);
-    if (hit && Date.now() - hit.at < TTL_MS)
+    if (hit && Date.now() - hit.at < ttl)
       return { value: hit.value as T, syncedAt: new Date(hit.at).toISOString() };
     const value = await load();
     const at = Date.now();
@@ -205,7 +261,11 @@ export function createGithubCatalog(config: GithubAppConfig, log: FastifyBaseLog
             () => octokit.request("GET /installation/repositories", { per_page: 100, page }),
             `NEXUS can't list the repositories of the ${inst.account.login} installation.`,
           );
-          for (const r of data.repositories)
+          for (const r of data.repositories) {
+            repoFacts.set(String(r.id), {
+              archived: r.archived === true,
+              openIssuesAndPrs: r.open_issues_count ?? 0,
+            });
             repos.push({
               id: String(r.id),
               fullName: r.full_name,
@@ -218,6 +278,7 @@ export function createGithubCatalog(config: GithubAppConfig, log: FastifyBaseLog
               updatedAt: iso(r.updated_at),
               installationId: inst.id,
             });
+          }
           if (page * 100 >= data.total_count) break;
         }
       }
@@ -251,6 +312,45 @@ export function createGithubCatalog(config: GithubAppConfig, log: FastifyBaseLog
     return { token, expiresAt, octokit: new Octokit({ auth: token }) };
   }
 
+  type RepoOctokit = Awaited<ReturnType<typeof app.getInstallationOctokit>>;
+
+  /** The latest check runs on `ref`. An empty repository (409) or a ref without commits (422) has none. */
+  const checkRuns = (repo: Repository, octokit: RepoOctokit, ref: string) =>
+    github(async (): Promise<GhCheckRun[]> => {
+      try {
+        const { data } = await octokit.request("GET /repos/{owner}/{repo}/commits/{ref}/check-runs", {
+          owner: repo.owner,
+          repo: repo.name,
+          ref,
+          filter: "latest",
+          per_page: REPO_LIST_CAP,
+        });
+        return data.check_runs;
+      } catch (e) {
+        if (isGithubError(e) && (e.status === 409 || e.status === 422)) return [];
+        throw e;
+      }
+    }, lostAccess(repo));
+
+  const openPulls = (repo: Repository, octokit: RepoOctokit) =>
+    github(async () => {
+      const res = await octokit.request("GET /repos/{owner}/{repo}/pulls", {
+        owner: repo.owner,
+        repo: repo.name,
+        state: "open",
+        sort: "updated",
+        direction: "desc",
+        per_page: REPO_LIST_CAP,
+      });
+      return { items: res.data, more: hasNext(res.headers.link) };
+    }, lostAccess(repo));
+
+  /** GitHub's open-issue count includes pull requests: subtract them while the pull request count is exact. */
+  const openIssues = (repoId: string, pulls: number, more: boolean) => {
+    const facts = repoFacts.get(repoId);
+    return facts && !more ? Math.max(0, facts.openIssuesAndPrs - pulls) : null;
+  };
+
   // github() maps GitHub's 422 (Unprocessable) to a 400.
   const rejected = (e: unknown) => e instanceof HttpError && e.statusCode === 400;
   const validation = (field: string, message: string) =>
@@ -267,6 +367,125 @@ export function createGithubCatalog(config: GithubAppConfig, log: FastifyBaseLog
       const needle = q?.toLowerCase();
       return {
         items: needle ? value.filter((r) => r.fullName.toLowerCase().includes(needle)) : value,
+        syncedAt,
+      };
+    },
+
+    /**
+     * Open pull requests, open issues and default-branch CI of each repository (all, or those in `only`). One
+     * repository GitHub refuses carries its own `error`; the others still show. A rate limit fails every pending one.
+     */
+    async health(only: ReadonlySet<string> | null): Promise<RepositoryHealth[]> {
+      const repos = (await repositories()).value.filter((r) => !only || only.has(r.id));
+      return mapLimited(repos, HEALTH_CONCURRENCY, async (repo): Promise<RepositoryHealth> => {
+        const archived = repoFacts.get(repo.id)?.archived ?? false;
+        try {
+          const { value, syncedAt } = await cached(
+            `health:${repo.id}`,
+            async () => {
+              const octokit = await github(
+                () => app.getInstallationOctokit(repo.installationId),
+                lostAccess(repo),
+              );
+              const pulls = await openPulls(repo, octokit);
+              const runs = await checkRuns(repo, octokit, repo.defaultBranch);
+              return {
+                pulls: pulls.items.length,
+                drafts: pulls.items.filter((p) => p.draft === true).length,
+                more: pulls.more,
+                ci: ciSummary(runs, null),
+              };
+            },
+            HEALTH_TTL_MS,
+          );
+          return {
+            repository: repo,
+            archived,
+            openPullRequests: value.pulls,
+            draftPullRequests: value.drafts,
+            pullRequestsMore: value.more,
+            openIssues: openIssues(repo.id, value.pulls, value.more),
+            ci: value.ci,
+            error: null,
+            syncedAt,
+          };
+        } catch (e) {
+          if (!(e instanceof HttpError)) throw e;
+          return {
+            repository: repo,
+            archived,
+            openPullRequests: null,
+            draftPullRequests: null,
+            pullRequestsMore: false,
+            openIssues: null,
+            ci: null,
+            error: e.message,
+            syncedAt: new Date().toISOString(),
+          };
+        }
+      });
+    },
+
+    /** FR-GH-05: one repository's open pull requests, branches and default-branch CI. */
+    async details(repoId: string): Promise<RepositoryDetails> {
+      const { repo, octokit } = await repository(repoId);
+      const { value, syncedAt } = await cached(`details:${repo.id}`, async () => {
+        const pulls = await openPulls(repo, octokit);
+        const branches = await github(async () => {
+          const res = await octokit.request("GET /repos/{owner}/{repo}/branches", {
+            owner: repo.owner,
+            repo: repo.name,
+            per_page: REPO_LIST_CAP,
+          });
+          return { items: res.data, more: hasNext(res.headers.link) };
+        }, lostAccess(repo));
+        const runs = await checkRuns(repo, octokit, repo.defaultBranch);
+        const head = branches.items.find((b) => b.name === repo.defaultBranch)?.commit.sha ?? null;
+        const rank = (r: GhCheckRun) =>
+          r.status === "completed" && FAILED.has(r.conclusion ?? "") ? 0 : r.status !== "completed" ? 1 : 2;
+        return {
+          pullRequests: pulls.items.map((p) => ({
+            number: p.number,
+            title: p.title,
+            draft: p.draft === true,
+            author: p.user?.login ?? null,
+            headBranch: p.head.ref,
+            baseBranch: p.base.ref,
+            nexus: p.head.ref.startsWith(WORK_BRANCH_PREFIX),
+            updatedAt: new Date(p.updated_at).toISOString(),
+            htmlUrl: p.html_url,
+          })),
+          pullRequestsMore: pulls.more,
+          branches: branches.items
+            .map((b) => ({
+              name: b.name,
+              protected: b.protected,
+              default: b.name === repo.defaultBranch,
+              nexus: b.name.startsWith(WORK_BRANCH_PREFIX),
+            }))
+            .sort(
+              (a, b) =>
+                Number(b.default) - Number(a.default) ||
+                Number(b.protected) - Number(a.protected) ||
+                a.name.localeCompare(b.name),
+            ),
+          branchesMore: branches.more,
+          ci: ciSummary(runs, head),
+          checks: [...runs]
+            .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
+            .map((r): CheckRunSummary => ({
+              name: r.name.slice(0, 200),
+              status: r.status.slice(0, 40),
+              conclusion: r.conclusion?.slice(0, 40) ?? null,
+              htmlUrl: httpUrl(r.html_url),
+            })),
+        };
+      });
+      return {
+        repository: repo,
+        archived: repoFacts.get(repo.id)?.archived ?? false,
+        openIssues: openIssues(repo.id, value.pullRequests.length, value.pullRequestsMore),
+        ...value,
         syncedAt,
       };
     },

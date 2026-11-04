@@ -23,9 +23,16 @@ export const Workspace = z.object({
   id: z.uuid(),
   mode: WorkspaceMode,
   name: z.string().min(1).max(80),
+  // Shown in the app. A display preference ("I'm Dev only for now"): turning a workspace off hides its switch, zones
+  // and agents, and keeps every project, binding and record. At least one workspace stays on.
+  enabled: z.boolean(),
   projects: z.array(Project),
 });
 export type Workspace = z.infer<typeof Workspace>;
+
+// PATCH /v1/workspaces/:id
+export const UpdateWorkspaceRequest = z.strictObject({ enabled: z.boolean() });
+export type UpdateWorkspaceRequest = z.infer<typeof UpdateWorkspaceRequest>;
 
 // GET /v1/workspaces — exactly one DEV and one BUSINESS workspace per owner (created on first use).
 export const WorkspaceList = z.object({ items: z.array(Workspace) });

@@ -51,7 +51,9 @@ import { PlanDrawer, PlansZone, plansSub, usePlans } from "./plans.tsx";
 import { ResearchDrawer, ResearchZone, researchSub, useWatchlists } from "./research.tsx";
 import { RunDrawer } from "./RunDrawer.tsx";
 import { ScopeNav, useScope } from "./scope.tsx";
-import { SettingsDrawer } from "./Settings.tsx";
+import { BUSINESS_AGENTS } from "./agentLabels.ts";
+import { RepositoriesDrawer } from "./repos.tsx";
+import { SettingsDrawer, useOpenSettings } from "./Settings.tsx";
 import { TalkDrawer } from "./Talk.tsx";
 import { CodeZone, EmptyZone, SystemsZone, type ZoneProps } from "./zones.tsx";
 
@@ -130,6 +132,8 @@ export function Board() {
   const view = search.view ?? defaultView;
   const onBoard = view === "board";
   const agentKey = AgentKey.safeParse(drawerId);
+  const hiddenAgents = scope.shown.business ? undefined : BUSINESS_AGENTS;
+  const openSettings = useOpenSettings();
   const plans = usePlans();
   const noticed = useOpportunities();
 
@@ -359,18 +363,32 @@ export function Board() {
       w: 1160,
       h: 580,
       tint: "oklch(0.80 0.06 155 / .14)",
-      body: <AgentsZone query={agents} projectId={projectId} onOpen={openAgent} />,
+      body: <AgentsZone query={agents} projectId={projectId} onOpen={openAgent} hide={hiddenAgents} />,
     },
     {
       id: "auto",
       label: "Automations",
-      sub: "not connected",
+      sub: "n8n triggers",
       x: 40,
       y: 1780,
       w: 800,
       h: 520,
       tint: "oklch(0.80 0.05 250 / .14)",
-      body: <EmptyZone>No n8n workflows connected. Automations arrive in P1.</EmptyZone>,
+      body: (
+        <div className="flex flex-col items-start gap-4">
+          <EmptyZone>
+            n8n sends signed, typed triggers into a project; nothing else gets in. Its clients and what they
+            triggered are in Settings → Automations.
+          </EmptyZone>
+          <button
+            type="button"
+            onClick={() => openSettings("auto")}
+            className="rounded-xl border border-hair px-3.5 py-2.5 text-[12.5px] font-medium text-ink"
+          >
+            Open Automations
+          </button>
+        </div>
+      ),
     },
     {
       id: "plan",
@@ -413,23 +431,24 @@ export function Board() {
             {/* Regrouping cross-fades the zone sets (opacity only, so it also suits reduced motion). */}
             <AnimatePresence initial={false} mode="wait">
               <m.div key={group} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                {(group === "agents" ? agentLanes(agents, projectId, openAgent) : zones).map(
-                  (zone: ZoneDef) => {
-                    const { ws: zws, body, ...z } = zone;
-                    return (
-                      <Zone
-                        key={z.id}
-                        {...z}
-                        dim={ws !== "all" && !!zws && zws !== ws}
-                        focused={focused === z.id}
-                        onZoneClick={zoneClick(zone)}
-                        onFocusZone={() => focusZone(z)}
-                      >
-                        {body}
-                      </Zone>
-                    );
-                  },
-                )}
+                {(group === "agents"
+                  ? agentLanes(agents, projectId, openAgent, hiddenAgents)
+                  : zones.filter((z) => !z.ws || scope.shown[z.ws])
+                ).map((zone: ZoneDef) => {
+                  const { ws: zws, body, ...z } = zone;
+                  return (
+                    <Zone
+                      key={z.id}
+                      {...z}
+                      dim={ws !== "all" && !!zws && zws !== ws}
+                      focused={focused === z.id}
+                      onZoneClick={zoneClick(zone)}
+                      onFocusZone={() => focusZone(z)}
+                    >
+                      {body}
+                    </Zone>
+                  );
+                })}
               </m.div>
             </AnimatePresence>
           </m.main>
@@ -453,23 +472,30 @@ export function Board() {
             className="ml-0.5 size-[7px] rounded-full"
             style={{ background: runner ? RUNNER_TONE[runner.status] : "var(--ink3)" }}
           />
-          <div role="group" aria-label="Workspace" className="ml-2 hidden rounded-xl bg-hair p-[3px] md:flex">
-            {(["all", "dev", "business"] as const).map((w) => (
-              <button
-                key={w}
-                type="button"
-                aria-pressed={ws === w}
-                onClick={() =>
-                  void navigate({
-                    search: (s) => ({ ...s, ws: w === "all" ? undefined : w, project: undefined }),
-                  })
-                }
-                className={seg(ws === w)}
-              >
-                {w === "all" ? "All" : w === "dev" ? "Dev" : "Business"}
-              </button>
-            ))}
-          </div>
+          {/* Hidden while a workspace is hidden ("Dev only"): the scope menu still offers All projects. */}
+          {scope.shown.dev && scope.shown.business && (
+            <div
+              role="group"
+              aria-label="Workspace"
+              className="ml-2 hidden rounded-xl bg-hair p-[3px] md:flex"
+            >
+              {(["all", "dev", "business"] as const).map((w) => (
+                <button
+                  key={w}
+                  type="button"
+                  aria-pressed={ws === w}
+                  onClick={() =>
+                    void navigate({
+                      search: (s) => ({ ...s, ws: w === scope.fallback ? undefined : w, project: undefined }),
+                    })
+                  }
+                  className={seg(ws === w)}
+                >
+                  {w === "all" ? "All" : w === "dev" ? "Dev" : "Business"}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <CommandBar runners={runners.data} projectId={projectId} blocked={scope.blocked} onQueued={openRun}>
@@ -603,7 +629,7 @@ export function Board() {
           Talk
         </button>
         <P1Button
-          why="Knowledge search arrives in P1."
+          why="Knowledge search isn't built yet."
           className="hidden h-8 rounded-[10px] px-2.5 text-[12px] font-medium text-ink2 sm:block"
         >
           Knowledge
@@ -616,7 +642,7 @@ export function Board() {
           Settings
         </button>
         <P1Button
-          why="The phone approvals preview arrives in P1."
+          why="The phone approvals preview isn't built yet."
           className="hidden h-8 rounded-[10px] px-2.5 text-[12px] font-medium text-ink2 sm:block"
         >
           Phone
@@ -659,6 +685,7 @@ export function Board() {
         />
       )}
       {drawerKind === "jobs" && <JobsDrawer banner={banner} onClose={closeDrawer} />}
+      {drawerKind === "repos" && <RepositoriesDrawer banner={banner} onClose={closeDrawer} />}
       {drawerKind === "newjob" && <NewJobDrawer banner={banner} onClose={closeDrawer} />}
       {drawerKind === "jobdraft" && drawerId && (
         <JobDraftDrawer id={drawerId} banner={banner} onClose={closeDrawer} />

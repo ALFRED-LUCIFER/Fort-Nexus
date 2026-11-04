@@ -112,7 +112,7 @@ describe("board", () => {
     expect(screen.queryByText(/is offline/)).toBeNull();
   });
 
-  it("announces controls that arrive in P1 and does nothing on click", async () => {
+  it("announces controls that aren't built yet and does nothing on click", async () => {
     const calls = board([runner()]);
     const user = userEvent.setup();
     renderApp("/");
@@ -121,7 +121,7 @@ describe("board", () => {
       const btn = screen.getByRole("button", { name });
       expect(btn.getAttribute("aria-disabled")).toBe("true");
       const why = document.getElementById(btn.getAttribute("aria-describedby")!);
-      expect(why?.textContent).toMatch(/arrive(s)? in P1/);
+      expect(why?.textContent).toMatch(/isn't built yet/);
     }
     await user.click(screen.getByRole("button", { name: "Talk" }));
     expect(calls.filter((c) => c.method !== "GET")).toHaveLength(0);

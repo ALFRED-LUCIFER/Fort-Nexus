@@ -14,13 +14,14 @@ import { RUNNER_TONE, ago, until, useNow, useRunners, useSystem } from "../lib/q
 import { AgentProfilesSettings } from "./agents.tsx";
 import { AutomationsSettings } from "./AutomationsSettings.tsx";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
+import { useScope } from "./scope.tsx";
 import { useVoiceStatus } from "./voice.tsx";
 import { WorkspacesSettings } from "./WorkspacesSettings.tsx";
 
 const route = getRouteApi("/");
 
 // Design dSettings tabs. Security & devices, Workspaces, Automations, Agent profiles, Budgets & limits and Voice &
-// consent are real; the rest say honestly what exists. `#voice` opens on Voice & consent (the mic links there).
+// consent are real; the rest say honestly what exists. A tab id as the hash opens on it (`#voice`, `#ws`, `#auto`).
 const TABS = [
   ["conn", "Connections"],
   ["ws", "Workspaces"],
@@ -36,18 +37,29 @@ const TABS = [
   ["privacy", "Data & privacy"],
   ["system", "System health"],
 ] as const;
-type Tab = (typeof TABS)[number][0];
+export type SettingsTab = (typeof TABS)[number][0];
+type Tab = SettingsTab;
+
+/** Opens Settings on one tab, keeping the board's scope. */
+export function useOpenSettings() {
+  const { keep } = useScope();
+  const navigate = route.useNavigate();
+  return (tab: SettingsTab) => void navigate({ search: { ...keep, drawer: "settings" }, hash: tab });
+}
 
 const LATER: Record<Exclude<Tab, "sec" | "limits" | "ws" | "auto" | "profiles" | "voice">, string> = {
-  conn: "Managing connections here arrives in P1. Today the only connection is the NEXUS GitHub App, set up on the home machine.",
+  conn: "Connections are set up on the home machine: the NEXUS GitHub App (its repositories are bound in Workspaces), ai.json, search.json and voice.json (see docs/runbooks). The Home setup checklist shows which are missing.",
   remote:
-    "Remote access is configured on the home machine (Tailscale Serve, see the runbook). Managing it here arrives in P1.",
-  backup: "Backups run on the home machine (see the backup runbook). Viewing them here arrives in P1.",
-  notif: "Notification settings arrive in P1. Approvals already show in the Inbox.",
+    "Remote access is configured on the home machine with Tailscale Serve (docs/runbooks/remote-access.md). It can't be changed from here yet.",
+  backup:
+    "Backups run on the home machine (docs/runbooks/backup-restore.md). They can't be viewed from here yet.",
+  notif: "Notifications can't be tuned yet. Approvals and alerts show in the Inbox.",
   audit:
-    "Every action is already recorded in the append-only audit log on the home machine. Browsing it here arrives in P1.",
-  privacy: "Data-sharing controls arrive in P1 with business connectors.",
-  system: "System health arrives in P1. Runner status is in the Systems zone.",
+    "Every action is recorded in the append-only audit log on the home machine. It can't be browsed from here yet.",
+  privacy:
+    "Business sources are read-only and each stays inside its own project. Data-sharing controls aren't in the app yet.",
+  system:
+    "Runner and app health are in the Systems zone; the Home setup checklist shows what NEXUS still needs.",
 };
 
 const seg = (on: boolean) =>
@@ -57,7 +69,7 @@ const rowBtn =
 
 export function SettingsDrawer({ banner, onClose }: { banner?: ReactNode; onClose: () => void }) {
   const hash = useLocation({ select: (l) => l.hash });
-  const [tab, setTab] = useState<Tab>(() => (hash.replace(/^#/, "") === "voice" ? "voice" : "sec"));
+  const [tab, setTab] = useState<Tab>(() => TABS.find(([id]) => id === hash.replace(/^#/, ""))?.[0] ?? "sec");
   return (
     <Drawer banner={banner} onClose={onClose}>
       <DrawerHeader kicker="Settings · owner" title="Settings" />

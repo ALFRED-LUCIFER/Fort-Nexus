@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { getRouteApi } from "@tanstack/react-router";
 import type { Approval, Project } from "@nexus/contracts";
-import { useWorkspaces } from "../lib/queries.ts";
+import { useShownWorkspaces, useWorkspaces, type ShownWorkspaces } from "../lib/queries.ts";
 import type { Workspace } from "../router.tsx";
 
 const route = getRouteApi("/");
@@ -18,33 +18,47 @@ export interface Scope {
   /** Why nothing can be started or decided here; null when the project can run things. */
   blocked: string | null;
   /** Search params that keep this scope when navigating. */
-  keep: { ws?: "dev" | "business"; project?: string; view?: "home" | "board" };
+  keep: { ws?: Workspace; project?: string; view?: "home" | "board" };
+  /** The workspace a URL without `ws` shows (see `fallbackWorkspace`). */
+  fallback: Workspace;
+  shown: ShownWorkspaces;
 }
 
-/** The board's scope from the URL (`ws` + `project`). Never falls back to another project (FR-CSP-01). */
+/** What a URL without `ws` shows: All while both workspaces are shown, else the one that is ("Dev only"). */
+export const fallbackWorkspace = (s: ShownWorkspaces): Workspace =>
+  s.dev && s.business ? "all" : s.business ? "business" : "dev";
+
+/**
+ * The board's scope from the URL (`ws` + `project`). Never falls back to another project (FR-CSP-01). A hidden
+ * workspace in the URL shows the fallback instead, without the hidden workspace's project.
+ */
 export function useScope(): Scope {
   const search = route.useSearch();
-  const ws = search.ws ?? "all";
+  const shown = useShownWorkspaces();
+  const fallback = fallbackWorkspace(shown);
+  const hiddenWs = search.ws !== undefined && search.ws !== "all" && !shown[search.ws];
+  const ws = search.ws && !hiddenWs ? search.ws : fallback;
+  const projectId = hiddenWs ? undefined : search.project;
   const workspaces = useWorkspaces();
   const project =
-    ws === "all" || !search.project
+    ws === "all" || !projectId
       ? undefined
-      : workspaces.data?.items
-          .find((w) => w.mode === MODE[ws])
-          ?.projects.find((p) => p.id === search.project);
+      : workspaces.data?.items.find((w) => w.mode === MODE[ws])?.projects.find((p) => p.id === projectId);
   const blocked = !project
     ? PICK_PROJECT
     : project.archivedAt
       ? `${project.name} is archived: it keeps its history but can't start or approve runs. Unarchive it in Settings → Workspaces.`
       : project.mode === "BUSINESS"
-        ? `${project.name} is a Business project: business connectors and agents arrive in P1, so it has nothing to run yet.`
+        ? `${project.name} is a Business project: it reads its connected sources in the Business drawer, and runs belong to Dev projects.`
         : null;
   return {
     ws,
     project,
-    ready: ws === "all" || !search.project || !workspaces.isPending,
+    ready: ws === "all" || !projectId || !workspaces.isPending,
     blocked,
-    keep: { ws: search.ws === "all" ? undefined : search.ws, project: search.project, view: search.view },
+    keep: { ws: ws === fallback ? undefined : ws, project: projectId, view: search.view },
+    fallback,
+    shown,
   };
 }
 
@@ -56,6 +70,8 @@ export const decisionBlocked = (scope: Scope, a: Approval): string | null =>
     : "This approval belongs to another project: switch to it first.");
 
 const LABEL = { all: "All workspaces", dev: "Dev", business: "Business" } as const;
+/** "All workspaces", or "All projects" while one workspace is hidden. */
+export const allLabel = (s: ShownWorkspaces) => (s.dev && s.business ? LABEL.all : "All projects");
 const NO_PROJECT = { all: "cross-project", dev: "all repos", business: "all products" } as const;
 
 /** SCOPE breadcrumb `Mode › Project ▾ › Environment` with the project switcher (design: projMenu). */
@@ -109,10 +125,11 @@ export function ScopeNav() {
   // Switching scope closes any drawer: it showed the other project's data.
   const select = (p: Project | null) => {
     const view = scope.keep.view;
+    const ws = (w: Workspace) => (w === scope.fallback ? undefined : w);
     void navigate({
       search: p
-        ? { ws: p.mode === "DEV" ? "dev" : "business", project: p.id, view }
-        : { ws: undefined, view },
+        ? { ws: ws(p.mode === "DEV" ? "dev" : "business"), project: p.id, view }
+        : { ws: ws("all"), view },
     });
     close();
   };
@@ -152,7 +169,7 @@ export function ScopeNav() {
                 ? "archived · read-only"
                 : mode === "DEV"
                   ? `${p.repositoryIds.length} ${p.repositoryIds.length === 1 ? "repository" : "repositories"} bound`
-                  : "no sources connected · P1",
+                  : "business · read-only sources",
               scope.project?.id === p.id,
             ),
           )}
@@ -168,7 +185,9 @@ export function ScopeNav() {
       className="glass relative hidden h-10 items-center gap-[7px] rounded-[14px] pr-1.5 pl-3 font-mono text-[11.5px] whitespace-nowrap text-ink2 md:flex"
     >
       <span className="text-[10px] font-medium tracking-[.08em] text-ink3">SCOPE</span>
-      <span className="font-medium text-teal">{LABEL[scope.ws]}</span>
+      <span className="font-medium text-teal">
+        {scope.ws === "all" ? allLabel(scope.shown) : LABEL[scope.ws]}
+      </span>
       <span aria-hidden="true" className="text-ink3">
         ›
       </span>
@@ -200,14 +219,20 @@ export function ScopeNav() {
             <p className="m-0 px-2.5 py-2 font-sans text-[12.5px] text-ink3">Loading projects…</p>
           ) : (
             <ul aria-label="Projects" className="m-0 flex list-none flex-col p-0">
-              {group("DEV", "DEV · PROJECTS", "No Dev projects. Create one in Settings → Workspaces.")}
-              {group("BUSINESS", "BUSINESS · PROJECTS", "No Business projects yet.")}
+              {scope.shown.dev &&
+                group("DEV", "DEV · PROJECTS", "No Dev projects. Create one in Settings → Workspaces.")}
+              {scope.shown.business && group("BUSINESS", "BUSINESS · PROJECTS", "No Business projects yet.")}
               <li>
                 <span className="block px-2.5 pt-2.5 pb-1.5 font-mono text-[10.5px] tracking-[.06em] text-ink3">
                   CHIEF OF STAFF
                 </span>
                 <ul className="m-0 flex list-none flex-col p-0">
-                  {item(null, "All workspaces", "cross-project aggregate · read-only", scope.ws === "all")}
+                  {item(
+                    null,
+                    allLabel(scope.shown),
+                    "cross-project aggregate · read-only",
+                    scope.ws === "all",
+                  )}
                 </ul>
               </li>
             </ul>

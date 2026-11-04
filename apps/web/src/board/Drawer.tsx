@@ -67,7 +67,7 @@ export function DrawerHeader({ kicker, title }: { kicker: string; title: string 
         </Dialog.Title>
       </div>
       <Dialog.Close className="flex-none rounded-xl bg-hair px-3 py-2.5 text-[12px] font-medium text-ink2">
-        Back to board <span className="ml-1.5 font-mono text-[10.5px] text-ink3">esc</span>
+        Close <span className="ml-1.5 font-mono text-[10.5px] text-ink3">esc</span>
       </Dialog.Close>
     </div>
   );

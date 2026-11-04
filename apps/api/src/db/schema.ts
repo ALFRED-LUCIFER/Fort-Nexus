@@ -148,6 +148,8 @@ export const workspaces = pgTable(
       .references(() => user.id),
     mode: text("mode").$type<WorkspaceMode>().notNull(),
     name: text("name").notNull(),
+    // Shown in the app (a display preference; projects and records stay). At least one stays on per owner.
+    enabled: boolean("enabled").notNull().default(true),
     createdAt: ts("created_at").notNull().defaultNow(),
   },
   (t) => [

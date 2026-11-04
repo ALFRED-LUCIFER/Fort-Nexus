@@ -19,6 +19,7 @@ import {
 } from "../lib/queries.ts";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { P1Button } from "./P1Button.tsx";
+import { RepoDetails } from "./repos.tsx";
 import { useScope } from "./scope.tsx";
 import { StartRunPreview } from "./StartRun.tsx";
 
@@ -171,34 +172,61 @@ function RepoBody({ repoId }: { repoId: string }) {
           </p>
         )}
 
-        <ul aria-label="Repositories" className="m-0 flex list-none flex-col gap-2 p-0">
-          {repos.data.items.length === 0 && (
-            <li className="text-[14px] text-ink2">
-              {project
-                ? `No repositories are bound to ${project.name} yet. Bind some in Settings → Workspaces.`
-                : "The app's installations have no repositories yet. Add some in the installation settings on GitHub."}
-            </li>
-          )}
-          {repos.data.items.map((r) => (
-            <li key={r.id}>
-              <button
-                type="button"
-                aria-current={r.id === repoId ? "true" : undefined}
-                onClick={() => void navigate({ search: { ...keep, drawer: `repo:${r.id}` } })}
-                className={`grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border px-4 py-3.5 text-left ${r.id === repoId ? "border-teal" : "border-hair"}`}
+        {/* One repository open: its details first; the full list (with health) is one click away. */}
+        {repo && (
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => void navigate({ search: { ...keep, drawer: "repos" } })}
+              className="rounded-xl border border-hair px-3.5 py-2 text-[12.5px] font-medium text-ink"
+            >
+              ← All repositories
+            </button>
+            <span className="font-mono text-[11px] text-ink3">
+              {repoMeta(repo, now)} · {accessLabel(installations.find((i) => i.id === repo.installationId))} ·{" "}
+              <a
+                href={repo.htmlUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-teal underline"
               >
-                <span className="flex min-w-0 flex-col gap-1">
-                  <span className="truncate text-[14px] font-medium text-ink">{r.fullName}</span>
-                  <span className="font-mono text-[11px] text-ink3">{repoMeta(r, now)}</span>
-                </span>
-                <span className="font-mono text-[11px] text-ink2">
-                  {accessLabel(installations.find((i) => i.id === r.installationId))}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+                on GitHub<span className="sr-only"> (opens in a new tab)</span>
+              </a>
+            </span>
+          </div>
+        )}
 
+        {!repo && (
+          <ul aria-label="Repositories" className="m-0 flex list-none flex-col gap-2 p-0">
+            {repos.data.items.length === 0 && (
+              <li className="text-[14px] text-ink2">
+                {project
+                  ? `No repositories are bound to ${project.name} yet. Bind some in Settings → Workspaces.`
+                  : "The app's installations have no repositories yet. Add some in the installation settings on GitHub."}
+              </li>
+            )}
+            {repos.data.items.map((r) => (
+              <li key={r.id}>
+                <button
+                  type="button"
+                  aria-current={r.id === repoId ? "true" : undefined}
+                  onClick={() => void navigate({ search: { ...keep, drawer: `repo:${r.id}` } })}
+                  className={`grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border px-4 py-3.5 text-left ${r.id === repoId ? "border-teal" : "border-hair"}`}
+                >
+                  <span className="flex min-w-0 flex-col gap-1">
+                    <span className="truncate text-[14px] font-medium text-ink">{r.fullName}</span>
+                    <span className="font-mono text-[11px] text-ink3">{repoMeta(r, now)}</span>
+                  </span>
+                  <span className="font-mono text-[11px] text-ink2">
+                    {accessLabel(installations.find((i) => i.id === r.installationId))}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {repo && <RepoDetails repo={repo} />}
         {repo && <Issues repo={repo} />}
       </div>
     </>
