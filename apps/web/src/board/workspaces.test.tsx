@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Approval, GithubStatus, Project, Repository } from "@nexus/contracts";
 import {
@@ -108,6 +108,64 @@ function board(extra: Parameters<typeof mockFetch>[0] = {}) {
 beforeEach(() => {
   FakeEventSource.instances = [];
   vi.stubGlobal("EventSource", FakeEventSource);
+});
+
+describe("reopening the last project", () => {
+  const LAST = "nexus-last-project";
+
+  it("reopens on the last project; All stays reachable and an explicit URL or drawer link is never overridden", async () => {
+    board();
+    const user = userEvent.setup();
+    renderApp(IN_PROJECT);
+    await screen.findByRole("navigation", { name: "Scope" });
+    await waitFor(() => expect(localStorage.getItem(LAST)).toBe(PROJECT_ID));
+    cleanup();
+
+    const again = renderApp("/");
+    await waitFor(() =>
+      expect(again.router.state.location.search).toEqual({ ws: "dev", project: PROJECT_ID }),
+    );
+    const scope = await screen.findByRole("navigation", { name: "Scope" });
+    await user.click(within(scope).getByRole("button", { name: /Switch project/ }));
+    await user.click(within(scope).getByRole("button", { name: /All workspaces/ }));
+    await waitFor(() => expect(again.router.state.location.search).toEqual({}));
+    expect(scope.textContent).toMatch(/All workspaces.*cross-project/);
+    cleanup();
+
+    const explicit = renderApp("/?ws=business");
+    await screen.findByRole("navigation", { name: "Scope" });
+    expect(explicit.router.state.location.search.project).not.toBe(PROJECT_ID);
+    cleanup();
+
+    const link = renderApp("/?drawer=inbox");
+    await screen.findByRole("dialog");
+    expect(link.router.state.location.search).toEqual({ drawer: "inbox" });
+  });
+
+  it.each([
+    ["archived", workspaces([project({ archivedAt: new Date().toISOString() })])],
+    ["in a hidden workspace", workspaces([], [project({ mode: "BUSINESS" })], false)],
+    ["deleted", workspaces([project({ id: OTHER_PROJECT_ID })])],
+  ])("stays put when the remembered project is %s", async (_why, list) => {
+    localStorage.setItem(LAST, PROJECT_ID);
+    board({ "GET /v1/workspaces": () => json(list) });
+    const { router } = renderApp("/");
+    await screen.findByRole("navigation", { name: "Scope" });
+    expect(router.state.location.search.project).not.toBe(PROJECT_ID);
+  });
+
+  it("ignores blocked storage", async () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    board();
+    const { router } = renderApp("/");
+    await screen.findByRole("navigation", { name: "Scope" });
+    expect(router.state.location.search).toEqual({});
+  });
 });
 
 describe("workspace switch and project menu", () => {

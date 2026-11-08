@@ -1,11 +1,20 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { getRouteApi } from "@tanstack/react-router";
-import type { Approval, Project } from "@nexus/contracts";
+import type { Approval, Project, WorkspaceList } from "@nexus/contracts";
 import { useShownWorkspaces, useWorkspaces, type ShownWorkspaces } from "../lib/queries.ts";
 import type { Area, Workspace } from "../router.tsx";
 
 const route = getRouteApi("/");
 const MODE = { dev: "DEV", business: "BUSINESS" } as const;
+const LAST_PROJECT_KEY = "nexus-last-project";
+
+export const rememberedProject = (): string | null => {
+  try {
+    return localStorage.getItem(LAST_PROJECT_KEY);
+  } catch {
+    return null; // Storage blocked: the owner picks a project as before.
+  }
+};
 
 export const PICK_PROJECT = "Pick a project first: All is a read-only view across projects.";
 
@@ -77,6 +86,31 @@ export function useOnlyProjectInUrl() {
   useEffect(() => {
     if (implicit) void navigate({ search: (s) => ({ ...s, project: implicit }), replace: true });
   }, [implicit, navigate]);
+}
+
+/** Whatever way a project got selected (the menu, an only project, a link), it is the one a fresh visit reopens. */
+export function useRememberProject() {
+  const id = useScope().project?.id;
+  useEffect(() => {
+    if (!id) return;
+    try {
+      localStorage.setItem(LAST_PROJECT_KEY, id);
+    } catch {
+      // Not remembered; the pick still works for this session.
+    }
+  }, [id]);
+}
+
+/** The scope a fresh visit reopens on; null when the remembered project is gone, archived or in a hidden workspace. */
+export function lastProjectScope(list: WorkspaceList): { ws: Workspace | undefined; project: string } | null {
+  const id = rememberedProject();
+  const owner = list.items.find((w) => w.enabled && w.projects.some((p) => p.id === id && !p.archivedAt));
+  if (!id || !owner) return null;
+  const on = (mode: WorkspaceList["items"][number]["mode"]) =>
+    list.items.find((w) => w.mode === mode)?.enabled ?? true;
+  const fallback = fallbackWorkspace({ dev: on("DEV"), business: on("BUSINESS") });
+  const ws = owner.mode === "DEV" ? "dev" : "business";
+  return { ws: ws === fallback ? undefined : ws, project: id };
 }
 
 /** Why this approval can't be decided in the current scope (approvals belong to exactly one project). */

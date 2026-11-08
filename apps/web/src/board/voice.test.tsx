@@ -197,6 +197,7 @@ describe("push-to-talk in the command bar", () => {
     );
     cleanup();
 
+    localStorage.clear(); // a fresh browser: nothing remembered, so "/" is the All view
     renderApp("/");
     const user = userEvent.setup();
     const blocked = await screen.findByRole("button", { name: "Voice input" });

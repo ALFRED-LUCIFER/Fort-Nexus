@@ -159,6 +159,7 @@ describe("Noticed for you on Today", () => {
     const calls = board();
     renderApp(IN_PROJECT);
     await card();
+    localStorage.clear(); // a fresh browser: nothing remembered, so "/" is the All view
     renderApp("/");
     await waitFor(() => expect(calls.filter((c) => c.path === "/v1/research/opportunities").length).toBe(2));
     const asked = calls

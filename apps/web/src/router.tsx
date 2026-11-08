@@ -13,6 +13,7 @@ import {
 import { ApiRequestError, api, keys } from "./lib/api.ts";
 import { Login } from "./Login.tsx";
 import { Shell } from "./board/Shell.tsx";
+import { lastProjectScope, rememberedProject } from "./board/scope.tsx";
 
 export const Workspace = z.enum(["all", "dev", "business"]);
 export type Workspace = z.infer<typeof Workspace>;
@@ -88,7 +89,7 @@ const boardRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   validateSearch: BoardSearch,
-  beforeLoad: async ({ context, location }) => {
+  beforeLoad: async ({ context, location, search, cause }) => {
     // The zoomable board is gone: an old `view=board|home` bookmark lands on the same scope and drawer, without `view`.
     const raw: Record<string, unknown> = location.search;
     if ("view" in raw) {
@@ -100,6 +101,15 @@ const boardRoute = createRoute({
     } catch (e) {
       if (e instanceof ApiRequestError && e.status === 401) throw redirect({ to: "/login" });
       throw e;
+    }
+    // Arriving with no scope and no drawer link reopens the last project, before anything renders. Only on arrival
+    // (`enter`): picking All afterwards stays on All. If the list can't load, the page reports that itself.
+    if (cause === "enter" && !search.ws && !search.project && !search.drawer && rememberedProject()) {
+      const last = await context.queryClient
+        .ensureQueryData({ queryKey: keys.workspaces, queryFn: api.workspaces })
+        .then(lastProjectScope)
+        .catch(() => null);
+      if (last) throw redirect({ to: "/", search: { ...search, ...last }, replace: true });
     }
   },
   component: Shell,

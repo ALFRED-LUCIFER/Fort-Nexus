@@ -24,7 +24,7 @@ import { PlanDrawer } from "./plans.tsx";
 import { RepositoriesDrawer } from "./repos.tsx";
 import { ResearchDrawer } from "./research.tsx";
 import { RunDrawer } from "./RunDrawer.tsx";
-import { ScopeNav, useOnlyProjectInUrl, useScope } from "./scope.tsx";
+import { ScopeNav, useOnlyProjectInUrl, useRememberProject, useScope } from "./scope.tsx";
 import { SettingsDrawer } from "./Settings.tsx";
 import { PhoneNav, Sidebar } from "./Sidebar.tsx";
 import { TalkDrawer } from "./Talk.tsx";
@@ -45,6 +45,7 @@ export function Shell() {
   const queryClient = useQueryClient();
   const scope = useScope();
   useOnlyProjectInUrl();
+  useRememberProject();
   const projectId = scope.project?.id;
   const wide = useMedia(MD);
   // Without matchMedia nothing is docked: the panel is a wide-screen extra, Talk opens the drawer everywhere.
