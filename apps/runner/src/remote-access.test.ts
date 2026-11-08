@@ -12,7 +12,7 @@ const APP_BINARY = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
 // The shape `tailscale status --json` really prints, including the fields that must never leave the machine.
 const node = (over: Record<string, unknown>) => ({
   ID: "n1CNTRL",
-  PublicKey: "nodekey:0123456789abcdef",
+  PublicKey: "nodekey:self",
   TailscaleIPs: ["100.101.102.103", "fd7a:115c:a1e0::1"],
   AllowedIPs: ["100.101.102.103/32"],
   Addrs: ["192.168.1.44:41641"],
