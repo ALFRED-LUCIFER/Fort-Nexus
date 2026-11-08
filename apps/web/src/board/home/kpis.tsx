@@ -154,38 +154,44 @@ function Sparkline({ k, tone }: { k: HomeKpi; tone: string }) {
   );
 }
 
+/**
+ * Always four cards (the contract says so): four across when the column has room for ~200px each, else 2×2, else one
+ * column, never 3 + 1. It measures its own column (a container), which is narrower with the Cofounder panel docked.
+ */
 export function KpiCards({ kpis }: { kpis: readonly HomeKpi[] }) {
   return (
-    <ul className="m-0 grid list-none grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-3 p-0">
-      {kpis.map((k) => {
-        const d = kpiDelta(k);
-        const tone = d?.tone === "var(--amber)" ? "var(--amber)" : "var(--teal)";
-        return (
-          <li
-            key={k.key}
-            className="flex min-w-0 flex-col gap-2.5 rounded-[18px] border border-line bg-card px-4 pt-4 pb-3.5 shadow-nx"
-          >
-            <h3 className="m-0 text-[12.5px] leading-tight font-normal text-ink2">{k.label}</h3>
-            <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1.5">
-              {k.value === null ? (
-                <span className="font-serif text-[38px] leading-none text-ink3">—</span>
-              ) : (
-                <Eased value={k.value} unit={k.unit} />
-              )}
-              {d && (
-                <span
-                  className="rounded-[7px] px-[7px] py-1 font-mono text-[11px] leading-none"
-                  style={{ color: d.tone, background: `color-mix(in oklch, ${d.tone} 12%, transparent)` }}
-                >
-                  {d.text}
-                </span>
-              )}
-            </div>
-            <Sparkline k={k} tone={tone} />
-            <span className="font-mono text-[11px] leading-snug text-ink3">{k.source}</span>
-          </li>
-        );
-      })}
-    </ul>
+    <div className="@container">
+      <ul className="m-0 grid list-none grid-cols-1 gap-3 p-0 @sm:grid-cols-2 @min-[52rem]:grid-cols-4">
+        {kpis.map((k) => {
+          const d = kpiDelta(k);
+          const tone = d?.tone === "var(--amber)" ? "var(--amber)" : "var(--teal)";
+          return (
+            <li
+              key={k.key}
+              className="flex min-w-0 flex-col gap-2.5 rounded-[18px] border border-line bg-card px-4 pt-4 pb-3.5 shadow-nx"
+            >
+              <h3 className="m-0 text-[12.5px] leading-tight font-normal text-ink2">{k.label}</h3>
+              <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1.5">
+                {k.value === null ? (
+                  <span className="font-serif text-[38px] leading-none text-ink3">—</span>
+                ) : (
+                  <Eased value={k.value} unit={k.unit} />
+                )}
+                {d && (
+                  <span
+                    className="rounded-[7px] px-[7px] py-1 font-mono text-[11px] leading-none"
+                    style={{ color: d.tone, background: `color-mix(in oklch, ${d.tone} 12%, transparent)` }}
+                  >
+                    {d.text}
+                  </span>
+                )}
+              </div>
+              <Sparkline k={k} tone={tone} />
+              <span className="font-mono text-[11px] leading-snug text-ink3">{k.source}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }

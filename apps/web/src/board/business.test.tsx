@@ -190,7 +190,7 @@ describe("business zone", () => {
     renderApp(`${IN_PROJECT}&area=business&drawer=business`);
     const drawer = await screen.findByRole("dialog");
     // The open drawer hides the page from the accessibility tree.
-    const zone = screen.getByRole("main", { name: "Business", hidden: true });
+    const zone = await screen.findByRole("main", { name: "Business", hidden: true });
     expect(within(zone).getByText(/^Business sources live in Business projects/)).toBeTruthy();
     expect(within(drawer).getByText(/^Business sources live in Business projects/)).toBeTruthy();
     expect(calls.some((c) => c.path.startsWith("/v1/business/"))).toBe(false);

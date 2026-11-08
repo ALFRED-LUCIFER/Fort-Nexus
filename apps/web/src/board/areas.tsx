@@ -158,6 +158,8 @@ export function useAreas() {
     },
   ];
   return {
+    /** False until the workspaces are known: which areas exist depends on them ("Dev only"). */
+    ready: scope.ready,
     list: all.filter((a) => !a.ws || scope.shown[a.ws]),
     runner: preferredRunner(runners.data),
     queries: { runners, jobs, queued, github, repos, watchlists, agents },
@@ -170,6 +172,21 @@ export type Areas = ReturnType<typeof useAreas>;
 /** The areas as links with their live status line: the sidebar, and the phone's Workspaces screen. */
 export function AreaLinks({ areas, current }: { areas: Areas; current: AreaKey | "list" }) {
   const { keep } = useScope();
+  // A neutral placeholder until the workspaces are known, never the areas of a workspace that may be hidden.
+  if (!areas.ready)
+    return (
+      <div className="flex flex-col gap-0.5">
+        <p role="status" className="sr-only">
+          Loading areas…
+        </p>
+        {[0, 1, 2, 3, 4].map((i) => (
+          <span key={i} aria-hidden="true" className="flex flex-col gap-1.5 px-3 py-2.5">
+            <span className="h-[15px] w-20 rounded-md bg-hair" />
+            <span className="h-[11px] w-28 rounded-md bg-hair" />
+          </span>
+        ))}
+      </div>
+    );
   return (
     <nav aria-label="Areas">
       <ul className="m-0 flex list-none flex-col gap-0.5 p-0">

@@ -50,8 +50,10 @@ export function PhoneNav({
   const { keep } = useScope();
   const navigate = route.useNavigate();
   const drawer = (d: string) => void navigate({ search: { ...keep, drawer: d } });
+  // Sized by their words, then sharing what's left: five equal fifths of a 320px screen are narrower than
+  // "Workspaces".
   const item =
-    "flex min-h-[48px] flex-1 flex-col items-center justify-center gap-0.5 rounded-xl text-[12px] font-medium";
+    "flex min-h-[48px] flex-auto flex-col items-center justify-center gap-0.5 rounded-xl px-0.5 text-[12px] font-medium";
   const dot = (on: boolean) => (
     <span aria-hidden="true" className={`size-1 rounded-full ${on ? "bg-teal" : "bg-transparent"}`} />
   );

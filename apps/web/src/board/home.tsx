@@ -183,7 +183,8 @@ export function TodayView() {
 
       {s && <RunningNow runs={s.execution} agents={agents} now={now} onOpen={open} onOpenRef={openRef} />}
 
-      {!business && (
+      {/* These two read the scope themselves: they wait for it, rather than show "all installed" first. */}
+      {scope.ready && !business && (
         <Section
           id="home-repos"
           title={scope.project ? `Your repositories · ${scope.project.name}` : "Repositories · all installed"}
@@ -193,21 +194,23 @@ export function TodayView() {
         </Section>
       )}
 
-      <Section
-        id="home-noticed"
-        title="Noticed for you"
-        meta="ranked by confidence, then verified evidence · impact is est."
-        empty={
-          noticed.data?.length === 0
-            ? "nothing yet: a deep dive turns what it verifies into cards here"
-            : undefined
-        }
-      >
-        {/* The cards keep their width: the row scrolls sideways inside itself rather than squeezing them. */}
-        <div className="overflow-x-auto pb-1">
-          <NoticedZone onOpen={(id, focus) => open(`opp:${id}${focus ? `:${focus}` : ""}`)} />
-        </div>
-      </Section>
+      {scope.ready && (
+        <Section
+          id="home-noticed"
+          title="Noticed for you"
+          meta="ranked by confidence, then verified evidence · impact is est."
+          empty={
+            noticed.data?.length === 0
+              ? "nothing yet: a deep dive turns what it verifies into cards here"
+              : undefined
+          }
+        >
+          {/* The cards keep their width: the row scrolls sideways inside itself rather than squeezing them. */}
+          <div className="overflow-x-auto pb-1">
+            <NoticedZone onOpen={(id, focus) => open(`opp:${id}${focus ? `:${focus}` : ""}`)} />
+          </div>
+        </Section>
+      )}
 
       {(business || s) && (
         <Section

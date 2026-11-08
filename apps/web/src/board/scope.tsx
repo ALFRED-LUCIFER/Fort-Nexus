@@ -38,12 +38,17 @@ export function useScope(): Scope {
   const fallback = fallbackWorkspace(shown);
   const hiddenWs = search.ws !== undefined && search.ws !== "all" && !shown[search.ws];
   const ws = search.ws && !hiddenWs ? search.ws : fallback;
-  const projectId = hiddenWs ? undefined : search.project;
   const workspaces = useWorkspaces();
-  const project =
-    ws === "all" || !projectId
-      ? undefined
-      : workspaces.data?.items.find((w) => w.mode === MODE[ws])?.projects.find((p) => p.id === projectId);
+  const projects =
+    ws === "all" ? undefined : workspaces.data?.items.find((w) => w.mode === MODE[ws])?.projects;
+  const urlProject = hiddenWs ? undefined : search.project;
+  // A workspace with exactly one active project opens on it: its "all repos" view would show the same data, but
+  // read-only and without the project's agents, so nothing would look like it works. It resolves here, in the same
+  // render the workspaces arrive in, so the page never shows the aggregate first; `useOnlyProjectInUrl` then writes
+  // it into the URL.
+  const active = urlProject ? undefined : projects?.filter((p) => !p.archivedAt);
+  const projectId = urlProject ?? (active?.length === 1 ? active[0]!.id : undefined);
+  const project = projectId ? projects?.find((p) => p.id === projectId) : undefined;
   const blocked = !project
     ? PICK_PROJECT
     : project.archivedAt
@@ -61,6 +66,17 @@ export function useScope(): Scope {
     fallback,
     shown,
   };
+}
+
+/** Puts the project `useScope` opened on by itself (a workspace's only one) into the URL, so links carry it. */
+export function useOnlyProjectInUrl() {
+  const scope = useScope();
+  const search = route.useSearch();
+  const navigate = route.useNavigate();
+  const implicit = scope.project && search.project !== scope.project.id ? scope.project.id : undefined;
+  useEffect(() => {
+    if (implicit) void navigate({ search: (s) => ({ ...s, project: implicit }), replace: true });
+  }, [implicit, navigate]);
 }
 
 /** Why this approval can't be decided in the current scope (approvals belong to exactly one project). */
@@ -106,18 +122,23 @@ export function ScopeNav() {
     };
   }, [open]);
 
-  // A workspace with exactly one active project opens on it: its "all repos" view would show the same data, but
-  // read-only and without the project's agents, so nothing would look like it works.
-  const only =
-    scope.ws === "all" || scope.keep.project
-      ? undefined
-      : workspaces.data?.items
-          .find((w) => w.mode === MODE[scope.ws as "dev" | "business"])
-          ?.projects.filter((p) => !p.archivedAt);
-  const onlyId = only?.length === 1 ? only[0]!.id : undefined;
-  useEffect(() => {
-    if (onlyId) void navigate({ search: (s) => ({ ...s, project: onlyId }), replace: true });
-  }, [onlyId, navigate]);
+  // Until the workspaces arrive the scope isn't known (a hidden workspace or an only project changes it): a neutral
+  // placeholder of the same size, instead of "All workspaces" that jumps to the real scope a moment later.
+  if (!scope.ready)
+    return (
+      <div className="flex flex-col gap-1.5 font-mono text-ink2">
+        <span aria-hidden="true" className="px-1 text-[11px] font-medium tracking-[.08em] text-ink3">
+          SCOPE
+        </span>
+        <span
+          role="status"
+          className="flex min-h-[41px] items-center rounded-xl bg-hair px-3 font-sans text-[14px] text-ink3"
+        >
+          Loading workspaces…
+        </span>
+        <span aria-hidden="true" className="min-h-[16.5px]" />
+      </div>
+    );
 
   const close = () => {
     setOpen(false);

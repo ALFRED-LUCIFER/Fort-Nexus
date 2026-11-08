@@ -18,9 +18,11 @@ import {
   job,
   json,
   mockFetch,
+  project,
   renderApp,
   runner,
   setViewport,
+  workspaces,
 } from "../test/helpers.tsx";
 
 function board(runners: Runner[], jobs: Job[] = [], extra: Parameters<typeof mockFetch>[0] = {}) {
@@ -247,6 +249,44 @@ describe("sidebar", () => {
     expect(screen.getByRole("main", { name: "Systems" })).toBeTruthy();
   });
 
+  it("waits for the workspaces before showing a scope or areas, then opens straight on Dev's only project", async () => {
+    let answer: (r: Response) => void = () => undefined;
+    board([runner()], [], {
+      "GET /v1/workspaces": () => new Promise<Response>((resolve) => (answer = resolve)),
+      "GET /v1/agents": () => json({ items: [] }),
+    });
+    const { router } = renderApp("/");
+    expect(await screen.findByText("Loading workspaces…")).toBeTruthy();
+    expect(screen.getByText("Loading areas…")).toBeTruthy();
+    // Nothing of a scope that may not exist: no aggregate, no Business area, no "pick a project".
+    expect(screen.queryByRole("navigation", { name: "Areas" })).toBeNull();
+    expect(screen.queryByText(/All workspaces|cross-project/)).toBeNull();
+    expect(screen.queryByText("pick a project")).toBeNull();
+    expect(screen.queryByText(/all installed/)).toBeNull();
+    expect(screen.getByRole("main", { name: "Today" })).toBeTruthy();
+
+    answer(json(workspaces([project()], [], false)));
+    const scope = await screen.findByRole("navigation", { name: "Scope" });
+    // The first scope shown is already the project, not "Dev · all repos · read-only" a moment before it.
+    expect(within(scope).getByRole("button", { name: "Project: Home. Switch project" })).toBeTruthy();
+    expect(scope.textContent).not.toMatch(/read-only/);
+    const areas = await areasNav();
+    expect(within(areas).queryByRole("link", { name: /^Business/ })).toBeNull();
+    await waitFor(() => expect(router.state.location.search).toEqual({ project: PROJECT_ID }));
+  });
+
+  it("an area in the URL waits for the workspaces instead of flashing a page that may be hidden", async () => {
+    let answer: (r: Response) => void = () => undefined;
+    board([runner()], [], {
+      "GET /v1/workspaces": () => new Promise<Response>((resolve) => (answer = resolve)),
+    });
+    renderApp("/?area=business");
+    const main = await screen.findByRole("main", { name: "Loading" });
+    expect(within(main).getByRole("status").textContent).toBe("Loading…");
+    answer(json(workspaces([project()], [], false)));
+    expect(await screen.findByRole("main", { name: "Today" })).toBeTruthy();
+  });
+
   it("an old board bookmark lands on Today with its drawer and without view", async () => {
     board([runner()], [], { "GET /v1/jobs": () => json({ items: [], nextCursor: null }) });
     const { router } = renderApp("/?view=board&drawer=jobs");
@@ -277,6 +317,15 @@ describe("phone", () => {
     await user.click(within(nav).getByRole("link", { name: "Workspaces" }));
     const main = await screen.findByRole("main", { name: "Workspaces" });
     expect(within(main).getByRole("navigation", { name: "Scope" })).toBeTruthy();
+    expect(within(nav).getByRole("link", { name: "Workspaces" }).getAttribute("aria-current")).toBe("page");
+    expect(within(nav).getByRole("link", { name: "Home" }).getAttribute("aria-current")).toBeNull();
+    // Each area with its status line, in words.
+    const list = within(main).getByRole("navigation", { name: "Areas" });
+    await waitFor(() =>
+      expect(within(list).getByRole("link", { name: /^Systems/ }).textContent).toBe(
+        "Systems1 runner · 1 online",
+      ),
+    );
     await user.click(
       within(within(main).getByRole("navigation", { name: "Areas" })).getByRole("link", { name: /^Code/ }),
     );
@@ -286,22 +335,70 @@ describe("phone", () => {
   });
 });
 
+describe("phone command bar", () => {
+  it("has the command field with its mode as one select and the action as a named button", async () => {
+    setViewport(320);
+    board([runner()]);
+    const user = userEvent.setup();
+    renderApp(IN_PROJECT);
+    const header = await screen.findByRole("banner");
+    expect(within(header).getByRole("heading", { level: 1, name: "nexus" })).toBeTruthy();
+    expect(within(header).getByRole("button", { name: "STOP ALL" })).toBeTruthy();
+    const command = within(header).getByRole("textbox", { name: "Command" });
+    const mode = within(header).getByRole("combobox", { name: "Command mode" });
+    expect((mode as HTMLSelectElement).value).toBe("Execute");
+    expect(within(header).getByRole("button", { name: "Preview" })).toBeTruthy();
+
+    // The select and the segmented control are one mode: a narrow bar shows the select, a wide one the buttons.
+    await user.selectOptions(mode, "Plan");
+    expect(within(header).getByRole("button", { name: "Plan", pressed: true })).toBeTruthy();
+    // ...and the action button now says Plan too.
+    expect(within(header).getAllByRole("button", { name: "Plan" })).toHaveLength(2);
+    await user.type(command, "tidy the backlog");
+    expect((command as HTMLInputElement).value).toBe("tidy the backlog");
+    await user.click(within(header).getByRole("button", { name: "Ask", pressed: false }));
+    expect((mode as HTMLSelectElement).value).toBe("Ask");
+  });
+});
+
 describe("Cofounder panel dock", () => {
+  it("one toggle names what it hides, says whether it is expanded, controls the panel and keeps focus", async () => {
+    setViewport(1280);
+    board([runner()]);
+    const user = userEvent.setup();
+    renderApp(IN_PROJECT);
+    await screen.findByRole("complementary", { name: "Cofounder" });
+    const toggle = screen.getByRole("button", { name: "Hide cofounder panel" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    const panel = document.getElementById(toggle.getAttribute("aria-controls")!);
+    expect(panel?.contains(screen.getByRole("complementary", { name: "Cofounder" }))).toBe(true);
+
+    await user.click(toggle);
+    expect(document.activeElement).toBe(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.getAttribute("aria-label")).toBe("Show cofounder panel");
+    expect(panel?.hidden).toBe(true);
+
+    await user.keyboard("{Enter}");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(await screen.findByRole("complementary", { name: "Cofounder" })).toBeTruthy();
+  });
+
   it("is docked on a wide screen; hiding it is remembered on this device", async () => {
     setViewport(1440);
     board([runner()]);
     const user = userEvent.setup();
     renderApp(IN_PROJECT);
     expect(await screen.findByRole("complementary", { name: "Cofounder" })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Hide Cofounder" }));
+    await user.click(screen.getByRole("button", { name: "Hide cofounder panel" }));
     expect(screen.queryByRole("complementary", { name: "Cofounder" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Show Cofounder" }).getAttribute("aria-expanded")).toBe(
+    expect(screen.getByRole("button", { name: "Show cofounder panel" }).getAttribute("aria-expanded")).toBe(
       "false",
     );
 
     cleanup();
     renderApp(IN_PROJECT);
-    expect(await screen.findByRole("button", { name: "Show Cofounder" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Show cofounder panel" })).toBeTruthy();
     expect(screen.queryByRole("complementary", { name: "Cofounder" })).toBeNull();
   });
 
@@ -317,8 +414,8 @@ describe("Cofounder panel dock", () => {
     const user = userEvent.setup();
     renderApp(IN_PROJECT);
     expect(await screen.findByRole("complementary", { name: "Cofounder" })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Hide Cofounder" }));
-    expect(screen.getByRole("button", { name: "Show Cofounder" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Hide cofounder panel" }));
+    expect(screen.getByRole("button", { name: "Show cofounder panel" })).toBeTruthy();
   });
 
   it("isn't docked below the wide breakpoint: Talk opens the drawer", async () => {

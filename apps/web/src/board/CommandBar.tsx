@@ -118,9 +118,13 @@ export function CommandBar({
     if (e.key === "Escape") setPanel(null);
   };
 
+  const action = mode === "Execute" ? (typed ? "Draft job" : "Preview") : mode;
+
+  // The bar sizes itself to its own width (a container), not the screen's: on a phone it has a row to itself, on a
+  // tablet it shares the header. A narrow bar picks the mode in a native select and shows the action as an arrow.
   return (
-    <div className="relative mx-auto max-w-[780px] min-w-0 flex-[1_1_0]">
-      <div className="glass2 pointer-events-auto flex h-[52px] items-center gap-2 rounded-[18px] pr-1.5 pl-4">
+    <div className="@container relative mx-auto max-w-[780px] min-w-0 flex-[1_1_0]">
+      <div className="glass2 pointer-events-auto flex h-[52px] items-center gap-1.5 rounded-[18px] pr-1.5 pl-4 has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-teal @sm:gap-2">
         <input
           ref={inputRef}
           aria-label="Command"
@@ -131,10 +135,20 @@ export function CommandBar({
           className="min-w-0 flex-1 border-0 bg-transparent text-[15px] text-ink outline-none placeholder:text-ink3"
         />
         <MicButton ptt={ptt} onTranscript={onTranscript} blocked={micScopeBlock(scope)} />
+        <select
+          aria-label="Command mode"
+          value={mode}
+          onChange={(e) => setMode(MODES.find((m) => m === e.target.value) ?? mode)}
+          className="h-10 flex-none rounded-xl border-0 bg-hair px-2 text-[12.5px] font-medium text-ink @xl:hidden"
+        >
+          {MODES.map((m) => (
+            <option key={m}>{m}</option>
+          ))}
+        </select>
         <div
           role="group"
           aria-label="Command mode"
-          className="hidden flex-none rounded-xl bg-hair p-[3px] sm:flex"
+          className="hidden flex-none rounded-xl bg-hair p-[3px] @xl:flex"
         >
           {MODES.map((m) => (
             <button
@@ -150,10 +164,14 @@ export function CommandBar({
         </div>
         <button
           type="button"
+          aria-label={action}
           onClick={submit}
-          className="h-10 flex-none rounded-xl bg-teal px-4 text-[13px] font-medium text-onacc"
+          className="flex h-10 w-10 flex-none items-center justify-center rounded-xl bg-teal text-[13px] font-medium text-onacc @md:w-auto @md:px-4"
         >
-          {mode === "Execute" ? (typed ? "Draft job" : "Preview") : mode}
+          <span aria-hidden="true" className="text-[17px] leading-none @md:hidden">
+            →
+          </span>
+          <span className="hidden @md:inline">{action}</span>
         </button>
       </div>
       <div className="absolute top-[62px] right-0 left-0 z-[12] flex flex-col gap-2.5">

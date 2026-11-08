@@ -24,7 +24,7 @@ import { PlanDrawer } from "./plans.tsx";
 import { RepositoriesDrawer } from "./repos.tsx";
 import { ResearchDrawer } from "./research.tsx";
 import { RunDrawer } from "./RunDrawer.tsx";
-import { ScopeNav, useScope } from "./scope.tsx";
+import { ScopeNav, useOnlyProjectInUrl, useScope } from "./scope.tsx";
 import { SettingsDrawer } from "./Settings.tsx";
 import { PhoneNav, Sidebar } from "./Sidebar.tsx";
 import { TalkDrawer } from "./Talk.tsx";
@@ -43,6 +43,7 @@ export function Shell() {
   const navigate = route.useNavigate();
   const queryClient = useQueryClient();
   const scope = useScope();
+  useOnlyProjectInUrl();
   const projectId = scope.project?.id;
   const wide = useMedia(MD);
   // Without matchMedia nothing is docked: the panel is a wide-screen extra, Talk opens the drawer everywhere.
@@ -56,11 +57,17 @@ export function Shell() {
   const unread = useScopeNotifications().unread ?? 0;
 
   // An area that isn't shown (its workspace is hidden) falls back to Today; so does the phone's areas screen on a
-  // wide screen, where the sidebar is that list.
+  // wide screen, where the sidebar is that list. Until the workspaces are known the URL's area waits for them.
   const shownArea = areas.list.some((a) => a.id === search.area) ? search.area : undefined;
-  const current: AreaKey | "list" = search.area === "list" && !wide ? "list" : (shownArea ?? "today");
-  const pageLabel =
-    current === "list" ? "Workspaces" : (areas.list.find((a) => a.id === current)?.label ?? "Today");
+  const current: AreaKey | "list" =
+    search.area === "list" ? (wide ? "today" : "list") : ((areas.ready ? shownArea : search.area) ?? "today");
+  // An area's page waits for the workspaces (they decide whether it is shown); Today shows its own loading state.
+  const waiting = !areas.ready && current !== "today" && current !== "list";
+  const pageLabel = waiting
+    ? "Loading"
+    : current === "list"
+      ? "Workspaces"
+      : (areas.list.find((a) => a.id === current)?.label ?? "Today");
 
   // drawer = run:<jobId> | repo:<repoId> | issue:<repoId>:<number> (validated by BoardSearch).
   const [drawerKind, drawerId, drawerNumber] = search.drawer?.split(":") ?? [];
@@ -138,6 +145,12 @@ export function Shell() {
 
   let page: ReactNode;
   if (current === "today") page = <TodayView />;
+  else if (waiting)
+    page = (
+      <p role="status" className="m-0 pt-2 text-[14px] text-ink3">
+        Loading…
+      </p>
+    );
   else if (current === "list")
     page = (
       <div className="flex flex-col gap-5 pb-6">
@@ -154,14 +167,16 @@ export function Shell() {
 
   return (
     <div className="fixed inset-0 flex flex-col">
-      <header className="relative flex flex-none items-center gap-2.5 px-4 pt-3.5 pb-3">
-        <div className={`${glass} h-[52px] flex-none gap-2.5 pr-3 pl-3.5`}>
+      {/* A phone puts the logo and STOP on the first row and gives the command bar the whole second row; wider
+          screens keep one row. The bar stays at one place in the tree, so what was typed survives a rotation. */}
+      <header className="relative flex flex-none flex-wrap items-center gap-x-2.5 gap-y-2 px-4 pt-3 pb-2 md:flex-nowrap md:pt-3.5 md:pb-3">
+        <div className={`${glass} h-11 flex-none gap-2.5 pr-3 pl-3.5 md:h-[52px]`}>
           <span
             aria-hidden="true"
             className="size-[22px] rounded-full"
             style={{ background: "conic-gradient(from 200deg, var(--teal), var(--amber), var(--teal))" }}
           />
-          <h1 className="m-0 font-serif text-[25px] leading-none font-normal italic max-sm:sr-only">nexus</h1>
+          <h1 className="m-0 font-serif text-[25px] leading-none font-normal italic">nexus</h1>
           <span
             role="img"
             aria-label={runner ? `Runner ${runner.name}: ${runner.status.toLowerCase()}` : "No runner paired"}
@@ -171,23 +186,25 @@ export function Shell() {
           />
         </div>
 
-        <CommandBar
-          runners={runners.data}
-          projectId={projectId}
-          blocked={scope.blocked}
-          onQueued={(id) => open(`run:${id}`)}
-        >
-          {!search.drawer && banner}
-          {runners.error && (
-            <div
-              role="alert"
-              className="pointer-events-auto rounded-2xl px-[18px] py-3 text-[13.5px] font-medium text-white shadow-nx"
-              style={{ background: "oklch(0.52 0.15 32)" }}
-            >
-              {runners.error.message} Retrying every few seconds.
-            </div>
-          )}
-        </CommandBar>
+        <div className="order-last flex w-full min-w-0 md:order-none md:w-auto md:flex-[1_1_0]">
+          <CommandBar
+            runners={runners.data}
+            projectId={projectId}
+            blocked={scope.blocked}
+            onQueued={(id) => open(`run:${id}`)}
+          >
+            {!search.drawer && banner}
+            {runners.error && (
+              <div
+                role="alert"
+                className="pointer-events-auto rounded-2xl px-[18px] py-3 text-[13.5px] font-medium text-white shadow-nx"
+                style={{ background: "oklch(0.52 0.15 32)" }}
+              >
+                {runners.error.message} Retrying every few seconds.
+              </div>
+            )}
+          </CommandBar>
+        </div>
 
         {wide ? (
           <div className={`${glass} h-[52px] flex-none gap-0.5 px-1.5`}>
@@ -212,7 +229,7 @@ export function Shell() {
           </div>
         ) : (
           // A phone has no sidebar: the emergency stop stays in reach here.
-          <div className="glass flex flex-none items-center rounded-[14px] p-1">
+          <div className="glass ml-auto flex flex-none items-center rounded-[14px] p-1">
             <StopButton />
           </div>
         )}
@@ -289,7 +306,10 @@ const readCollapsed = () => {
   }
 };
 
-/** The Cofounder panel docked beside every page on wide screens; collapsing it is remembered on this device. */
+/**
+ * The Cofounder panel docked beside every page on wide screens; collapsing it is remembered on this device. One
+ * button toggles it in both states, so focus stays on it and its expanded state is announced.
+ */
 function CofounderDock({ projectId }: { projectId: string | undefined }) {
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const id = useId();
@@ -302,33 +322,33 @@ function CofounderDock({ projectId }: { projectId: string | undefined }) {
       // Storage blocked (private mode, policy): the choice holds until the page reloads.
     }
   };
-  if (collapsed)
-    return (
-      <button
-        type="button"
-        aria-expanded={false}
-        aria-label="Show Cofounder"
-        onClick={toggle}
-        className="glass flex w-11 flex-none flex-col items-center gap-3 self-start rounded-[18px] px-1 py-4 text-[13px] font-medium text-ink2"
-      >
-        <span aria-hidden="true">‹</span>
-        <span className="[writing-mode:vertical-rl]">Cofounder</span>
-      </button>
-    );
   return (
-    <div id={id} className="flex w-[360px] flex-none flex-col gap-2">
+    <div className={`flex flex-none flex-col gap-2 ${collapsed ? "w-11" : "w-[360px]"}`}>
       <button
         type="button"
-        aria-expanded
+        aria-expanded={!collapsed}
         aria-controls={id}
-        aria-label="Hide Cofounder"
+        aria-label={collapsed ? "Show cofounder panel" : "Hide cofounder panel"}
         onClick={toggle}
-        className="self-end rounded-xl px-2.5 py-1.5 text-[12.5px] font-medium text-ink2 hover:bg-hair"
+        className={
+          collapsed
+            ? "glass flex w-11 flex-col items-center gap-3 rounded-[18px] px-1 py-4 text-[13px] font-medium text-ink2 hover:text-ink"
+            : "self-end rounded-xl px-2.5 py-1.5 text-[12.5px] font-medium text-ink2 hover:bg-hair hover:text-ink"
+        }
       >
-        Hide <span aria-hidden="true">›</span>
+        {collapsed ? (
+          <>
+            <span aria-hidden="true">‹</span>
+            <span className="[writing-mode:vertical-rl]">Cofounder</span>
+          </>
+        ) : (
+          <>
+            Hide <span aria-hidden="true">›</span>
+          </>
+        )}
       </button>
-      <div className="flex min-h-0 flex-1 flex-col">
-        <CofounderPanel projectId={projectId} />
+      <div id={id} hidden={collapsed} className="flex min-h-0 flex-1 flex-col">
+        {!collapsed && <CofounderPanel projectId={projectId} />}
       </div>
     </div>
   );
