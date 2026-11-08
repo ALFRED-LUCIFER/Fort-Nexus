@@ -1,6 +1,14 @@
 import { sql } from "drizzle-orm";
 import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import type { AgentKey, PlanStatus, PlanStepAction, PlanStepStatus, StepArtifact } from "@nexus/contracts";
+import type {
+  AgentKey,
+  PlanDroppedStep,
+  PlanGap,
+  PlanStatus,
+  PlanStepAction,
+  PlanStepStatus,
+  StepArtifact,
+} from "@nexus/contracts";
 import { jobs, projects, user } from "../db/schema.ts";
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, mode: "date" });
@@ -29,6 +37,9 @@ export const plans = pgTable(
     status: text("status").$type<PlanStatus>().notNull().default("DRAFT"),
     // null while the model is drafting: such a row is a claim, never shown or approvable.
     planHash: text("plan_hash"),
+    // What no step covers (model text) and the drafted steps NEXUS removed (server reasons): shown, never run.
+    gaps: jsonb("gaps").$type<PlanGap[]>().notNull().default([]),
+    dropped: jsonb("dropped").$type<PlanDroppedStep[]>().notNull().default([]),
     profileVersionId: uuid("profile_version_id"),
     idempotencyKey: text("idempotency_key").notNull(),
     requestHash: text("request_hash").notNull(),
@@ -55,6 +66,7 @@ export const planSteps = pgTable(
       .references(() => plans.id, { onDelete: "cascade" }),
     index: integer("index").notNull(),
     title: text("title").notNull(),
+    why: text("why"),
     agent: text("agent").$type<AgentKey>().notNull(),
     action: jsonb("action").$type<PlanStepAction>().notNull(),
     dependsOn: jsonb("depends_on").$type<number[]>().notNull(),

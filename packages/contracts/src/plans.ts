@@ -37,6 +37,11 @@ export const toolForAction = (a: PlanStepAction): AgentTool =>
           : "jobs.create.diagnostic";
 
 export const MAX_PLAN_STEPS = 8;
+export const MAX_PLAN_GAPS = 8;
+/** A step's one line tying it to the goal (shown to the owner). */
+export const PLAN_WHY_MAX = 300;
+/** A gap's plain words: short enough to start a New job with (JOB_DRAFT_TEXT_MAX is larger). */
+export const PLAN_GAP_MAX = 1000;
 
 export const PlanStepStatus = z.enum(["PENDING", "RUNNING", "SUCCEEDED", "FAILED", "SKIPPED", "CANCELLED"]);
 export type PlanStepStatus = z.infer<typeof PlanStepStatus>;
@@ -53,6 +58,9 @@ export type StepArtifact = z.infer<typeof StepArtifact>;
 export const PlanStep = z.object({
   index: z.int().nonnegative(),
   title: z.string().max(200),
+  // The planner's one line on how this step serves the goal: AI-drafted, shown to the owner and hashed with the
+  // step. null on plans drafted before it existed.
+  why: z.string().max(PLAN_WHY_MAX).nullable(),
   agent: AgentKey,
   action: PlanStepAction,
   // Indices of earlier steps only (so no cycles); a failed dependency skips this step.
@@ -77,13 +85,26 @@ export const PlanStatus = z.enum([
 ]);
 export type PlanStatus = z.infer<typeof PlanStatus>;
 
+// Part of the goal no step covers (no listed issue or action fits it), in plain words the owner can start as a New
+// job: there the Developer drafts the issue and the owner approves it before anything is created. AI-drafted.
+export const PlanGap = z.object({ work: z.string().max(PLAN_GAP_MAX) });
+export type PlanGap = z.infer<typeof PlanGap>;
+
+// A drafted step NEXUS removed before storing the plan (its issue already has a NEXUS run or pull request, or it
+// depended on such a step). `title` is the model's; `reason` is written by the server.
+export const PlanDroppedStep = z.object({ title: z.string().max(200), reason: z.string() });
+export type PlanDroppedStep = z.infer<typeof PlanDroppedStep>;
+
 export const Plan = z.object({
   id: z.uuid(),
   projectId: z.uuid(),
   goal: z.string(),
   status: PlanStatus,
+  // Empty when no step fits the goal: such a plan only reports its gaps and can't be approved.
   steps: z.array(PlanStep).max(MAX_PLAN_STEPS),
-  // sha256 of the canonical steps (index, title, agent, action, dependsOn), computed by the server only.
+  gaps: z.array(PlanGap).max(MAX_PLAN_GAPS),
+  dropped: z.array(PlanDroppedStep).max(MAX_PLAN_STEPS),
+  // sha256 of the canonical steps (index, title, why, agent, action, dependsOn), computed by the server only.
   planHash: z.string().regex(/^[0-9a-f]{64}$/),
   // The Chief of Staff profile version the plan was drafted under (FR-WKS-05).
   profileVersionId: z.uuid().nullable(),

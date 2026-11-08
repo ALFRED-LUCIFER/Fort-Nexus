@@ -1,13 +1,16 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull, lt } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import {
   AgentKey,
   DEEP_DIVE_DEPTH_LIMITS,
   IssueListQuery,
+  TERMINAL_JOB_STATUSES,
+  isTerminal,
   toolForAction,
   type CreatePlanRequest,
   type EffectiveAgentProfile,
   type Plan,
   type PlanDecisionRequest,
+  type PlanDroppedStep,
   type PlanStep,
   type PlanStepAction,
 } from "@nexus/contracts";
@@ -22,7 +25,8 @@ import { canonical, cancelJob, ownerActor, sha256 } from "../jobs.ts";
 import { listWatchlists } from "../research/service.ts";
 import { boundRepositoryIds, ownerWorkspaceIds, resolveProject, type ProjectScope } from "../workspaces.ts";
 import { resolveAgentProfile } from "../agents/service.ts";
-import { draftPlan, planRequest, type DraftPlan } from "./draft.ts";
+import { jobs } from "../db/schema.ts";
+import { draftPlan, planRequest, type DraftStep } from "./draft.ts";
 import { planSteps, plans } from "./schema.ts";
 
 // EPIC AGT FR-AGT-01/09, PRD §11.7: draft (model) → block + hash (server) → approve the exact hash (owner).
@@ -50,6 +54,7 @@ export const AGENT_LABEL: Record<AgentKey, string> = {
 const toStepDto = (s: StepRow): PlanStep => ({
   index: s.index,
   title: s.title,
+  why: s.why,
   agent: s.agent,
   action: s.action,
   dependsOn: s.dependsOn,
@@ -65,6 +70,8 @@ const toPlanDto = (p: PlanRow, steps: StepRow[]): Plan => ({
   goal: p.goal,
   status: p.status,
   steps: steps.filter((s) => s.planId === p.id).map(toStepDto),
+  gaps: p.gaps,
+  dropped: p.dropped,
   planHash: p.planHash!,
   profileVersionId: p.profileVersionId,
   createdAt: p.createdAt.toISOString(),
@@ -72,13 +79,16 @@ const toPlanDto = (p: PlanRow, steps: StepRow[]): Plan => ({
   finishedAt: iso(p.finishedAt),
 });
 
-/** sha256 of the canonical steps (index, title, agent, action, dependsOn): what the owner approves. */
-export const planHash = (steps: DraftPlan["steps"]) =>
+type HashedStep = Pick<PlanStep, "title" | "why" | "agent" | "action" | "dependsOn">;
+
+/** sha256 of the canonical steps (index, title, why, agent, action, dependsOn): what the owner approves. */
+export const planHash = (steps: HashedStep[]) =>
   sha256(
     canonical(
       steps.map((s, index) => ({
         index,
         title: s.title,
+        why: s.why,
         agent: s.agent,
         action: s.action,
         dependsOn: s.dependsOn,
@@ -135,9 +145,110 @@ type Targets = {
   bound: Set<string>;
   /** Open issue numbers NEXUS listed per bound repository; null when GitHub couldn't list them. */
   issues: Map<string, Set<number> | null>;
+  /** Issues of the bound repositories NEXUS is already on, by issueKey. */
+  busy: Map<string, IssueWork>;
   watchlists: Set<string>;
   connectors: Set<string>;
 };
+
+export type IssueWork = { state: "RUN_IN_PROGRESS" | "PULL_REQUEST_OPENED"; jobId: string };
+const issueKey = (repositoryId: string, issueNumber: number) => `${repositoryId}#${issueNumber}`;
+
+/**
+ * The owner's issues NEXUS is already on, by issueKey: a run that hasn't ended, or a run that opened a pull request
+ * (its recorded PR_CREATED outcome; whether the PR is still open isn't checked here). A live run wins over a PR.
+ */
+export async function issuesInProgress(
+  db: Db | Tx,
+  ownerId: string,
+  repositoryIds: string[],
+): Promise<Map<string, IssueWork>> {
+  const out = new Map<string, IssueWork>();
+  if (repositoryIds.length === 0) return out;
+  const repositoryId = sql<string>`${jobs.request}->>'repositoryId'`;
+  const rows = await db
+    .select({
+      id: jobs.id,
+      status: jobs.status,
+      repositoryId,
+      issueNumber: sql<number>`(${jobs.request}->>'issueNumber')::int`,
+    })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.initiatorId, ownerId),
+        eq(jobs.jobType, "DEV_ISSUE_TO_PR"),
+        inArray(repositoryId, repositoryIds),
+        or(notInArray(jobs.status, [...TERMINAL_JOB_STATUSES]), eq(jobs.outcome, "PR_CREATED")),
+      ),
+    )
+    .orderBy(desc(jobs.id));
+  for (const r of rows) {
+    const key = issueKey(r.repositoryId, r.issueNumber);
+    const state = isTerminal(r.status) ? "PULL_REQUEST_OPENED" : "RUN_IN_PROGRESS";
+    const seen = out.get(key);
+    if (!seen || (seen.state !== "RUN_IN_PROGRESS" && state === "RUN_IN_PROGRESS"))
+      out.set(key, { state, jobId: r.id });
+  }
+  return out;
+}
+
+/** Server-written: why a step on this issue would duplicate work NEXUS already has. */
+export const issueWorkReason = (issueNumber: number, w: IssueWork) =>
+  w.state === "RUN_IN_PROGRESS"
+    ? `a NEXUS run is already working on issue #${issueNumber} (run ${w.jobId.slice(0, 8)})`
+    : `NEXUS already opened a pull request for issue #${issueNumber} (run ${w.jobId.slice(0, 8)})`;
+
+const issueOf = (a: PlanStepAction) =>
+  a.type === "jobs.create" && a.request.jobType === "DEV_ISSUE_TO_PR"
+    ? { repositoryId: a.request.repositoryId, issueNumber: a.request.issueNumber }
+    : null;
+
+/** Why this action's issue run would duplicate NEXUS's own work now (re-checked when the step starts); else null. */
+export async function issueBusy(db: Db | Tx, ownerId: string, a: PlanStepAction): Promise<string | null> {
+  const issue = issueOf(a);
+  if (!issue) return null;
+  const work = (await issuesInProgress(db, ownerId, [issue.repositoryId])).get(
+    issueKey(issue.repositoryId, issue.issueNumber),
+  );
+  return work ? issueWorkReason(issue.issueNumber, work) : null;
+}
+
+/**
+ * Server-side check of the model's steps: removes a step whose issue NEXUS is already on, that repeats an earlier
+ * step's issue, or that depends on a removed step; the rest keep their order and dependencies, re-indexed. Each
+ * removal keeps the model's title and the server's reason, for the owner.
+ */
+export function screenSteps(
+  steps: DraftStep[],
+  busy: Map<string, IssueWork>,
+): { kept: DraftStep[]; dropped: PlanDroppedStep[] } {
+  const kept: DraftStep[] = [];
+  const dropped: PlanDroppedStep[] = [];
+  const index = new Map<number, number>(); // drafted index → kept index
+  const planned = new Set<string>();
+  for (const [i, s] of steps.entries()) {
+    const issue = issueOf(s.action);
+    const key = issue && issueKey(issue.repositoryId, issue.issueNumber);
+    const work = key ? busy.get(key) : undefined;
+    const reason =
+      issue && work
+        ? issueWorkReason(issue.issueNumber, work)
+        : key && planned.has(key)
+          ? `issue #${issue!.issueNumber} is already an earlier step of this plan`
+          : s.dependsOn.some((d) => !index.has(d))
+            ? "it depended on a step NEXUS removed"
+            : null;
+    if (reason) {
+      dropped.push({ title: s.title, reason });
+      continue;
+    }
+    if (key) planned.add(key);
+    index.set(i, kept.length);
+    kept.push({ ...s, dependsOn: s.dependsOn.map((d) => index.get(d)!) });
+  }
+  return { kept, dropped };
+}
 
 function targetBlock(t: Targets, a: PlanStepAction): string | null {
   if (a.type === "research.run")
@@ -172,6 +283,7 @@ async function catalog(deps: Pick<Deps, "db" | "github" | "config">, ownerId: st
           () => [],
         )
       : [];
+  const busy = await issuesInProgress(db, ownerId, [...bound]);
   const issues = new Map<string, Set<number> | null>();
   const repositories = [];
   for (const id of bound) {
@@ -179,14 +291,25 @@ async function catalog(deps: Pick<Deps, "db" | "github" | "config">, ownerId: st
     const list = deps.github
       ? await deps.github
           .issues(id, IssueListQuery.parse({}))
-          .then((l) => l.items.slice(0, CATALOG_ISSUES))
+          .then((l) => l.items)
           .catch(() => null) // unlisted issues are blocked as unknown targets, never guessed
       : null;
     issues.set(id, list && new Set(list.map((i) => i.number)));
+    // Issues NEXUS is already on are listed apart, so the planner neither picks them nor re-plans their work.
+    const work = (n: number) => busy.get(issueKey(id, n));
     repositories.push({
       repositoryId: id,
       fullName: repo?.fullName ?? null,
-      openIssues: list?.map((i) => ({ number: i.number, title: i.title })) ?? "unavailable",
+      openIssues:
+        list
+          ?.filter((i) => !work(i.number))
+          .slice(0, CATALOG_ISSUES)
+          .map((i) => ({ number: i.number, title: i.title })) ?? "unavailable",
+      issuesInProgress:
+        list
+          ?.filter((i) => work(i.number))
+          .slice(0, CATALOG_ISSUES)
+          .map((i) => ({ number: i.number, title: i.title, nexus: work(i.number)!.state })) ?? [],
     });
   }
   const watchlists = await listWatchlists(db, ownerId, scope.projectId);
@@ -204,6 +327,7 @@ async function catalog(deps: Pick<Deps, "db" | "github" | "config">, ownerId: st
     scope,
     bound,
     issues,
+    busy,
     watchlists: new Set(watchlists.map((w) => w.id)),
     connectors: new Set(connectors.map((c) => c.id)),
   };
@@ -365,7 +489,11 @@ export async function createPlan(
         drafted.failure,
       );
     }
-    const fitted = drafted.plan.steps.map((s) => ({
+    // Model output is a proposal: steps that would duplicate NEXUS's own work are removed (with the reason shown),
+    // and whatever is left is blocked where the target or profile doesn't allow it.
+    const { kept, dropped } = screenSteps(drafted.plan.steps, targets.busy);
+    const { gaps } = drafted.plan;
+    const fitted = kept.map((s) => ({
       ...s,
       action: fitBudget(profiles.get(s.agent)!, s.action),
     }));
@@ -377,21 +505,30 @@ export async function createPlan(
     });
     const hash = planHash(fitted);
     return await db.transaction(async (tx) => {
-      const rows = await tx
-        .insert(planSteps)
-        .values(
-          steps.map((s) => ({
-            ...s,
-            workspaceId: scope.workspaceId,
-            projectId: scope.projectId,
-            planId: claim.id,
-          })),
-        )
+      const rows = steps.length
+        ? await tx
+            .insert(planSteps)
+            .values(
+              steps.map((s) => ({
+                ...s,
+                workspaceId: scope.workspaceId,
+                projectId: scope.projectId,
+                planId: claim.id,
+              })),
+            )
+            .returning()
+        : [];
+      const [plan] = await tx
+        .update(plans)
+        .set({ planHash: hash, gaps, dropped })
+        .where(eq(plans.id, claim.id))
         .returning();
-      const [plan] = await tx.update(plans).set({ planHash: hash }).where(eq(plans.id, claim.id)).returning();
       await record(tx, "SUCCEEDED", {
         steps: steps.length,
         blocked: steps.filter((s) => s.blockedReason).length,
+        // Counts only: gap text and dropped titles are model output.
+        gaps: gaps.length,
+        dropped: dropped.length,
         planHash: hash,
         costUsd,
       });
@@ -456,6 +593,12 @@ export async function decidePlan(
       );
     const steps = await stepsOf(tx, [p.id]);
     const approve = input.body.decision === "approve";
+    if (approve && steps.length === 0)
+      throw new HttpError(
+        409,
+        "CONFLICT",
+        "This plan has no steps NEXUS can run. Start the uncovered work as a new job, or deny the plan",
+      );
     if (approve && steps.some((s) => s.blockedReason))
       throw new HttpError(
         409,

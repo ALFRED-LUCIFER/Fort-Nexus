@@ -25,6 +25,7 @@ const HASH = "ab12cd34ef56".padEnd(64, "0");
 const stepOf = (over: Partial<PlanStep> = {}): PlanStep => ({
   index: 0,
   title: "Check the runner",
+  why: "The goal asks to check the runner first.",
   agent: "QA",
   action: {
     type: "jobs.create",
@@ -61,6 +62,8 @@ const planOf = (over: Partial<Plan> = {}): Plan => ({
       },
     }),
   ],
+  gaps: [],
+  dropped: [],
   planHash: HASH,
   profileVersionId: null,
   createdAt: T0,
@@ -164,7 +167,7 @@ describe("plan drawer", () => {
     expect(await within(d).findByText(/^AI inference: unverified/)).toBeTruthy();
     const steps = within(d).getAllByRole("listitem");
     expect(steps[0]!.textContent).toMatch(
-      /1Pending\s*QACheck the runnerRunner diagnostic · node-version · read-only/,
+      /1Pending\s*QACheck the runnerWhy · The goal asks to check the runner first\.Runner diagnostic · node-version · read-only/,
     );
     expect(steps[1]!.textContent).toMatch(/Developer · after step 1/);
     expect(steps[1]!.textContent).toMatch(
@@ -273,6 +276,71 @@ describe("plan drawer", () => {
       within(d).getByRole("button", { name: "deep dive · completed · 3 claims, 2 with verified evidence" }),
     );
     await waitFor(() => expect(router.state.location.search).toMatchObject({ drawer: `research:${DIVE}` }));
+  });
+
+  it("uncovered work is listed as gaps that start a prefilled New job; removed steps show NEXUS's reason; no steps → no approval", async () => {
+    const gaps = [
+      { work: "Install jest in acme/web so `npm test` runs the test suite" },
+      { work: "Add a CI workflow to acme/web that runs typecheck and tests on pull requests" },
+    ];
+    current = planOf({
+      steps: [],
+      gaps,
+      dropped: [
+        {
+          title: "Work on #1",
+          reason: "NEXUS already opened a pull request for issue #1 (run 0193abcd)",
+        },
+      ],
+    });
+    const calls = board();
+    const user = userEvent.setup();
+    renderApp(`${IN_PROJECT}&area=plans`);
+    const zone = await screen.findByRole("main", { name: "Plans" });
+    expect(
+      (await within(zone).findByRole("button", { name: /Check the runner, then work/ })).textContent,
+    ).toMatch(/^Draft · needs your decision · 0 steps · 2 not covered/);
+
+    await user.click(within(zone).getByRole("button", { name: /Check the runner, then work/ }));
+    const d = await drawer();
+    expect(await within(d).findByText(/No step: nothing NEXUS can run today fits this goal/)).toBeTruthy();
+    const approve = within(d).getByRole("button", { name: /Approve plan/ });
+    expect(approve.hasAttribute("disabled")).toBe(true);
+    expect(document.getElementById(approve.getAttribute("aria-describedby")!)!.textContent).toBe(
+      "No step can run: start the uncovered work as a new job, or deny the plan.",
+    );
+    const removed = within(d).getByRole("list", { name: /Removed by NEXUS/ });
+    expect(removed.textContent).toBe(
+      "Work on #1 · NEXUS already opened a pull request for issue #1 (run 0193abcd)",
+    );
+
+    const list = within(d).getByRole("list", { name: /Not covered/ });
+    const items = within(list).getAllByRole("listitem");
+    expect(items.map((li) => li.querySelector("p")!.textContent)).toEqual(gaps.map((g) => g.work));
+    const start = within(items[1]!).getByRole("button", { name: "Start as a new job" });
+    expect(document.getElementById(start.getAttribute("aria-describedby")!)!.textContent).toBe(gaps[1]!.work);
+    await user.click(start);
+
+    // Only the New job form opens, prefilled; nothing is drafted or created until the owner sends it there.
+    const form = await screen.findByLabelText("Describe the job in plain words");
+    expect((form as HTMLTextAreaElement).value).toBe(gaps[1]!.work);
+    expect(calls.filter((c) => c.method === "POST")).toEqual([]);
+  });
+
+  it("gaps can't start a job from another project's plan", async () => {
+    current = planOf({
+      projectId: "77777777-7777-4777-8777-777777777777",
+      gaps: [{ work: "Add a CI workflow" }],
+    });
+    board();
+    renderApp(`${IN_PROJECT}&drawer=plan:${PLAN_ID}`);
+    const d = await drawer();
+    const start = await within(d).findByRole("button", { name: "Start as a new job" });
+    expect(start.hasAttribute("disabled")).toBe(true);
+    const [, reason] = start.getAttribute("aria-describedby")!.split(" ");
+    expect(document.getElementById(reason!)!.textContent).toBe(
+      "This plan belongs to another project: switch to it first.",
+    );
   });
 
   it("another project's plan is read-only here", async () => {

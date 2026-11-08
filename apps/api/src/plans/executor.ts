@@ -22,7 +22,7 @@ import { researchRuns } from "../research/schema.ts";
 import { createManualRun, getWatchlist } from "../research/service.ts";
 import { assertNotStopped, emergencyStopEngaged } from "../system.ts";
 import { resolveAgentProfile } from "../agents/service.ts";
-import { AGENT_LABEL, profileBlock, type PlanRow, type StepRow } from "./service.ts";
+import { AGENT_LABEL, issueBusy, profileBlock, type PlanRow, type StepRow } from "./service.ts";
 import { planSteps, plans } from "./schema.ts";
 
 // FR-AGT-01/09 executor: one step at a time through existing typed paths. A step is claimed (RUNNING) under the plan
@@ -368,10 +368,14 @@ export function createPlanExecutor(
         await evaluate(tx, plan, steps);
         return null;
       }
-      // Settings never expand an approved plan: they can only stop a step that is no longer allowed.
+      // Settings never expand an approved plan: they can only stop a step that is no longer allowed. An issue NEXUS
+      // took up since the plan was drafted (another run, or a pull request) isn't worked on twice.
       const reason = (await emergencyStopEngaged(tx))
         ? "Emergency stop is engaged: the step didn't start."
-        : profileBlock(await resolveAgentProfile(db, plan.ownerId, plan.projectId, next.agent), next.action);
+        : (profileBlock(
+            await resolveAgentProfile(db, plan.ownerId, plan.projectId, next.agent),
+            next.action,
+          ) ?? (await issueBusy(tx, plan.ownerId, next.action)));
       const now = new Date();
       if (reason) {
         const error = reason.endsWith(".") ? reason : `${reason}: the step didn't start.`;

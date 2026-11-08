@@ -5,6 +5,7 @@ import type { Plan, PlanStatus, PlanStep, PlanStepAction, PlanStepStatus, Source
 import { api, keys } from "../lib/api.ts";
 import { ago, clock, useNow } from "../lib/queries.ts";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
+import { newJobBlocked } from "./newJob.tsx";
 import { useWatchlists } from "./research.tsx";
 import { PICK_PROJECT, useScope, type Scope } from "./scope.tsx";
 import { EmptyZone, Node, nodeGrid } from "./zones.tsx";
@@ -192,7 +193,7 @@ export function PlansZone({ onOpen }: { onOpen: (id: string) => void }) {
                 <Node
                   dot={PLAN[p.status].tone}
                   live={p.status === "RUNNING"}
-                  kicker={`${PLAN[p.status].text} · ${p.steps.length} ${p.steps.length === 1 ? "step" : "steps"}`}
+                  kicker={`${PLAN[p.status].text} · ${p.steps.length} ${p.steps.length === 1 ? "step" : "steps"}${p.gaps.length ? ` · ${p.gaps.length} not covered` : ""}`}
                   title={p.goal}
                   meta={`${p.steps.filter((s) => s.status === "SUCCEEDED").length}/${p.steps.length} verified · drafted ${ago(p.createdAt, now)}`}
                   onClick={() => onOpen(p.id)}
@@ -260,9 +261,11 @@ function PlanBody({ plan: p }: { plan: Plan }) {
   const blocked = writeBlocked(scope, p);
   const approveBlocked =
     blocked ??
-    (blockedSteps
-      ? `${blockedSteps} blocked ${blockedSteps === 1 ? "step" : "steps"}: deny it and draft a new plan.`
-      : null);
+    (p.steps.length === 0
+      ? "No step can run: start the uncovered work as a new job, or deny the plan."
+      : blockedSteps
+        ? `${blockedSteps} blocked ${blockedSteps === 1 ? "step" : "steps"}: deny it and draft a new plan.`
+        : null);
   const error = decide.error ?? cancel.error;
   const busy = decide.isPending || cancel.isPending;
   const open = (drawer: string) => void navigate({ search: { ...scope.keep, drawer } });
@@ -292,12 +295,35 @@ function PlanBody({ plan: p }: { plan: Plan }) {
           <h3 id="plan-steps" className="kicker m-0">
             Steps · one at a time
           </h3>
-          <ol aria-labelledby="plan-steps" className="m-0 flex list-none flex-col gap-2.5 p-0">
-            {p.steps.map((s) => (
-              <StepRow key={s.index} s={s} action={actionText(s.action, watchlists)} onOpen={open} />
-            ))}
-          </ol>
+          {p.steps.length === 0 ? (
+            <p className="m-0 text-[13px] leading-snug text-ink2">
+              No step: nothing NEXUS can run today fits this goal.
+            </p>
+          ) : (
+            <ol aria-labelledby="plan-steps" className="m-0 flex list-none flex-col gap-2.5 p-0">
+              {p.steps.map((s) => (
+                <StepRow key={s.index} s={s} action={actionText(s.action, watchlists)} onOpen={open} />
+              ))}
+            </ol>
+          )}
         </section>
+
+        {p.gaps.length > 0 && <Gaps plan={p} />}
+
+        {p.dropped.length > 0 && (
+          <section aria-labelledby="plan-dropped" className="flex flex-col gap-2">
+            <h3 id="plan-dropped" className="kicker m-0">
+              Removed by NEXUS · drafted, then taken out before you saw the plan
+            </h3>
+            <ul aria-labelledby="plan-dropped" className="m-0 flex list-none flex-col gap-1.5 p-0">
+              {p.dropped.map((d, i) => (
+                <li key={i} className="text-[12.5px] leading-snug break-words text-ink2">
+                  <span className="text-ink">{d.title}</span> · {d.reason}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap gap-2">
@@ -352,6 +378,58 @@ function PlanBody({ plan: p }: { plan: Plan }) {
   );
 }
 
+// The New job form takes its starting words from this query-cache entry (newJob.tsx's REWRITE).
+const NEW_JOB_WORDS = ["new-job", "rewrite"] as const;
+
+/**
+ * Parts of the goal no step covers. Each can start a New job with its words prefilled: the owner edits and sends
+ * them there, the Developer drafts the issue, and nothing is created before the owner approves that preview.
+ */
+function Gaps({ plan: p }: { plan: Plan }) {
+  const scope = useScope();
+  const navigate = route.useNavigate();
+  const queryClient = useQueryClient();
+  const reasonId = useId();
+  const baseId = useId();
+  const blocked = writeBlocked(scope, p) ?? newJobBlocked(scope);
+  return (
+    <section aria-labelledby="plan-gaps" className="flex flex-col gap-2">
+      <h3 id="plan-gaps" className="kicker m-0">
+        Not covered · no open issue or step does this yet
+      </h3>
+      <p className="m-0 text-[12.5px] leading-snug text-ink2">
+        Start each as a new job: the Developer drafts the issue and you approve it before anything is created.
+      </p>
+      <ul aria-labelledby="plan-gaps" className="m-0 flex list-none flex-col gap-2.5 p-0">
+        {p.gaps.map((g, i) => (
+          <li key={i} className="flex flex-col gap-2 rounded-2xl border border-dashed border-hair px-4 py-3">
+            <p id={`${baseId}-${i}`} className="m-0 text-[13.5px] leading-snug break-words text-ink">
+              {g.work}
+            </p>
+            <button
+              type="button"
+              disabled={!!blocked}
+              aria-describedby={blocked ? `${baseId}-${i} ${reasonId}` : `${baseId}-${i}`}
+              onClick={() => {
+                queryClient.setQueryData(NEW_JOB_WORDS, g.work);
+                void navigate({ search: { ...scope.keep, drawer: "newjob" } });
+              }}
+              className={`${ghostBtn} self-start`}
+            >
+              Start as a new job
+            </button>
+          </li>
+        ))}
+      </ul>
+      {blocked && (
+        <p id={reasonId} className="m-0 text-[12.5px] leading-snug text-ink2">
+          {blocked}
+        </p>
+      )}
+    </section>
+  );
+}
+
 // Evidence that opens its own drawer: a run, or a deep dive in the Research drawer.
 const OPENS: Partial<Record<SourceRef["kind"], string>> = { JOB: "run", DEEP_DIVE: "research" };
 
@@ -367,6 +445,12 @@ function StepRow({ s, action, onOpen }: { s: PlanStep; action: string; onOpen: (
         </span>
       </div>
       <span className="text-[14px] leading-[1.35] font-medium text-ink">{s.title}</span>
+      {s.why && (
+        <p className="m-0 text-[12.5px] leading-snug break-words text-ink2">
+          <span className="kicker">Why · </span>
+          {s.why}
+        </p>
+      )}
       <span className="font-mono text-[11.5px] leading-snug text-ink2">{action}</span>
       {s.blockedReason && (
         <p className="m-0 text-[12.5px] leading-snug text-coral">Blocked: {s.blockedReason}</p>
