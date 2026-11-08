@@ -234,6 +234,7 @@ async function seedPlan(
     createdAt?: Date;
     owner?: string;
     ws?: string;
+    gaps?: string[];
   } = {},
 ) {
   const [p] = await db
@@ -242,6 +243,7 @@ async function seedPlan(
       ...scopeOf(projectId, o.ws),
       ownerId: o.owner ?? ownerId,
       goal: o.goal ?? "Ship the CSV export",
+      gaps: (o.gaps ?? []).map((work) => ({ work })),
       status: o.status ?? "DRAFT",
       planHash: o.hashed === false ? null : randomBytes(32).toString("hex"),
       idempotencyKey: randomUUID(),
@@ -690,6 +692,63 @@ describe("GET /v1/home", () => {
     ]);
     expect(text(h2)).toBe("2 things are ready for you: a push for #42 and 1 opportunity.");
     expect(emphasised(h2)).toEqual(["a push for #42", "1 opportunity"]);
+  });
+
+  it("a plan with only gaps waits on the owner as work to start, not as a plan to approve", async () => {
+    const projectId = await newProject();
+    const minute = (m: number) => new Date(NOW.getTime() - (60 - m) * MIN);
+    const gapsOnly = await seedPlan(projectId, {
+      goal: "Add CSV export",
+      gaps: ["Add a CSV button to acme/shop", "Document the export"],
+      createdAt: minute(1),
+    });
+    const oneGap = await seedPlan(projectId, {
+      goal: "Fix login",
+      gaps: ["Fix the login test"],
+      createdAt: minute(2),
+    });
+    // Steps and gaps: approvable, so it reads as a plan (its gaps are in the drawer).
+    const withSteps = await seedPlan(projectId, {
+      goal: "Ship it",
+      gaps: ["Write the docs"],
+      createdAt: minute(3),
+    });
+    await db.insert(planSteps).values({
+      ...scopeOf(projectId),
+      planId: withSteps.id,
+      index: 0,
+      title: "Run the export issue",
+      agent: "DEVELOPER",
+      action: { type: "research.run", watchlistId: randomUUID() },
+      dependsOn: [],
+    });
+
+    const h = await at(projectId);
+    // It still needs the owner, so it still counts.
+    expect(h.decisions).toMatchObject({ plans: 3 });
+    expect(h.headline.decisionsWaiting).toBe(3);
+    expect(h.decisions.top).toEqual([
+      { ref: { kind: "PLAN", id: withSteps.id }, title: "Ship it", expiresAt: null },
+      {
+        ref: { kind: "PLAN", id: oneGap.id },
+        title: "Fix login · 1 not covered — start it as a new job",
+        expiresAt: null,
+      },
+      {
+        ref: { kind: "PLAN", id: gapsOnly.id },
+        title: "Add CSV export · 2 not covered — start them as new jobs",
+        expiresAt: null,
+      },
+    ]);
+
+    // A long goal is cut, never the ask.
+    await db
+      .update(plans)
+      .set({ goal: "x".repeat(400) })
+      .where(eq(plans.id, gapsOnly.id));
+    const long = (await at(projectId)).decisions.top.at(-1)!.title;
+    expect(long).toMatch(/^x+… · 2 not covered — start them as new jobs$/);
+    expect(long.length).toBeLessThanOrEqual(300);
   });
 
   it("open incidents come first in Waiting on you and count as decisions; resolved, acknowledged and other projects' do not", async () => {

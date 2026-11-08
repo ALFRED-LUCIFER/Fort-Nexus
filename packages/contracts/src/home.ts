@@ -34,7 +34,7 @@ export type HomeHeadline = z.infer<typeof HomeHeadline>;
 // What waits on the owner, by kind; their sum is `headline.decisionsWaiting`.
 export const HomeDecisions = z.object({
   approvals: z.int().nonnegative(), // PENDING push/PR approvals, unexpired
-  plans: z.int().nonnegative(), // plans awaiting approval
+  plans: z.int().nonnegative(), // DRAFT plans: steps to approve, or only gaps to start as new jobs
   jobDrafts: z.int().nonnegative(), // READY or NEEDS_REPO job drafts
   opportunities: z.int().nonnegative(), // OPEN opportunities
   incidents: z.int().nonnegative(), // OPEN incidents (not yet acknowledged or resolved)

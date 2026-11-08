@@ -20,6 +20,7 @@ import { eq } from "drizzle-orm";
 import { createDb, type Db } from "../src/db/index.ts";
 import { approvals, jobs } from "../src/db/schema.ts";
 import { jobDrafts } from "../src/job-drafts/schema.ts";
+import { planSteps, plans } from "../src/plans/schema.ts";
 import { canonical, sha256 } from "../src/jobs.ts";
 import type { DeepDives } from "../src/plans/deep-dives.ts";
 import { fakeDeepDives } from "./helpers/fake-deep-dives.ts";
@@ -606,6 +607,58 @@ describe("waiting on you and run summaries (Cofounder chips)", () => {
     const after = await turn(thread.id, "and now?", toolCall({ kind: "WAITING_ON_YOU" }));
     expect(after.assistantTurn.text).toMatch(/^1 thing is waiting on you in this project:\n• Job draft/);
     expect(after.assistantTurn.sources.map((s) => s.id)).toEqual([ready.id, gate.job.id, running]);
+  });
+
+  it("a plan with only gaps is work to start as new jobs, not a plan to approve; its source opens the plan", async () => {
+    const p = await newProject("DEV");
+    const ownerId = await ownerOf(await diagnosticJob(p.id));
+    const plan = async (goal: string, gaps: string[], createdAt: Date) =>
+      (
+        await db
+          .insert(plans)
+          .values({
+            workspaceId: p.workspaceId,
+            projectId: p.id,
+            ownerId,
+            goal,
+            gaps: gaps.map((work) => ({ work })),
+            planHash: randomBytes(32).toString("hex"),
+            idempotencyKey: randomUUID(),
+            requestHash: "0".repeat(64),
+            createdAt,
+          })
+          .returning()
+      )[0]!;
+    const gapsOnly = await plan(
+      "Add CSV export",
+      ["Add a CSV button", "Document it"],
+      new Date(Date.now() - 60_000),
+    );
+    const withSteps = await plan("Ship it", [], new Date());
+    await db.insert(planSteps).values({
+      workspaceId: p.workspaceId,
+      projectId: p.id,
+      planId: withSteps.id,
+      index: 0,
+      title: "Run the export issue",
+      agent: "DEVELOPER",
+      action: { type: "research.run", watchlistId: randomUUID() },
+      dependsOn: [],
+    });
+
+    const thread = await newThread({ projectId: p.id });
+    const r = await turn(thread.id, "What's waiting on me?", toolCall({ kind: "WAITING_ON_YOU" }));
+    const lines = r.assistantTurn.text.split("\n");
+    expect(lines.slice(0, 3)).toEqual([
+      "2 things are waiting on you in this project:",
+      "• Plan to approve: Ship it",
+      "• Plan: Add CSV export · 2 not covered — start them as new jobs from the plan",
+    ]);
+    expect(r.assistantTurn.text).not.toMatch(/Plan to approve: Add CSV export/);
+    expect(r.assistantTurn.sources.slice(0, 2).map((s) => [s.kind, s.id])).toEqual([
+      ["PLAN", withSteps.id],
+      ["PLAN", gapsOnly.id],
+    ]);
   });
 
   it("summarises today's runs by outcome, lists what's running and what failed with its reason", async () => {

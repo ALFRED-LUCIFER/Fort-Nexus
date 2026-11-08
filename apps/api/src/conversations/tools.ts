@@ -27,7 +27,7 @@ import {
 import type { Db } from "../db/index.ts";
 import { approvals, jobs, runEvents } from "../db/schema.ts";
 import { HttpError } from "../errors.ts";
-import { waitingOnYou, type DecisionItem } from "../home.ts";
+import { uncoveredAsk, waitingOnYou, type DecisionItem } from "../home.ts";
 import { localDate } from "../research/schedule.ts";
 import { searchFindings } from "../research/service.ts";
 import type { GithubCatalog } from "../github/catalog.ts";
@@ -438,8 +438,11 @@ async function waiting(intent: Intent, ctx: ToolContext): Promise<Reply> {
     minute: "2-digit",
     hourCycle: "h23",
   });
+  // A plan without steps has nothing to approve: it names the uncovered work to start as new jobs from the plan.
   const decisionLine = (d: DecisionItem) =>
-    `• ${DECISION[d.ref.kind].word}: ${cut(d.title, 160)}${d.expiresAt ? ` (expires ${clock.format(new Date(d.expiresAt))})` : ""}`;
+    d.uncovered !== null
+      ? `• Plan: ${cut(d.title, 160)} · ${uncoveredAsk(d.uncovered)} from the plan`
+      : `• ${DECISION[d.ref.kind].word}: ${cut(d.title, 160)}${d.expiresAt ? ` (expires ${clock.format(new Date(d.expiresAt))})` : ""}`;
   const decisionSource = (d: DecisionItem): SourceRef => ({
     kind: DECISION[d.ref.kind].source,
     id: d.ref.id,

@@ -121,6 +121,7 @@ function decisionSources(db: Db, ownerId: string, scope: HomeScope, now: Date) {
   const at = (c: AnyPgColumn) => sql<Date>`${c}`.mapWith(c).as("created_at");
   const noNumber = sql<number | null>`null::int`.as("number");
   const noExpiry = sql<Date | null>`null::timestamptz`.mapWith(approvals.expiresAt).as("expires_at");
+  const notPlan = sql<number | null>`null::int`.as("uncovered");
   const kind = (k: HomeRef["kind"]) => sql<HomeRef["kind"]>`${k}::text`.as("kind");
   // Open incidents sort before everything else (the union can only order by result columns).
   const urgency = (k: HomeRef["kind"]) => sql<number>`${k === "INCIDENT" ? 1 : 0}::int`.as("urgency");
@@ -145,6 +146,7 @@ function decisionSources(db: Db, ownerId: string, scope: HomeScope, now: Date) {
             title: sql<string>`${incidents.severity} || ' · ' || ${incidents.title}`.as("title"),
             number: noNumber,
             expiresAt: noExpiry,
+            uncovered: notPlan,
             createdAt: at(incidents.openedAt),
           })
           .from(incidents)
@@ -158,6 +160,7 @@ function decisionSources(db: Db, ownerId: string, scope: HomeScope, now: Date) {
             title: sql<string>`${approvals.action}->>'title'`.as("title"),
             number: sql<number | null>`(${approvals.action}->>'issueNumber')::int`.as("number"),
             expiresAt: sql<Date | null>`${approvals.expiresAt}`.mapWith(approvals.expiresAt).as("expires_at"),
+            uncovered: notPlan,
             createdAt: at(approvals.createdAt),
           })
           .from(approvals)
@@ -170,6 +173,12 @@ function decisionSources(db: Db, ownerId: string, scope: HomeScope, now: Date) {
             title: sql<string>`${plans.goal}`.as("title"),
             number: noNumber,
             expiresAt: noExpiry,
+            // A plan without steps can't be approved: what waits is starting its gaps as new jobs. Spelled out
+            // (Drizzle leaves columns unqualified in a select's sql, which a correlated subquery would capture).
+            uncovered: sql<number | null>`case
+              when jsonb_array_length(${plans.gaps}) > 0
+                and not exists (select 1 from plan_steps ps where ps.plan_id = plans.id)
+              then jsonb_array_length(${plans.gaps}) end`.as("uncovered"),
             createdAt: at(plans.createdAt),
           })
           .from(plans)
@@ -182,6 +191,7 @@ function decisionSources(db: Db, ownerId: string, scope: HomeScope, now: Date) {
             title: sql<string>`coalesce(${jobDrafts.issueTitle}, ${jobDrafts.text})`.as("title"),
             number: sql<number | null>`${jobDrafts.issueNumber}`.as("number"),
             expiresAt: noExpiry,
+            uncovered: notPlan,
             createdAt: at(jobDrafts.createdAt),
           })
           .from(jobDrafts)
@@ -194,6 +204,7 @@ function decisionSources(db: Db, ownerId: string, scope: HomeScope, now: Date) {
             title: sql<string>`${researchOpportunities.title}`.as("title"),
             number: noNumber,
             expiresAt: noExpiry,
+            uncovered: notPlan,
             createdAt: at(researchOpportunities.createdAt),
           })
           .from(researchOpportunities)
@@ -211,7 +222,14 @@ export type DecisionItem = {
   title: string;
   expiresAt: string | null;
   createdAt: string;
+  // A plan with no steps, only gaps: how many parts wait to be started as new jobs (it can't be approved).
+  // null for everything else.
+  uncovered: number | null;
 };
+
+/** What a plan without steps asks of the owner, after its goal on Home and in Talk. */
+export const uncoveredAsk = (n: number) =>
+  `${n} not covered — start ${n === 1 ? "it" : "them"} as ${n === 1 ? "a new job" : "new jobs"}`;
 
 /**
  * A push approval's title is the PR title, which already starts with "#N: " (issue-to-pr.ts), so the number is
@@ -225,6 +243,7 @@ function decisionItem(r: DecisionRow): DecisionItem {
     title: cut(title, 300),
     expiresAt: r.expiresAt?.toISOString() ?? null,
     createdAt: (r.createdAt as Date).toISOString(), // mapped by the timestamp column it reads
+    uncovered: r.kind === "PLAN" ? r.uncovered : null,
   };
 }
 
@@ -632,7 +651,12 @@ export async function homeSummary(
     headline,
     decisions: {
       ...decisions,
-      top: topRows.map(decisionItem).map(({ ref, title, expiresAt }) => ({ ref, title, expiresAt })),
+      // A plan with only gaps says what it needs (it has nothing to approve); its drawer holds the gap buttons.
+      top: topRows.map(decisionItem).map(({ ref, title, expiresAt, uncovered }) => ({
+        ref,
+        title: uncovered === null ? title : `${cut(title, 240)} · ${uncoveredAsk(uncovered)}`,
+        expiresAt,
+      })),
     },
     kpis,
     agents,
