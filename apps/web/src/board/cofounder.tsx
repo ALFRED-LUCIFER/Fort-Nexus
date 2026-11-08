@@ -3,7 +3,9 @@ import { getRouteApi } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import type { Project, Thread } from "@nexus/contracts";
 import { api, keys } from "../lib/api.ts";
+import { NoticedItem, UpdateWhisper } from "./notifications.tsx";
 import { useScope } from "./scope.tsx";
+import { UPDATE_STALE_MS, spokenUpdate, useUpdates, type Arrival } from "./updates.tsx";
 import { MAX_TURN_CHARS, SendError, TurnItem, talkBlocked, useSendTurn, withTranscript } from "./Talk.tsx";
 import {
   MicButton,
@@ -77,6 +79,7 @@ function Shell({
         </div>
         {action}
       </div>
+      <UpdateWhisper />
       {children}
     </aside>
   );
@@ -147,12 +150,52 @@ function Conversation({ project, blocked }: { project: Project; blocked: string 
     ptt.start(onTranscript);
   };
 
+  // Updates that arrive during the voice conversation are said in it (FR-NTF-12): an observed line in the log, read
+  // aloud when Speak replies is on. A recording is paused while it is said and then goes on listening.
+  const updates = useUpdates();
+  const { setTalking: claimUpdates } = updates;
+  useEffect(() => {
+    claimUpdates(talking);
+    return () => claimUpdates(false);
+  }, [talking, claimUpdates]);
+  const [noticed, setNoticed] = useState<{ seq: number; lines: Arrival[] }>(() => ({
+    seq: updates.arrival?.seq ?? 0,
+    lines: [],
+  }));
+  const arrival = updates.arrival;
+  if (arrival && arrival.seq !== noticed.seq)
+    setNoticed({ seq: arrival.seq, lines: arrival.toTalk ? [...noticed.lines, arrival] : noticed.lines });
+  const said = useRef(new Set<number>());
+  useEffect(() => {
+    if (!talking || !speaker.enabled || speaker.speaking) return;
+    if (ptt.phase !== "idle" && ptt.phase !== "listening") return;
+    const now = Date.now();
+    const due = noticed.lines.filter((l) => !said.current.has(l.seq));
+    // Old news by now: it stays in the log and the Inbox, unsaid.
+    for (const l of due) if (now - l.at > UPDATE_STALE_MS) said.current.add(l.seq);
+    const next = due.find((l) => !said.current.has(l.seq));
+    if (!next) return;
+    const listening = ptt.phase === "listening";
+    // A browser that can't pause a recording: it is said once the owner's clip ends.
+    if (listening && !ptt.pause()) return;
+    said.current.add(next.seq);
+    speaker.speak(`noticed:${next.seq}`, spokenUpdate(next.items), listening ? undefined : offerMic);
+  });
+  // Said (or stopped, or it couldn't be played): back to listening.
+  useEffect(() => {
+    if (ptt.phase === "paused" && !speaker.speaking) ptt.resume();
+  });
+
   const turns = thread.data?.turns ?? [];
+  const entries = [
+    ...turns.map((turn) => ({ at: Date.parse(turn.createdAt), turn, line: null })),
+    ...noticed.lines.map((line) => ({ at: line.at, turn: null, line })),
+  ].sort((a, b) => a.at - b.at);
   const proposals = thread.data?.proposals ?? [];
   useEffect(() => {
     const el = logRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [turns.length]);
+  }, [entries.length]);
 
   const micLive = ptt.phase === "listening" || ptt.phase === "requesting";
   const sub = micLive
@@ -199,7 +242,7 @@ function Conversation({ project, blocked }: { project: Project; blocked: string 
           <p role="status" className="m-0 text-[13px] text-ink3">
             Loading…
           </p>
-        ) : turns.length === 0 ? (
+        ) : entries.length === 0 ? (
           !loadError && (
             <p className="m-0 text-[14px] leading-relaxed text-ink2">
               Ask about {project.name}: what is waiting on you, how today's runs went, what failed. Answers
@@ -208,20 +251,24 @@ function Conversation({ project, blocked }: { project: Project; blocked: string 
           )
         ) : (
           <ol role="log" aria-label="Conversation" className="m-0 flex list-none flex-col gap-3 p-0">
-            {turns.map((turn) => (
-              <TurnItem
-                key={turn.id}
-                turn={turn}
-                name="Cofounder"
-                proposal={proposals.find((p) => p.id === turn.proposalId)}
-                onOpen={open}
-                aside={
-                  turn.role === "ASSISTANT" && (
-                    <ReadAloudButton speaker={speaker} id={turn.id} text={turn.text} />
-                  )
-                }
-              />
-            ))}
+            {entries.map(({ turn, line }) =>
+              turn ? (
+                <TurnItem
+                  key={turn.id}
+                  turn={turn}
+                  name="Cofounder"
+                  proposal={proposals.find((p) => p.id === turn.proposalId)}
+                  onOpen={open}
+                  aside={
+                    turn.role === "ASSISTANT" && (
+                      <ReadAloudButton speaker={speaker} id={turn.id} text={turn.text} />
+                    )
+                  }
+                />
+              ) : (
+                line && <NoticedItem key={`noticed:${line.seq}`} items={line.items} at={line.at} />
+              ),
+            )}
           </ol>
         )}
       </div>

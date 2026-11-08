@@ -18,7 +18,7 @@ import { InboxDrawer } from "./Inbox.tsx";
 import { JobsDrawer } from "./jobs.tsx";
 import { IncidentDrawer, SystemsDrawer } from "./monitoring.tsx";
 import { JobDraftDrawer, NewJobDrawer } from "./newJob.tsx";
-import { NotificationToasts, useScopeNotifications } from "./notifications.tsx";
+import { NotificationToasts, UpdateVoiceBar, useScopeNotifications } from "./notifications.tsx";
 import { OpportunityDrawer } from "./opportunities.tsx";
 import { PlanDrawer } from "./plans.tsx";
 import { RepositoriesDrawer } from "./repos.tsx";
@@ -28,6 +28,7 @@ import { ScopeNav, useOnlyProjectInUrl, useScope } from "./scope.tsx";
 import { SettingsDrawer } from "./Settings.tsx";
 import { PhoneNav, Sidebar } from "./Sidebar.tsx";
 import { TalkDrawer } from "./Talk.tsx";
+import { UpdatesProvider } from "./updates.tsx";
 
 // The one page of NEXUS: header, the areas (sidebar on desktop, bottom nav on a phone), the active area in the middle
 // column, the Cofounder panel docked on the right on wide screens, and every drawer over it (PRD §D.2–D.4).
@@ -48,6 +49,9 @@ export function Shell() {
   const wide = useMedia(MD);
   // Without matchMedia nothing is docked: the panel is a wide-screen extra, Talk opens the drawer everywhere.
   const docked = useMedia(XL, false);
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  // New updates show as the docked panel's whisper when it is open, as toasts otherwise.
+  const whisperInPanel = docked && !collapsed;
   const areas = useAreas();
   const runners = areas.queries.runners;
   const queued = areas.queries.queued;
@@ -166,135 +170,145 @@ export function Shell() {
   else page = <AreaPage area={current} areas={areas} open={open} />;
 
   return (
-    <div className="fixed inset-0 flex flex-col">
-      {/* A phone puts the logo and STOP on the first row and gives the command bar the whole second row; wider
+    <UpdatesProvider>
+      <div className="fixed inset-0 flex flex-col">
+        {/* A phone puts the logo and STOP on the first row and gives the command bar the whole second row; wider
           screens keep one row. The bar stays at one place in the tree, so what was typed survives a rotation. */}
-      <header className="relative flex flex-none flex-wrap items-center gap-x-2.5 gap-y-2 px-4 pt-3 pb-2 md:flex-nowrap md:pt-3.5 md:pb-3">
-        <div className={`${glass} h-11 flex-none gap-2.5 pr-3 pl-3.5 md:h-[52px]`}>
-          <span
-            aria-hidden="true"
-            className="size-[22px] rounded-full"
-            style={{ background: "conic-gradient(from 200deg, var(--teal), var(--amber), var(--teal))" }}
-          />
-          <h1 className="m-0 font-serif text-[25px] leading-none font-normal italic">nexus</h1>
-          <span
-            role="img"
-            aria-label={runner ? `Runner ${runner.name}: ${runner.status.toLowerCase()}` : "No runner paired"}
-            title={runner ? `${runner.name} · ${runner.status.toLowerCase()}` : "no runner paired"}
-            className="size-[7px] rounded-full"
-            style={{ background: runner ? RUNNER_TONE[runner.status] : "var(--ink3)" }}
-          />
-        </div>
+        <header className="relative flex flex-none flex-wrap items-center gap-x-2.5 gap-y-2 px-4 pt-3 pb-2 md:flex-nowrap md:pt-3.5 md:pb-3">
+          <div className={`${glass} h-11 flex-none gap-2.5 pr-3 pl-3.5 md:h-[52px]`}>
+            <span
+              aria-hidden="true"
+              className="size-[22px] rounded-full"
+              style={{ background: "conic-gradient(from 200deg, var(--teal), var(--amber), var(--teal))" }}
+            />
+            <h1 className="m-0 font-serif text-[25px] leading-none font-normal italic">nexus</h1>
+            <span
+              role="img"
+              aria-label={
+                runner ? `Runner ${runner.name}: ${runner.status.toLowerCase()}` : "No runner paired"
+              }
+              title={runner ? `${runner.name} · ${runner.status.toLowerCase()}` : "no runner paired"}
+              className="size-[7px] rounded-full"
+              style={{ background: runner ? RUNNER_TONE[runner.status] : "var(--ink3)" }}
+            />
+          </div>
 
-        <div className="order-last flex w-full min-w-0 md:order-none md:w-auto md:flex-[1_1_0]">
-          <CommandBar
-            runners={runners.data}
-            projectId={projectId}
-            blocked={scope.blocked}
-            onQueued={(id) => open(`run:${id}`)}
-          >
-            {!search.drawer && banner}
-            {runners.error && (
-              <div
-                role="alert"
-                className="pointer-events-auto rounded-2xl px-[18px] py-3 text-[13.5px] font-medium text-white shadow-nx"
-                style={{ background: "oklch(0.52 0.15 32)" }}
-              >
-                {runners.error.message} Retrying every few seconds.
-              </div>
-            )}
-          </CommandBar>
-        </div>
-
-        {wide ? (
-          <div className={`${glass} h-[52px] flex-none gap-0.5 px-1.5`}>
-            <button
-              type="button"
-              aria-label={inboxLabel}
-              onClick={() => open("inbox")}
-              className={`${pillBtn} flex items-center gap-1.5`}
+          <div className="order-last flex w-full min-w-0 md:order-none md:w-auto md:flex-[1_1_0]">
+            <CommandBar
+              runners={runners.data}
+              projectId={projectId}
+              blocked={scope.blocked}
+              onQueued={(id) => open(`run:${id}`)}
             >
-              Inbox
-              {!!inboxCount && (
-                <span
-                  aria-hidden="true"
-                  className="min-w-[18px] rounded-full bg-amber px-1.5 py-[3px] text-center font-mono text-[11px] leading-none text-onacc"
+              {!search.drawer && banner}
+              {runners.error && (
+                <div
+                  role="alert"
+                  className="pointer-events-auto rounded-2xl px-[18px] py-3 text-[13.5px] font-medium text-white shadow-nx"
+                  style={{ background: "oklch(0.52 0.15 32)" }}
                 >
-                  {inboxCount}
-                </span>
+                  {runners.error.message} Retrying every few seconds.
+                </div>
               )}
-            </button>
-            {themeButton}
-            {signOutButton}
+            </CommandBar>
           </div>
-        ) : (
-          // A phone has no sidebar: the emergency stop stays in reach here.
-          <div className="glass ml-auto flex flex-none items-center rounded-[14px] p-1">
-            <StopButton />
-          </div>
+
+          {wide ? (
+            <div className={`${glass} h-[52px] flex-none gap-0.5 px-1.5`}>
+              <button
+                type="button"
+                aria-label={inboxLabel}
+                onClick={() => open("inbox")}
+                className={`${pillBtn} flex items-center gap-1.5`}
+              >
+                Inbox
+                {!!inboxCount && (
+                  <span
+                    aria-hidden="true"
+                    className="min-w-[18px] rounded-full bg-amber px-1.5 py-[3px] text-center font-mono text-[11px] leading-none text-onacc"
+                  >
+                    {inboxCount}
+                  </span>
+                )}
+              </button>
+              {themeButton}
+              {signOutButton}
+            </div>
+          ) : (
+            // A phone has no sidebar: the emergency stop stays in reach here.
+            <div className="glass ml-auto flex flex-none items-center rounded-[14px] p-1">
+              <StopButton />
+            </div>
+          )}
+        </header>
+
+        <div className="flex min-h-0 flex-1 gap-4 px-4 md:pb-4">
+          {wide && <Sidebar areas={areas} current={current} />}
+          <main ref={mainRef} aria-label={pageLabel} className="min-w-0 flex-1 overflow-y-auto px-1 pt-1">
+            <div className="mx-auto w-full max-w-[1120px]">{page}</div>
+          </main>
+          {docked && <CofounderDock projectId={projectId} collapsed={collapsed} onCollapsed={setCollapsed} />}
+        </div>
+
+        {!wide && <PhoneNav current={current} inbox={{ count: inboxCount, label: inboxLabel }} />}
+
+        <NotificationToasts hidden={!!search.drawer} muted={whisperInPanel} />
+        {!whisperInPanel && <UpdateVoiceBar />}
+        {drawerKind === "run" && drawerId && (
+          <RunDrawer jobId={drawerId} banner={banner} onClose={closeDrawer} />
         )}
-      </header>
-
-      <div className="flex min-h-0 flex-1 gap-4 px-4 md:pb-4">
-        {wide && <Sidebar areas={areas} current={current} />}
-        <main ref={mainRef} aria-label={pageLabel} className="min-w-0 flex-1 overflow-y-auto px-1 pt-1">
-          <div className="mx-auto w-full max-w-[1120px]">{page}</div>
-        </main>
-        {docked && <CofounderDock projectId={projectId} />}
+        {drawerKind === "repo" && drawerId && (
+          <RepoDrawer repoId={drawerId} banner={banner} onClose={closeDrawer} />
+        )}
+        {drawerKind === "inbox" && <InboxDrawer banner={banner} onClose={closeDrawer} />}
+        {drawerKind === "settings" && <SettingsDrawer banner={banner} onClose={closeDrawer} />}
+        {drawerKind === "business" && <BusinessDrawer banner={banner} onClose={closeDrawer} />}
+        {drawerKind === "talk" && <TalkDrawer threadId={drawerId} banner={banner} onClose={closeDrawer} />}
+        {drawerKind === "research" && (
+          <ResearchDrawer deepDiveId={drawerId} banner={banner} onClose={closeDrawer} />
+        )}
+        {drawerKind === "systems" && (
+          <SystemsDrawer
+            banner={banner}
+            onClose={closeDrawer}
+            onOpenIncident={(id) => open(`incident:${id}`)}
+          />
+        )}
+        {drawerKind === "incident" && drawerId && (
+          <IncidentDrawer id={drawerId} banner={banner} onClose={closeDrawer} />
+        )}
+        {drawerKind === "agent" && agentKey.success && (
+          <AgentDrawer agent={agentKey.data} banner={banner} onClose={closeDrawer} />
+        )}
+        {drawerKind === "plan" && drawerId && (
+          <PlanDrawer id={drawerId} banner={banner} onClose={closeDrawer} />
+        )}
+        {drawerKind === "opp" && drawerId && (
+          <OpportunityDrawer
+            id={drawerId}
+            focus={drawerNumber === "preview" ? "preview" : undefined}
+            banner={banner}
+            onClose={closeDrawer}
+          />
+        )}
+        {drawerKind === "jobs" && <JobsDrawer banner={banner} onClose={closeDrawer} />}
+        {drawerKind === "repos" && (
+          <RepositoriesDrawer choose={drawerId === "choose"} banner={banner} onClose={closeDrawer} />
+        )}
+        {drawerKind === "newjob" && <NewJobDrawer banner={banner} onClose={closeDrawer} />}
+        {drawerKind === "jobdraft" && drawerId && (
+          <JobDraftDrawer id={drawerId} banner={banner} onClose={closeDrawer} />
+        )}
+        {drawerKind === "issue" && drawerId && drawerNumber && (
+          <IssueDrawer
+            repoId={drawerId}
+            number={Number(drawerNumber)}
+            banner={banner}
+            onClose={closeDrawer}
+          />
+        )}
       </div>
-
-      {!wide && <PhoneNav current={current} inbox={{ count: inboxCount, label: inboxLabel }} />}
-
-      <NotificationToasts hidden={!!search.drawer} />
-      {drawerKind === "run" && drawerId && (
-        <RunDrawer jobId={drawerId} banner={banner} onClose={closeDrawer} />
-      )}
-      {drawerKind === "repo" && drawerId && (
-        <RepoDrawer repoId={drawerId} banner={banner} onClose={closeDrawer} />
-      )}
-      {drawerKind === "inbox" && <InboxDrawer banner={banner} onClose={closeDrawer} />}
-      {drawerKind === "settings" && <SettingsDrawer banner={banner} onClose={closeDrawer} />}
-      {drawerKind === "business" && <BusinessDrawer banner={banner} onClose={closeDrawer} />}
-      {drawerKind === "talk" && <TalkDrawer threadId={drawerId} banner={banner} onClose={closeDrawer} />}
-      {drawerKind === "research" && (
-        <ResearchDrawer deepDiveId={drawerId} banner={banner} onClose={closeDrawer} />
-      )}
-      {drawerKind === "systems" && (
-        <SystemsDrawer
-          banner={banner}
-          onClose={closeDrawer}
-          onOpenIncident={(id) => open(`incident:${id}`)}
-        />
-      )}
-      {drawerKind === "incident" && drawerId && (
-        <IncidentDrawer id={drawerId} banner={banner} onClose={closeDrawer} />
-      )}
-      {drawerKind === "agent" && agentKey.success && (
-        <AgentDrawer agent={agentKey.data} banner={banner} onClose={closeDrawer} />
-      )}
-      {drawerKind === "plan" && drawerId && (
-        <PlanDrawer id={drawerId} banner={banner} onClose={closeDrawer} />
-      )}
-      {drawerKind === "opp" && drawerId && (
-        <OpportunityDrawer
-          id={drawerId}
-          focus={drawerNumber === "preview" ? "preview" : undefined}
-          banner={banner}
-          onClose={closeDrawer}
-        />
-      )}
-      {drawerKind === "jobs" && <JobsDrawer banner={banner} onClose={closeDrawer} />}
-      {drawerKind === "repos" && (
-        <RepositoriesDrawer choose={drawerId === "choose"} banner={banner} onClose={closeDrawer} />
-      )}
-      {drawerKind === "newjob" && <NewJobDrawer banner={banner} onClose={closeDrawer} />}
-      {drawerKind === "jobdraft" && drawerId && (
-        <JobDraftDrawer id={drawerId} banner={banner} onClose={closeDrawer} />
-      )}
-      {drawerKind === "issue" && drawerId && drawerNumber && (
-        <IssueDrawer repoId={drawerId} number={Number(drawerNumber)} banner={banner} onClose={closeDrawer} />
-      )}
-    </div>
+    </UpdatesProvider>
   );
 }
 
@@ -310,12 +324,19 @@ const readCollapsed = () => {
  * The Cofounder panel docked beside every page on wide screens; collapsing it is remembered on this device. One
  * button toggles it in both states, so focus stays on it and its expanded state is announced.
  */
-function CofounderDock({ projectId }: { projectId: string | undefined }) {
-  const [collapsed, setCollapsed] = useState(readCollapsed);
+function CofounderDock({
+  projectId,
+  collapsed,
+  onCollapsed,
+}: {
+  projectId: string | undefined;
+  collapsed: boolean;
+  onCollapsed: (collapsed: boolean) => void;
+}) {
   const id = useId();
   const toggle = () => {
     const next = !collapsed;
-    setCollapsed(next);
+    onCollapsed(next);
     try {
       localStorage.setItem(COLLAPSED_KEY, next ? "1" : "0");
     } catch {

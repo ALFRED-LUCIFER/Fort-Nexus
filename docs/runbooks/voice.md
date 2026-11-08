@@ -101,3 +101,14 @@ The usage counters in Settings → Voice & consent are NEXUS's own count, not Az
 - **One half:** remove `transcribe` or `speech` from `voice.json`.
 - **Everything:** delete `~/.nexus/voice.json`. No audio or text leaves the home machine after that. Replies fall back to the browser voice, which you can mute in the app.
 - **Revoke access:** regenerate the key in the Azure portal (**Keys and Endpoint**), and delete the transcribe deployment if you no longer want it.
+
+## 6. Spoken updates
+
+While the app is open, a new notification shows at the top of the docked Cofounder panel as "NEXUS · noticed just now" (on narrower screens, as a toast). **Tell me** reads it, **Open** opens what it is about, **Later** puts it off; it stays in the Inbox either way. Several arriving together collapse into one.
+
+- **Read new updates aloud** (Settings → Voice & consent) is kept per device: Off (default), Only things that need me (approvals, failures and recovery, incidents, security events) or Everything.
+- The voice is your Azure AI Speech voice when `speech` is set up and **Speak replies** is on, and this browser's own voice otherwise. The app says which one is speaking.
+- Only the notification's own title is said, plus the first sentence of its body when that is NEXUS's plain text. Notifications are written from recorded facts and redacted on the server; quoted source text and business details are never read out.
+- Updates wait while a mic is recording or a reply is being read. Ones that waited more than two minutes are not read.
+- Browsers block audio until you tap the page. NEXUS then shows **Tap to hear updates** once.
+- In **Talk with your cofounder** mode, an update is added to the conversation as an observed line and, when Speak replies is on, said aloud. A recording in progress pauses while it is said (nothing is recorded meanwhile) and then goes on listening.

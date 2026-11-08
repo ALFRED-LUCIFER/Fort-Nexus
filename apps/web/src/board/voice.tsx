@@ -1,4 +1,13 @@
-import { useEffect, useId, useRef, useState, type MouseEvent, type PointerEvent, type Ref } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type MouseEvent,
+  type PointerEvent,
+  type Ref,
+} from "react";
 import { getRouteApi } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { m, useMotionValue, useReducedMotion, useTransform, type MotionValue } from "motion/react";
@@ -42,12 +51,47 @@ export function useOpenVoiceSettings() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// Who is using the audio right now, app-wide. Spoken updates wait for both: they never talk while the owner is
+// recording, nor over a reply that is being read.
+
+const activity = { mics: new Set<object>(), replies: new Set<object>() };
+const activityListeners = new Set<() => void>();
+
+function markActivity(set: Set<object>, owner: object, on: boolean) {
+  if (set.has(owner) === on) return;
+  if (on) set.add(owner);
+  else set.delete(owner);
+  activityListeners.forEach((l) => l());
+}
+
+const subscribeActivity = (l: () => void) => {
+  activityListeners.add(l);
+  return () => void activityListeners.delete(l);
+};
+// A string snapshot: stable while nothing changes, as useSyncExternalStore needs.
+const activitySnapshot = () =>
+  `${activity.mics.size > 0 ? "rec" : ""}|${activity.replies.size > 0 ? "say" : ""}`;
+
+export interface VoiceActivity {
+  /** A mic is open somewhere (asking for permission or recording). A paused recording is not recording. */
+  recording: boolean;
+  /** A Cofounder or Talk reply is being read aloud. */
+  replying: boolean;
+}
+
+export function useVoiceActivity(): VoiceActivity {
+  const s = useSyncExternalStore(subscribeActivity, activitySnapshot);
+  return { recording: s.startsWith("rec"), replying: s.endsWith("say") };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // Push-to-talk
 
 // The first one the browser can record wins: Chrome/Firefox record webm/opus, Safari mp4. All are VOICE_AUDIO_TYPES.
 const RECORDING_TYPES = ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg"] as const;
 
-export type TalkPhase = "idle" | "requesting" | "listening" | "transcribing";
+/** `paused`: the clip is kept but nothing is recorded while NEXUS says an update; it then goes on listening. */
+export type TalkPhase = "idle" | "requesting" | "listening" | "paused" | "transcribing";
 export interface TalkProblem {
   kind: "denied" | "no-mic" | "unsupported" | "empty" | "settings" | "failed";
   message: string;
@@ -60,7 +104,9 @@ interface Recording {
   recorder: MediaRecorder;
   type: string;
   chunks: Blob[];
-  startedAt: number;
+  /** When recording last started or resumed, and how much was recorded before that (pauses don't count). */
+  resumedAt: number;
+  heardMs: number;
   durationMs: number;
   timer: number;
   frame: number;
@@ -78,6 +124,10 @@ export interface PushToTalk {
   stop: () => void;
   /** End: releases the mic and drops the recording and any transcription in flight. */
   cancel: () => void;
+  /** Stops recording but keeps the clip (false when not listening or the browser can't pause a recording). */
+  pause: () => boolean;
+  /** Goes on recording into the same clip after `pause`. */
+  resume: () => void;
 }
 
 const stopTracks = (stream: MediaStream) => stream.getTracks().forEach((t) => t.stop());
@@ -196,14 +246,35 @@ export function usePushToTalk(projectId: string | undefined): PushToTalk {
     const rec = session.current;
     if (!rec) return;
     session.current = null;
-    rec.durationMs = Math.min(VOICE_MAX_SECONDS * 1000, performance.now() - rec.startedAt);
+    const live = rec.recorder.state === "recording" ? performance.now() - rec.resumedAt : 0;
+    rec.durationMs = Math.min(VOICE_MAX_SECONDS * 1000, rec.heardMs + live);
     setPhase("transcribing");
     rec.recorder.stop();
     release(rec);
   };
 
+  const pause = () => {
+    const rec = session.current;
+    if (!rec || phase !== "listening" || rec.recorder.state !== "recording") return false;
+    if (typeof rec.recorder.pause !== "function") return false;
+    rec.recorder.pause();
+    window.clearTimeout(rec.timer);
+    rec.heardMs += performance.now() - rec.resumedAt;
+    setPhase("paused");
+    return true;
+  };
+
+  const resume = () => {
+    const rec = session.current;
+    if (!rec || phase !== "paused" || rec.recorder.state !== "paused") return;
+    rec.recorder.resume();
+    rec.resumedAt = performance.now();
+    rec.timer = window.setTimeout(stop, Math.max(0, VOICE_MAX_SECONDS * 1000 - rec.heardMs));
+    setPhase("listening");
+  };
+
   const start = async (onText: (text: string) => void) => {
-    if (!projectId || phase === "requesting" || phase === "listening" || phase === "transcribing") return;
+    if (!projectId || phase !== "idle") return;
     setProblem(null);
     const type =
       typeof MediaRecorder === "undefined"
@@ -248,7 +319,8 @@ export function usePushToTalk(projectId: string | undefined): PushToTalk {
       recorder,
       type,
       chunks: [],
-      startedAt: performance.now(),
+      resumedAt: performance.now(),
+      heardMs: 0,
       durationMs: 0,
       timer: 0,
       frame: 0,
@@ -287,7 +359,14 @@ export function usePushToTalk(projectId: string | undefined): PushToTalk {
   });
   useEffect(() => () => cancelRef.current(), [projectId]);
 
-  return { phase, problem, level, start: (onText) => void start(onText), stop, cancel };
+  // An open mic holds back spoken updates until it closes or pauses.
+  useEffect(() => {
+    const me = owner.current;
+    markActivity(activity.mics, me, phase === "requesting" || phase === "listening");
+    return () => markActivity(activity.mics, me, false);
+  }, [phase]);
+
+  return { phase, problem, level, start: (onText) => void start(onText), stop, cancel, pause, resume };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -409,6 +488,14 @@ export function useSpeak(projectId: string | undefined): Speaker {
   });
   useEffect(() => () => stopRef.current(), [projectId]);
 
+  // A reply being read holds back spoken updates.
+  const owner = useRef({});
+  useEffect(() => {
+    const me = owner.current;
+    markActivity(activity.replies, me, !!speaking);
+    return () => markActivity(activity.replies, me, false);
+  }, [speaking]);
+
   return {
     enabled: !!settings?.speakReplies,
     speaking,
@@ -470,6 +557,7 @@ const MIC_LABEL: Record<TalkPhase, string> = {
   idle: "Talk: press to record, or hold while you speak",
   requesting: "Waiting for microphone permission: press to cancel",
   listening: "Recording: press to stop",
+  paused: "Recording paused while NEXUS speaks: press to stop",
   transcribing: "Transcribing your recording",
 };
 
@@ -520,7 +608,7 @@ export function MicButton({
       </>
     );
 
-  const live = ptt.phase === "listening" || ptt.phase === "requesting";
+  const live = ptt.phase === "listening" || ptt.phase === "requesting" || ptt.phase === "paused";
   const onPointerDown = (e: PointerEvent<HTMLButtonElement>) => {
     if (e.button !== 0 || ptt.phase !== "idle") return;
     press.current = { at: e.timeStamp };
@@ -532,7 +620,7 @@ export function MicButton({
     // This press started the recording: a long press was hold-to-talk (release stops), a short one a tap.
     if (p) return void (e.timeStamp - p.at >= HOLD_MS && ptt.stop());
     if (ptt.phase === "idle") ptt.start(onTranscript);
-    else if (ptt.phase === "listening") ptt.stop();
+    else if (ptt.phase === "listening" || ptt.phase === "paused") ptt.stop();
     else if (ptt.phase === "requesting") ptt.cancel();
   };
   return (
@@ -611,6 +699,7 @@ export function Orb({ size, live }: { size: number; live: boolean }) {
 const STATE_TEXT: Record<Exclude<TalkPhase, "idle">, string> = {
   requesting: "Waiting for the microphone",
   listening: "Listening",
+  paused: "Listening paused",
   transcribing: "Transcribing",
 };
 
@@ -634,22 +723,25 @@ export function VoiceHud({
   const speaking = speaker?.speaking;
   if (ptt.phase === "idle" && !speaking && !conversation) return null;
   const micOn = ptt.phase === "listening" || ptt.phase === "requesting";
-  const state =
-    ptt.phase !== "idle"
+  // While an update is said the recording is paused: the HUD shows what is being said.
+  const saying = speaking && (ptt.phase === "idle" || ptt.phase === "paused") ? speaking : null;
+  const state = saying
+    ? `${saying.loading ? "Preparing to speak" : "Speaking"} · ${voiceLabel(saying, status.data)}`
+    : ptt.phase !== "idle"
       ? STATE_TEXT[ptt.phase]
-      : speaking
-        ? `${speaking.loading ? "Preparing the reply" : "Speaking"} · ${voiceLabel(speaking, status.data)}`
-        : "Your turn";
-  const caption =
-    ptt.phase === "requesting"
+      : "Your turn";
+  const caption = saying
+    ? saying.text
+    : ptt.phase === "requesting"
       ? "Allow the microphone if the browser asks."
       : ptt.phase === "listening"
         ? "Speak now, then press the mic again. Your words appear in the box for you to read before anything is sent."
-        : ptt.phase === "transcribing"
-          ? "Turning your recording into text…"
-          : speaking
-            ? speaking.text
+        : ptt.phase === "paused"
+          ? "Your recording so far is kept. Listening goes on in a moment."
+          : ptt.phase === "transcribing"
+            ? "Turning your recording into text…"
             : "Press the mic to answer, or type.";
+  const mic = micOn ? `mic on · ${thisDevice()}` : ptt.phase === "paused" ? "mic paused" : "mic off";
   return (
     <section
       aria-label="Voice"
@@ -666,9 +758,7 @@ export function VoiceHud({
         >
           {state}
         </span>
-        <span className="flex-none font-mono text-[10.5px] text-ink3">
-          {micOn ? `mic on · ${thisDevice()}` : "mic off"}
-        </span>
+        <span className="flex-none font-mono text-[10.5px] text-ink3">{mic}</span>
         <button
           type="button"
           onClick={onEnd}

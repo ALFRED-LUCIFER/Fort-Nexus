@@ -15,6 +15,7 @@ import { AgentProfilesSettings } from "./agents.tsx";
 import { AutomationsSettings } from "./AutomationsSettings.tsx";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { useScope } from "./scope.tsx";
+import { useUpdatesVoice, type UpdatesVoice } from "./updates.tsx";
 import { useVoiceStatus } from "./voice.tsx";
 import { WorkspacesSettings } from "./WorkspacesSettings.tsx";
 
@@ -537,6 +538,27 @@ function VoiceConsent() {
           }
         />
       </Rows>
+      <section aria-label="What works now" className="flex flex-none flex-col gap-2">
+        <h3 className="kicker m-0">What works now</h3>
+        <ul className="m-0 flex list-disc flex-col gap-1 pl-5 text-[13px] leading-[1.5] text-ink2">
+          <li>
+            {v.transcribe ? (
+              "Voice input is ready: press the mic and speak."
+            ) : (
+              <>
+                Voice input needs <code className="font-mono text-[12px]">~/.nexus/voice.json</code> on the
+                home machine with a <code className="font-mono text-[12px]">transcribe</code> part. How to set
+                it up: <code className="font-mono text-[12px]">{v.runbook}</code>.
+              </>
+            )}
+          </li>
+          <li>
+            {v.speak
+              ? `Spoken replies and updates use your Azure voice (${v.speak.voice}) while Speak replies is on, and this browser's own voice otherwise.`
+              : "Spoken replies and updates work now with this browser's own voice. They use your Azure voice once voice.json has a speech part and Speak replies is on."}
+          </li>
+        </ul>
+      </section>
       <section aria-label="What happens to your voice" className="flex flex-none flex-col gap-2">
         <h3 className="kicker m-0">What happens to your voice</h3>
         {v.disclosure.length > 0 ? (
@@ -614,10 +636,69 @@ function VoiceConsent() {
           {save.error.message}
         </p>
       )}
+      <SpokenUpdates server={v.speak && s.speakReplies ? v.speak.voice : null} />
       <p className="m-0 flex-none font-mono text-[11.5px] leading-[1.5] text-ink3">
         today · {Math.round(v.usageToday.transcribedSeconds)} s transcribed · {v.usageToday.spokenCharacters}{" "}
         characters spoken · Azure bills per audio minute and per character
       </p>
     </>
+  );
+}
+
+const UPDATE_CHOICES: readonly [UpdatesVoice, string, string][] = [
+  ["off", "Off", "new updates stay on screen and in the Inbox"],
+  ["needs-me", "Only things that need me", "approvals, failures, incidents and security events"],
+  ["all", "Everything", "every new update, finished runs and notices too"],
+];
+
+/**
+ * "Read new updates aloud" (FR-NTF-12): kept on this device, since it is about this device's speakers. Only an
+ * update's own title (and the first sentence of its body when that is NEXUS's plain text) is said.
+ */
+function SpokenUpdates({ server }: { server: string | null }) {
+  const [pref, setPref] = useUpdatesVoice();
+  const name = useId();
+  return (
+    <fieldset className="m-0 flex flex-none flex-col gap-2 border-0 p-0">
+      <legend className="kicker mb-2 p-0">Read new updates aloud · this device</legend>
+      <div className="overflow-hidden rounded-[18px] border border-hair">
+        {UPDATE_CHOICES.map(([value, label, meta]) => (
+          <div
+            key={value}
+            className="flex items-center gap-3 border-b border-hair px-4 py-[11px] last:border-b-0"
+          >
+            <input
+              id={`${name}-${value}`}
+              type="radio"
+              name={name}
+              value={value}
+              checked={pref === value}
+              aria-describedby={`${name}-${value}-meta`}
+              onChange={() => setPref(value)}
+              className="size-4 flex-none accent-[var(--teal)]"
+            />
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <label
+                htmlFor={`${name}-${value}`}
+                className="cursor-pointer text-[13.5px] leading-[1.3] font-medium"
+              >
+                {label}
+              </label>
+              <span id={`${name}-${value}-meta`} className="font-mono text-[11.5px] leading-[1.4] text-ink3">
+                {meta}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="m-0 text-[12.5px] leading-[1.5] text-ink2">
+        {server
+          ? `Read with Azure AI Speech · ${server}.`
+          : "Read with this browser's voice (browser voice)."}{" "}
+        Updates wait while you're recording or a reply is being read, and ones older than two minutes aren't
+        read. If the browser wants a tap first, NEXUS shows “Tap to hear updates”. In a voice conversation
+        with your cofounder, updates are said in the conversation when Speak replies is on.
+      </p>
+    </fieldset>
   );
 }

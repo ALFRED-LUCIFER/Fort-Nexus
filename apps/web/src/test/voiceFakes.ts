@@ -32,7 +32,7 @@ export class FakeRecorder {
   static instances: FakeRecorder[] = [];
   static supported = ["audio/webm;codecs=opus"];
   static isTypeSupported = (t: string) => FakeRecorder.supported.includes(t);
-  state: "inactive" | "recording" = "inactive";
+  state: "inactive" | "recording" | "paused" = "inactive";
   ondataavailable: ((e: { data: Blob }) => void) | null = null;
   onstop: (() => void) | null = null;
   readonly stream: MediaStream;
@@ -44,6 +44,12 @@ export class FakeRecorder {
   }
   start() {
     this.state = "recording";
+  }
+  pause() {
+    if (this.state === "recording") this.state = "paused";
+  }
+  resume() {
+    if (this.state === "paused") this.state = "recording";
   }
   stop() {
     if (this.state === "inactive") return;
@@ -76,15 +82,20 @@ class FakeAudioContext {
 
 export class FakeAudio {
   static instances: FakeAudio[] = [];
+  /** Set to make `play()` refuse as a browser does before any tap on the page. */
+  static autoplayBlocked = false;
   playbackRate = 1;
   paused = true;
   onended: (() => void) | null = null;
-  readonly src: string;
-  constructor(src: string) {
+  onerror: (() => void) | null = null;
+  src: string;
+  constructor(src = "") {
     this.src = src;
     FakeAudio.instances.push(this);
   }
   play() {
+    if (FakeAudio.autoplayBlocked && this.src)
+      return Promise.reject(new DOMException("play() needs a user gesture", "NotAllowedError"));
     this.paused = false;
     return Promise.resolve();
   }
@@ -116,6 +127,7 @@ export class FakeUtterance {
 export function installVoiceFakes({ mic = "allow" }: { mic?: "allow" | "deny" } = {}) {
   FakeRecorder.instances = [];
   FakeAudio.instances = [];
+  FakeAudio.autoplayBlocked = false;
   FakeAudioContext.instances = [];
   const tracks: FakeTrack[] = [];
   const getUserMedia = vi.fn(async (_c: MediaStreamConstraints) => {
