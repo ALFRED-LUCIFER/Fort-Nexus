@@ -7,7 +7,8 @@ FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec
 
 # shortcut: apk packages float within the pinned Alpine release, pin versions once builds must be reproducible bit-for-bit.
 # libstdc++/libgcc: the Agent SDK's native (musl) Claude Code binary links against them.
-RUN apk add --no-cache git coreutils libstdc++ libgcc \
+# bash: Claude Code's Bash tool needs bash or zsh ("No suitable shell found" with busybox sh alone).
+RUN apk add --no-cache git coreutils libstdc++ libgcc bash \
   && addgroup -S -g 10001 nexus \
   && adduser -S -D -H -u 10001 -G nexus -h /tmp -s /sbin/nologin nexus
 
@@ -19,5 +20,7 @@ COPY agent/nexus-agent.mjs agent/nexus-proxy.mjs ./
 RUN chmod 0755 nexus-agent.mjs nexus-proxy.mjs && ln -s /opt/nexus/nexus-agent.mjs /usr/local/bin/nexus-agent
 
 ENV HOME=/tmp
+# The nexus user's login shell is nologin, and a host uid has no passwd entry: name the shell explicitly.
+ENV SHELL=/bin/bash
 USER 10001:10001
 WORKDIR /workspace

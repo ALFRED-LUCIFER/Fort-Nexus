@@ -9,7 +9,7 @@
     "pair": "node src/main.ts pair",
     "typecheck": "tsc -p .",
     "test": "vitest run",
-    "sandbox:build": "docker build -t nexus-sandbox:2 ../../infra/sandbox"
+    "sandbox:build": "docker build -t nexus-sandbox:3 ../../infra/sandbox"
   },
   "dependencies": {
     "@nexus/contracts": "workspace:*",
