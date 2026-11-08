@@ -1,13 +1,17 @@
-import { and, desc, eq, gte, notInArray, or } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, notInArray, or, sql } from "drizzle-orm";
 import {
   CreateDeepDiveRequest,
   CreateJobRequest,
   DEEP_DIVE_DEPTH_LIMITS,
   GITHUB_SETUP_COMMAND,
+  JOB_STATUS_GROUPS,
   TERMINAL_JOB_STATUSES,
   isTerminal,
   type Basis,
+  type HomeRef,
   type Intent,
+  type JobStatus,
+  type JobStatusGroup,
   type MetricProvenance,
   type ProposedAction,
   type SourceRef,
@@ -23,6 +27,8 @@ import {
 import type { Db } from "../db/index.ts";
 import { approvals, jobs, runEvents } from "../db/schema.ts";
 import { HttpError } from "../errors.ts";
+import { waitingOnYou, type DecisionItem } from "../home.ts";
+import { localDate } from "../research/schedule.ts";
 import { searchFindings } from "../research/service.ts";
 import type { GithubCatalog } from "../github/catalog.ts";
 import { ownerActor, type JobRow } from "../jobs.ts";
@@ -52,12 +58,16 @@ export type ToolContext = {
   subjectJobId: string | null;
   connectorsDir: string;
   correlationId: string;
+  /** The owner's timezone (config): "today" and clock times are the owner's. */
+  timezone: string;
 };
 
 const CAPABILITIES =
-  "From Talk I can tell you how a run is going, list your recent runs, propose starting a run for a GitHub issue, report sales, failed payments, revenue (gross, refunds, net) or top products, search research findings, and propose a deep dive by the AI researcher.";
+  "From Talk I can tell you what's waiting on you, how a run is going, list your recent, running, failed or today's runs, propose starting a run for a GitHub issue, report sales, failed payments, revenue (gross, refunds, net) or top products, search research findings, and propose a deep dive by the AI researcher.";
 const RECENT_RUNS = 5;
 const FOLLOW_UP_WINDOW_MS = 24 * 60 * 60 * 1000;
+const FAILED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const WAITING_ITEMS = 8;
 
 // Words that report an outcome. A reply may use them only when it carries the source event (FR-CWV-07).
 const OUTCOME_CLAIM = /\b(done|sent|merged|opened|deployed|completed|created|pushed|shipped|finished)\b/i;
@@ -91,6 +101,8 @@ export async function answer(intent: Intent, ctx: ToolContext): Promise<Reply> {
       return runStatus(intent, ctx);
     case "LIST_RUNS":
       return listRuns(intent, ctx);
+    case "WAITING_ON_YOU":
+      return waiting(intent, ctx);
     case "START_ISSUE_RUN":
       return proposeIssueRun(intent, ctx);
     case "BUSINESS_METRIC":
@@ -251,23 +263,222 @@ async function jobStatus(job: JobRow, ctx: ToolContext): Promise<Omit<Reply, "in
   return { text: `${name} is ${words(job.status).toLowerCase()}.`, basis: "OBSERVED", sources };
 }
 
-async function listRuns(intent: Intent, ctx: ToolContext): Promise<Reply> {
+const GROUP_WORD: Record<JobStatusGroup, string> = {
+  SUCCEEDED: "completed",
+  FAILED: "failed",
+  ACTIVE: "in progress",
+  NEEDS_YOU: "waiting on you",
+  CANCELLED: "cancelled",
+};
+const groupOf = (s: JobStatus) =>
+  (Object.keys(JOB_STATUS_GROUPS) as JobStatusGroup[]).find((g) => JOB_STATUS_GROUPS[g].includes(s))!;
+const runLine = (j: JobRow) => `• ${runName(j)}: ${words(j.status).toLowerCase()}`;
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+const cut = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n - 1).trimEnd()}…`);
+const newest = (n: number) =>
+  n === RECENT_RUNS ? `The ${RECENT_RUNS} newest runs` : plural(n, "run", "runs");
+
+async function listRuns(intent: Extract<Intent, { kind: "LIST_RUNS" }>, ctx: ToolContext): Promise<Reply> {
+  if (intent.period === "TODAY") return todaysRuns(intent, ctx);
+  if (intent.status === "FAILED") return failedRuns(intent, ctx);
+  const active = intent.status === "ACTIVE";
   const rows = await ctx.db
     .select()
     .from(jobs)
-    .where(and(eq(jobs.initiatorId, ctx.ownerId), eq(jobs.projectId, ctx.projectId)))
+    .where(
+      and(
+        eq(jobs.initiatorId, ctx.ownerId),
+        eq(jobs.projectId, ctx.projectId),
+        active ? inArray(jobs.status, [...JOB_STATUS_GROUPS.ACTIVE]) : undefined,
+      ),
+    )
     .orderBy(desc(jobs.id))
     .limit(RECENT_RUNS);
   if (rows.length === 0)
-    return { intent, text: "This project has no runs yet.", basis: "OBSERVED", sources: [] };
+    return {
+      intent,
+      text: active ? "No run is in progress in this project." : "This project has no runs yet.",
+      basis: "OBSERVED",
+      sources: [],
+    };
+  const heading = active
+    ? `${newest(rows.length)} in progress:`
+    : `Your ${rows.length} most recent ${rows.length === 1 ? "run" : "runs"}:`;
+  return {
+    intent,
+    text: [heading, ...rows.map(runLine)].join("\n"),
+    basis: "OBSERVED",
+    sources: rows.map(jobSource),
+  };
+}
+
+/** Today in the owner's timezone: how many runs started, by outcome, and the newest few. */
+async function todaysRuns(intent: Intent, ctx: ToolContext): Promise<Reply> {
+  const today = localDate(new Date(), ctx.timezone);
+  const since = sql`(${today}::date::timestamp at time zone ${ctx.timezone}::text)`;
+  const where = and(
+    eq(jobs.initiatorId, ctx.ownerId),
+    eq(jobs.projectId, ctx.projectId),
+    gte(jobs.createdAt, since),
+  );
+  const [byStatus, rows] = await Promise.all([
+    ctx.db
+      .select({ status: jobs.status, n: sql<number>`count(*)::int` })
+      .from(jobs)
+      .where(where)
+      .groupBy(jobs.status),
+    ctx.db.select().from(jobs).where(where).orderBy(desc(jobs.id)).limit(RECENT_RUNS),
+  ]);
+  const total = byStatus.reduce((n, r) => n + r.n, 0);
+  if (total === 0)
+    return {
+      intent,
+      text: `No runs started today (${today}) in this project.`,
+      basis: "OBSERVED",
+      sources: [],
+    };
+  const groups = new Map<JobStatusGroup, number>();
+  for (const r of byStatus) groups.set(groupOf(r.status), (groups.get(groupOf(r.status)) ?? 0) + r.n);
+  const split = (Object.keys(GROUP_WORD) as JobStatusGroup[])
+    .filter((g) => groups.has(g))
+    .map((g) => `${groups.get(g)} ${GROUP_WORD[g]}`)
+    .join(", ");
   return {
     intent,
     text: [
-      `Your ${rows.length} most recent ${rows.length === 1 ? "run" : "runs"}:`,
-      ...rows.map((j) => `• ${runName(j)}: ${words(j.status).toLowerCase()}`),
+      `Today (${today}): ${plural(total, "run", "runs")} started: ${split}.`,
+      ...(total > rows.length ? [`The newest ${rows.length}:`] : []),
+      ...rows.map(runLine),
     ].join("\n"),
     basis: "OBSERVED",
     sources: rows.map(jobSource),
+  };
+}
+
+/** Runs that ended failed, rejected or expired in the last 7 days, each with its job.failed reason when it has one. */
+async function failedRuns(intent: Intent, ctx: ToolContext): Promise<Reply> {
+  const rows = await ctx.db
+    .select()
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.initiatorId, ctx.ownerId),
+        eq(jobs.projectId, ctx.projectId),
+        inArray(jobs.status, [...JOB_STATUS_GROUPS.FAILED]),
+        gte(jobs.updatedAt, new Date(Date.now() - FAILED_WINDOW_MS)),
+      ),
+    )
+    .orderBy(desc(jobs.updatedAt), desc(jobs.id))
+    .limit(RECENT_RUNS);
+  if (rows.length === 0)
+    return {
+      intent,
+      text: "No run failed in this project in the last 7 days.",
+      basis: "OBSERVED",
+      sources: [],
+    };
+  const failures = await ctx.db
+    .selectDistinctOn([runEvents.jobId])
+    .from(runEvents)
+    .where(
+      and(
+        inArray(
+          runEvents.jobId,
+          rows.map((j) => j.id),
+        ),
+        eq(runEvents.type, "job.failed"),
+      ),
+    )
+    .orderBy(runEvents.jobId, desc(runEvents.sequence));
+  const failureOf = new Map(failures.map((e) => [e.jobId, e]));
+  const sources: SourceRef[] = [];
+  const lines = rows.map((j) => {
+    sources.push(jobSource(j));
+    const e = failureOf.get(j.id);
+    const reason = typeof e?.payload.reason === "string" ? e.payload.reason : null;
+    if (e)
+      sources.push({
+        kind: "RUN_EVENT",
+        id: e.id,
+        label: `job.failed${reason ? ` · ${reason}` : ""}`,
+        asOf: iso(e.occurredAt),
+      });
+    return `${runLine(j)}${reason ? ` (${reason})` : ""}`;
+  });
+  return {
+    intent,
+    text: [
+      `${newest(rows.length)} that failed in the last 7 days. No pull request came out of them:`,
+      ...lines,
+    ].join("\n"),
+    basis: "OBSERVED",
+    sources,
+  };
+}
+
+const DECISION: Record<HomeRef["kind"], { word: string; source: SourceRef["kind"] }> = {
+  INCIDENT: { word: "Open incident", source: "INCIDENT" },
+  JOB: { word: "Push approval", source: "JOB" },
+  PLAN: { word: "Plan to approve", source: "PLAN" },
+  JOB_DRAFT: { word: "Job draft to review", source: "JOB_DRAFT" },
+  OPPORTUNITY: { word: "Opportunity", source: "OPPORTUNITY" },
+  DEEP_DIVE: { word: "Deep dive", source: "DEEP_DIVE" },
+};
+
+/**
+ * "What's waiting on me?": the records behind Home's "Waiting on you" (same queries, same order), then the runs still
+ * in progress, so "what's running and what's waiting" is answered in one reply.
+ */
+async function waiting(intent: Intent, ctx: ToolContext): Promise<Reply> {
+  const { counts, items } = await waitingOnYou(ctx.db, ctx.ownerId, ctx.projectId, WAITING_ITEMS);
+  const total = counts.approvals + counts.plans + counts.jobDrafts + counts.opportunities + counts.incidents;
+  const clock = new Intl.DateTimeFormat("en-GB", {
+    timeZone: ctx.timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
+  const decisionLine = (d: DecisionItem) =>
+    `• ${DECISION[d.ref.kind].word}: ${cut(d.title, 160)}${d.expiresAt ? ` (expires ${clock.format(new Date(d.expiresAt))})` : ""}`;
+  const decisionSource = (d: DecisionItem): SourceRef => ({
+    kind: DECISION[d.ref.kind].source,
+    id: d.ref.id,
+    label: d.ref.kind === "JOB" ? `push approval · ${cut(d.title, 100)}` : cut(d.title, 120),
+    asOf: d.createdAt,
+  });
+  // A run whose push approval is listed above isn't repeated below.
+  const listed = new Set(items.filter((d) => d.ref.kind === "JOB").map((d) => d.ref.id));
+  const runs = (
+    await ctx.db
+      .select()
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.initiatorId, ctx.ownerId),
+          eq(jobs.projectId, ctx.projectId),
+          notInArray(jobs.status, [...TERMINAL_JOB_STATUSES]),
+        ),
+      )
+      .orderBy(desc(jobs.id))
+      .limit(RECENT_RUNS + listed.size)
+  )
+    .filter((j) => !listed.has(j.id))
+    .slice(0, RECENT_RUNS);
+
+  const text = [
+    total === 0
+      ? "Nothing is waiting on you in this project."
+      : `${total === 1 ? "1 thing is" : `${total} things are`} waiting on you in this project:`,
+    ...items.map(decisionLine),
+    ...(total > items.length ? [`…and ${total - items.length} more on Home.`] : []),
+    runs.length === 0 ? "No run is in progress." : "Runs in progress:",
+    ...runs.map(runLine),
+  ];
+  return {
+    intent,
+    text: text.join("\n"),
+    basis: "OBSERVED",
+    sources: [...items.map(decisionSource), ...runs.map(jobSource)],
   };
 }
 

@@ -1,7 +1,7 @@
 import { useId, useState, type ReactNode } from "react";
 import { getRouteApi } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { Plan, PlanStatus, PlanStep, PlanStepAction, PlanStepStatus, SourceRef } from "@nexus/contracts";
+import type { Plan, PlanStatus, PlanStep, PlanStepAction, PlanStepStatus } from "@nexus/contracts";
 import { api, keys } from "../lib/api.ts";
 import { ago, clock, useNow } from "../lib/queries.ts";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
@@ -10,6 +10,7 @@ import { useWatchlists } from "./research.tsx";
 import { PICK_PROJECT, useScope, type Scope } from "./scope.tsx";
 import { EmptyZone, Node, nodeGrid } from "./zones.tsx";
 import { AGENT_LABEL } from "./agentLabels.ts";
+import { SOURCE_DRAWER } from "./Talk.tsx";
 
 // EPIC AGT FR-AGT-01/09: the Plans area and the plan:<uuid> drawer. The model only drafts; the owner approves
 // the exact hash; each step succeeds only on its source record, which the drawer cites.
@@ -87,6 +88,7 @@ export function useCreatePlan(onCreated?: () => void) {
     onSuccess: (p) => {
       setLast(null);
       void queryClient.invalidateQueries({ queryKey: keys.plans });
+      void queryClient.invalidateQueries({ queryKey: keys.homeAll });
       onCreated?.();
       void navigate({ search: { ...scope.keep, drawer: `plan:${p.id}` } });
     },
@@ -251,6 +253,7 @@ function PlanBody({ plan: p }: { plan: Plan }) {
   const onDone = (updated: Plan) => {
     queryClient.setQueryData(keys.plan(p.id), updated);
     void queryClient.invalidateQueries({ queryKey: keys.plans });
+    void queryClient.invalidateQueries({ queryKey: keys.homeAll });
   };
   const decide = useMutation({
     mutationFn: (decision: "approve" | "deny") => api.decidePlan(p.id, { decision, planHash: p.planHash }),
@@ -431,7 +434,7 @@ function Gaps({ plan: p }: { plan: Plan }) {
 }
 
 // Evidence that opens its own drawer: a run, or a deep dive in the Research drawer.
-const OPENS: Partial<Record<SourceRef["kind"], string>> = { JOB: "run", DEEP_DIVE: "research" };
+const OPENS = SOURCE_DRAWER;
 
 function StepRow({ s, action, onOpen }: { s: PlanStep; action: string; onOpen: (drawer: string) => void }) {
   return (

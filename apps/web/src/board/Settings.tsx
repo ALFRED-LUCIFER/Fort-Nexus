@@ -333,7 +333,8 @@ function Limits() {
           />
         </span>
         <span className="font-mono text-[11.5px] text-ink3">
-          resets {resets} ({b.timezone}) · provider-reported estimates, not an invoice
+          resets {resets} ({b.timezone}) · provider-reported estimates, plus the full cap of work still
+          running; not an invoice
         </span>
         {b.exhausted && (
           <p role="status" className="m-0 text-[12.5px] text-coral">

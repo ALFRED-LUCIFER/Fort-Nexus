@@ -215,7 +215,7 @@ export function resolveRepository(
 /** The issue NEXUS would create, built by the server from the model's fields: all of them neutralised. */
 function newIssueText(id: string, j: Extract<DraftedJob, { kind: "NEW_ISSUE" }>) {
   const content = [
-    inert(j.summary),
+    inertLines(j.summary),
     "",
     "## Acceptance criteria",
     "",

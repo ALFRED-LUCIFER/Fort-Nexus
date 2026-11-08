@@ -16,7 +16,10 @@ import type {
   ThreadList,
   WorkspaceList,
 } from "@nexus/contracts";
-import { createDb } from "../src/db/index.ts";
+import { eq } from "drizzle-orm";
+import { createDb, type Db } from "../src/db/index.ts";
+import { approvals, jobs } from "../src/db/schema.ts";
+import { jobDrafts } from "../src/job-drafts/schema.ts";
 import { canonical, sha256 } from "../src/jobs.ts";
 import type { DeepDives } from "../src/plans/deep-dives.ts";
 import { fakeDeepDives } from "./helpers/fake-deep-dives.ts";
@@ -152,6 +155,7 @@ function fakeProviders() {
 let t: TestApp;
 let app: FastifyInstance;
 let sql: pg.Pool;
+let db: Db;
 let cookie: string;
 let dir: string;
 let aiFile: string;
@@ -252,7 +256,7 @@ beforeAll(async () => {
   );
   t = await createTestApp({ NEXUS_AI_FILE: aiFile });
   app = t.app;
-  ({ pool: sql } = createDb(t.databaseUrl));
+  ({ pool: sql, db } = createDb(t.databaseUrl));
   cookie = await ownerSession(t);
   ws = (await call("GET", "/v1/workspaces")).json() as WorkspaceList;
   home = ws.items.find((w) => w.mode === "DEV")!.projects.find((p) => p.slug === "home")!;
@@ -468,6 +472,181 @@ describe("source-aware claims (FR-CWV-07, FR-CXR-04)", () => {
     expect(noSource.assistantTurn).toMatchObject({ basis: "NONE", sources: [] });
     expect(noSource.assistantTurn.text).toMatch(/No business source/);
     expect(noSource.assistantTurn.text).not.toMatch(/\d/);
+  });
+});
+
+// The Cofounder panel's chips: "What's waiting on me?", "Summarize today's runs", "What failed?".
+describe("waiting on you and run summaries (Cofounder chips)", () => {
+  /** A DEV_ISSUE_TO_PR run at the push gate with its pending approval, titled as issue-to-pr.ts titles the PR. */
+  async function pushGate(p: Project, initiatorId: string) {
+    const request = {
+      jobType: "DEV_ISSUE_TO_PR" as const,
+      repositoryId: "101",
+      issueNumber: 1,
+      projectId: p.id,
+      budget: { maxWallClockMinutes: 45, maxTurns: 60, maxCostUsd: 5 },
+    };
+    const [job] = await db
+      .insert(jobs)
+      .values({
+        initiatorId,
+        projectId: p.id,
+        jobType: request.jobType,
+        agent: "DEVELOPER",
+        status: "AWAITING_APPROVAL",
+        riskTier: "R1",
+        request,
+        requestHash: randomBytes(32).toString("hex"),
+        idempotencyKey: `seed-${randomUUID()}`,
+      })
+      .returning();
+    const [approval] = await db
+      .insert(approvals)
+      .values({
+        jobId: job!.id,
+        projectId: p.id,
+        riskTier: "R2",
+        status: "PENDING",
+        action: {
+          type: "github.push_draft_pr",
+          repositoryId: "101",
+          repositoryFullName: "acme/web",
+          issueNumber: 1,
+          baseBranch: "main",
+          baseSha: BASE_SHA,
+          headBranch: "nexus/1-typecheck",
+          title: "#1: Add typecheck npm script",
+          body: "",
+          changesetSha256: "b".repeat(64),
+          files: [{ path: "package.json", change: "modified" }],
+          stats: { added: 1, removed: 0 },
+          verification: {
+            status: "passed",
+            reason: null,
+            source: "package.json",
+            install: null,
+            test: ["npm", "test"],
+            exitCode: 0,
+            durationMs: 1000,
+            outputTail: "",
+          },
+        },
+        actionHash: randomBytes(32).toString("hex"),
+        expiresAt: new Date(Date.now() + 60 * 60_000),
+      })
+      .returning();
+    return { job: job!, approval: approval! };
+  }
+  const draft = async (p: Project, ownerId: string, issueTitle: string) =>
+    (
+      await db
+        .insert(jobDrafts)
+        .values({
+          workspaceId: p.workspaceId,
+          projectId: p.id,
+          ownerId,
+          idempotencyKey: randomUUID(),
+          requestHash: "0".repeat(64),
+          status: "READY",
+          text: "add a typecheck script",
+          issueTitle,
+          budget: { maxWallClockMinutes: 45, maxTurns: 60, maxCostUsd: 5 },
+        })
+        .returning()
+    )[0]!;
+  const ownerOf = async (jobId: string) =>
+    (await sql.query<{ id: string }>(`select initiator_id as id from jobs where id = $1`, [jobId])).rows[0]!
+      .id;
+
+  it("answers what waits on the owner from Home's records, with sources, plus the runs in progress", async () => {
+    const p = await newProject("DEV", true);
+    const running = await diagnosticJob(p.id);
+    const ownerId = await ownerOf(running);
+    const gate = await pushGate(p, ownerId);
+    const ready = await draft(p, ownerId, "Add typecheck script");
+    await draft(home, ownerId, "Decoy in another project");
+    const thread = await newThread({ projectId: p.id });
+
+    const empty = await turn(
+      (await newThread({ projectId: (await newProject("DEV")).id })).id,
+      "What's waiting on me?",
+      toolCall({ kind: "WAITING_ON_YOU" }),
+    );
+    expect(empty.assistantTurn).toMatchObject({
+      text: "Nothing is waiting on you in this project.\nNo run is in progress.",
+      basis: "OBSERVED",
+      sources: [],
+    });
+
+    const r = await turn(
+      thread.id,
+      "What's running right now and what is waiting on me?",
+      toolCall({ kind: "WAITING_ON_YOU" }),
+    );
+    expect(fake.modelRequests.at(-1)!.system).toMatch(
+      /WAITING_ON_YOU: .*both what is running and what is waiting/,
+    );
+    const lines = r.assistantTurn.text.split("\n");
+    expect(lines[0]).toBe("2 things are waiting on you in this project:");
+    expect(lines[1]).toBe("• Job draft to review: Add typecheck script");
+    expect(lines[2]).toMatch(/^• Push approval: #1 Add typecheck npm script \(expires \d\d:\d\d\)$/);
+    expect(lines[3]).toBe("Runs in progress:");
+    expect(lines.slice(4)).toEqual([`• Run ${running.slice(-8)} (diagnostic node-version): queued`]);
+    expect(r.assistantTurn.text).not.toMatch(/Decoy/);
+    expect(r.assistantTurn).toMatchObject({ intent: { kind: "WAITING_ON_YOU" }, basis: "OBSERVED" });
+    expect(r.assistantTurn.sources.map((s) => [s.kind, s.id])).toEqual([
+      ["JOB_DRAFT", ready.id],
+      ["JOB", gate.job.id],
+      ["JOB", running],
+    ]);
+    expect(r.assistantTurn.sources[1]!.label).toBe("push approval · #1 Add typecheck npm script");
+
+    // Once the push is decided it no longer waits; its run is listed as in progress instead.
+    await db.update(approvals).set({ status: "APPROVED" }).where(eq(approvals.id, gate.approval.id));
+    const after = await turn(thread.id, "and now?", toolCall({ kind: "WAITING_ON_YOU" }));
+    expect(after.assistantTurn.text).toMatch(/^1 thing is waiting on you in this project:\n• Job draft/);
+    expect(after.assistantTurn.sources.map((s) => s.id)).toEqual([ready.id, gate.job.id, running]);
+  });
+
+  it("summarises today's runs by outcome, lists what's running and what failed with its reason", async () => {
+    const p = await newProject("DEV");
+    const thread = await newThread({ projectId: p.id });
+    const none = await turn(thread.id, "What failed?", toolCall({ kind: "LIST_RUNS", status: "FAILED" }));
+    expect(none.assistantTurn.text).toBe("No run failed in this project in the last 7 days.");
+
+    const [a, b, c] = [await diagnosticJob(p.id), await diagnosticJob(p.id), await diagnosticJob(p.id)];
+    await sql.query(`update jobs set status = 'FAILED', outcome = 'COMMAND_FAILED' where id = $1`, [a]);
+    await sql.query(
+      `insert into run_events (job_id, sequence, occurred_at, type, actor, payload) values ($1, 4, now(), 'job.failed', 'runner:x', '{"reason":"COMMAND_FAILED"}')`,
+      [a],
+    );
+    await sql.query(`update jobs set status = 'COMPLETED' where id = $1`, [b]);
+    await diagnosticJob(home.id); // another project's run never counts
+
+    const today = await turn(
+      thread.id,
+      "Summarize today's runs",
+      toolCall({ kind: "LIST_RUNS", period: "TODAY" }),
+    );
+    expect(today.assistantTurn.text).toMatch(
+      /^Today \(\d{4}-\d\d-\d\d\): 3 runs started: 1 completed, 1 failed, 1 in progress\.\n/,
+    );
+    expect(today.assistantTurn.sources.map((s) => s.id)).toEqual([c, b, a]);
+
+    const failed = await turn(thread.id, "What failed?", toolCall({ kind: "LIST_RUNS", status: "FAILED" }));
+    expect(failed.assistantTurn.text).toBe(
+      `1 run that failed in the last 7 days. No pull request came out of them:\n• Run ${a.slice(-8)} (diagnostic node-version): failed (COMMAND_FAILED)`,
+    );
+    expect(failed.assistantTurn.sources.map((s) => s.kind)).toEqual(["JOB", "RUN_EVENT"]);
+
+    const active = await turn(
+      thread.id,
+      "What's running?",
+      toolCall({ kind: "LIST_RUNS", status: "ACTIVE" }),
+    );
+    expect(active.assistantTurn.text).toBe(
+      `1 run in progress:\n• Run ${c.slice(-8)} (diagnostic node-version): queued`,
+    );
   });
 });
 

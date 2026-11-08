@@ -1,5 +1,5 @@
-import { and, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
-import type { CreateJobRequest, RunnerEventInput, SystemControls } from "@nexus/contracts";
+import { and, eq, gte, inArray, isNull, lt, ne, sql } from "drizzle-orm";
+import type { CreateJobRequest, JobStatus, RunnerEventInput, SystemControls } from "@nexus/contracts";
 import { audit } from "./audit.ts";
 import type { Db, Tx } from "./db/index.ts";
 import { aiSpend, jobs, systemControls, type AiSpendSource } from "./db/schema.ts";
@@ -35,21 +35,44 @@ export async function assertNotStopped(tx: Db | Tx) {
     );
 }
 
+// While an issue run's agent may still be spending (or NEXUS lost sight of it), its whole cost cap is reserved; once
+// it stopped, only the cost the runner reported counts (none reported = nothing spent, e.g. cancelled while queued).
+const RESERVING: readonly JobStatus[] = [
+  "DRAFT",
+  "VALIDATING",
+  "QUEUED",
+  "PREPARING",
+  "RUNNING",
+  "VERIFYING",
+  "RECOVERY_REQUIRED",
+];
+const jobSpend = sql`case when ${jobs.jobType} = 'DEV_ISSUE_TO_PR' and ${inArray(jobs.status, [...RESERVING])}
+  then greatest(coalesce(${jobs.estimatedCostUsd}, 0), (${jobs.request}->'budget'->>'maxCostUsd')::numeric)
+  else coalesce(${jobs.estimatedCostUsd}, 0) end`;
+
 /**
- * Today's spend in the owner's timezone, for work created since local midnight: the cost estimates of jobs plus the
- * AI spend ledger, where an unsettled reservation counts in full.
+ * Today's spend in the owner's timezone, for work created since local midnight: each job's reported cost, or its
+ * whole cap while it may still spend (RESERVING), plus the AI spend ledger, where an unsettled reservation counts in
+ * full. A job is counted once: by its cap or by its reported cost, never both. `exceptJobId` leaves one job out
+ * (a lease sizes that job's cap from what the others leave).
  */
-async function budgetStatus(db: Db | Tx, timezone: string, now: Date) {
+async function budgetStatus(db: Db | Tx, timezone: string, now: Date, exceptJobId?: string) {
   const local = sql`(${now.toISOString()}::timestamptz at time zone ${timezone}::text)`;
   const dayStart = sql`date_trunc('day', ${local}) at time zone ${timezone}::text`;
   const dayEnd = sql`(date_trunc('day', ${local}) + interval '1 day') at time zone ${timezone}::text`;
   const [row] = await db
     .select({
-      spent: sql`coalesce(sum(${jobs.estimatedCostUsd}), 0)`.mapWith(Number),
+      spent: sql`coalesce(sum(${jobSpend}), 0)`.mapWith(Number),
       resetsAt: sql`${dayEnd}`.mapWith(jobs.createdAt),
     })
     .from(jobs)
-    .where(and(gte(jobs.createdAt, dayStart), lt(jobs.createdAt, dayEnd)));
+    .where(
+      and(
+        gte(jobs.createdAt, dayStart),
+        lt(jobs.createdAt, dayEnd),
+        exceptJobId ? ne(jobs.id, exceptJobId) : undefined,
+      ),
+    );
   const [ledger] = await db
     .select({
       spent: sql`coalesce(sum(coalesce(${aiSpend.costUsd}, ${aiSpend.reservedUsd})), 0)`.mapWith(Number),
@@ -116,12 +139,20 @@ async function assertFits(tx: Db | Tx, max: number, timezone: string, what: stri
     );
 }
 
-/** Create guard: not stopped, and an issue run's cost cap fits in what is left of today's budget. */
+/**
+ * Create guard: not stopped, and an issue run's cost cap fits in what is left of today's budget, where every other
+ * run still going counts its whole cap (`budgetStatus`). For an issue run the controls row is locked for update
+ * (the lock order of every reservation), so parallel creates queue here and each sees the others' caps: N runs
+ * can't each pass against the same remainder. Inside the create transaction, the new job's insert reserves its cap.
+ */
 export async function assertCanStart(tx: Db | Tx, body: CreateJobRequest, timezone: string) {
-  await assertNotStopped(tx);
-  if (body.jobType !== "DEV_ISSUE_TO_PR") return;
-  // shortcut: counts reported spend only, not the unspent caps of runs still going; the lease clamp bounds each
-  // new run, but parallel runs can overshoot by their caps. Reserve caps at create if parallel runs become common.
+  if (body.jobType !== "DEV_ISSUE_TO_PR") return assertNotStopped(tx);
+  if ((await controls(tx, "update")).emergencyStopEngaged)
+    throw new HttpError(
+      409,
+      "EMERGENCY_STOP",
+      "Emergency stop is engaged: nothing new can start and approvals can't execute until you release it.",
+    );
   await assertFits(tx, body.budget.maxCostUsd, timezone, "run");
 }
 
@@ -170,13 +201,14 @@ export async function settleAiSpend(db: Db | Tx, spendId: string, costUsd: numbe
 }
 
 /**
- * The request a runner leases: an issue run's cost cap is lowered to what is left of today's budget
- * (whole cents). null when less than a cent is left: the caller fails the job instead of starting it.
+ * The request a runner leases: an issue run's cost cap is lowered to what the rest of today's spend leaves (whole
+ * cents; its own reservation doesn't count against it). null when less than a cent is left: the caller fails the
+ * job instead of starting it.
  */
 export async function leaseRequest(db: Db, job: JobRow, timezone: string): Promise<CreateJobRequest | null> {
   const r = job.request;
   if (r.jobType !== "DEV_ISSUE_TO_PR") return r;
-  const left = Math.floor((await budgetStatus(db, timezone, new Date())).remainingUsd * 100) / 100;
+  const left = Math.floor((await budgetStatus(db, timezone, new Date(), job.id)).remainingUsd * 100) / 100;
   if (left <= 0) return null;
   return left < r.budget.maxCostUsd ? { ...r, budget: { ...r.budget, maxCostUsd: left } } : r;
 }

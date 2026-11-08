@@ -90,6 +90,7 @@ export function useCreateJobDraft(onCreated?: () => void) {
       setLast(null);
       queryClient.setQueryData(keys.jobDraft(d.id), d);
       void queryClient.invalidateQueries({ queryKey: LISTS });
+      void queryClient.invalidateQueries({ queryKey: keys.homeAll });
       onCreated?.();
       void navigate({ search: { ...scope.keep, drawer: `jobdraft:${d.id}` } });
     },
@@ -402,6 +403,7 @@ function DraftBody({ d, stale }: { d: JobDraft; stale: Error | null }) {
   const saved = (next: JobDraft) => {
     queryClient.setQueryData(keys.jobDraft(d.id), next);
     void queryClient.invalidateQueries({ queryKey: LISTS });
+    void queryClient.invalidateQueries({ queryKey: keys.homeAll });
   };
   const makePreview = useMutation({
     mutationFn: async ({ edits, runner }: { edits: UpdateJobDraftRequest | null; runner: string }) => {

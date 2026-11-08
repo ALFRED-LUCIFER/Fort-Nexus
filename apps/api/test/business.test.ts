@@ -848,6 +848,7 @@ describe("Talk answers business questions from the gateway (FR-BIZ-07)", () => {
       subjectJobId: null,
       connectorsDir: dir,
       correlationId: randomUUID(),
+      timezone: "UTC",
     };
     return answer({ kind: "BUSINESS_METRIC", metric, day: "2026-10-27", compare }, ctx);
   };

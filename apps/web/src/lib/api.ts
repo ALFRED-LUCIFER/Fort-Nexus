@@ -599,6 +599,8 @@ export const keys = {
   jobDrafts: ["job-drafts"] as const,
   jobDraftsOf: (projectId: string | undefined) => ["job-drafts", "list", projectId ?? "all"] as const,
   jobDraft: (id: string) => ["job-drafts", id] as const,
+  // Every Home variant (each project and "All"): what any decision or new job changes.
+  homeAll: ["home"] as const,
   home: (projectId: string | undefined) => ["home", projectId ?? "all"] as const,
   voice: ["voice"] as const,
 };

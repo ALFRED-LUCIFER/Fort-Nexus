@@ -10,10 +10,12 @@ import {
   useGithubStatus,
   useJobApproval,
   useRepositories,
+  useNow,
   useRunners,
 } from "../lib/queries.ts";
 import { ApprovalGate } from "./approval.tsx";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
+import { Markdown } from "./Markdown.tsx";
 import {
   agentFacts,
   explain,
@@ -21,10 +23,10 @@ import {
   issueStages,
   liveStatus,
   runFacts,
+  tokens,
   toLine,
   useRunEvents,
   verificationOf,
-  type AgentFacts,
   type ChangeType,
   type Stage,
   type StageState,
@@ -62,7 +64,10 @@ function RunBody({ jobId }: { jobId: string }) {
   const status = job.data ? liveStatus(job.data, events) : undefined;
   const terminal = status ? isTerminal(status) : false;
   useEffect(() => {
-    if (terminal || stream === "ended") void queryClient.invalidateQueries({ queryKey: keys.jobs });
+    if (terminal || stream === "ended") {
+      void queryClient.invalidateQueries({ queryKey: keys.jobs });
+      void queryClient.invalidateQueries({ queryKey: keys.homeAll });
+    }
   }, [terminal, stream, queryClient]);
 
   const issueReq = job.data?.request.jobType === "DEV_ISSUE_TO_PR" ? job.data.request : undefined;
@@ -74,7 +79,9 @@ function RunBody({ jobId }: { jobId: string }) {
     (e) => e.type.startsWith("approval.") || e.type === "external_action.completed",
   ).length;
   useEffect(() => {
-    if (gateEvents) void queryClient.invalidateQueries({ queryKey: keys.approvalsBy({ jobId }) });
+    if (!gateEvents) return;
+    void queryClient.invalidateQueries({ queryKey: keys.approvalsBy({ jobId }) });
+    void queryClient.invalidateQueries({ queryKey: keys.homeAll });
   }, [gateEvents, jobId, queryClient]);
 
   const cancel = useMutation({
@@ -82,6 +89,7 @@ function RunBody({ jobId }: { jobId: string }) {
     onSuccess: (j) => {
       queryClient.setQueryData(keys.job(jobId), j);
       void queryClient.invalidateQueries({ queryKey: keys.jobs });
+      void queryClient.invalidateQueries({ queryKey: keys.homeAll });
       void queryClient.invalidateQueries({ queryKey: keys.approvals });
     },
   });
@@ -101,13 +109,25 @@ function RunBody({ jobId }: { jobId: string }) {
   const runnerName =
     runner?.name ?? (j.runnerId ? undefined : runners.data?.find((r) => r.status !== "REVOKED")?.name);
   const facts = runFacts(events);
-  const startedAt = events.find(
-    (e) => e.type === "job.state.changed" && e.payload.to === "RUNNING",
-  )?.occurredAt;
-  const endedAt = terminal ? events.findLast((e) => e.type === "job.state.changed")?.occurredAt : undefined;
+  const startedAt =
+    events.find((e) => e.type === "job.state.changed" && e.payload.to === "RUNNING")?.occurredAt ??
+    j.startedAt ??
+    undefined;
+  const endedAt = terminal
+    ? (events.findLast((e) => e.type === "job.state.changed")?.occurredAt ?? j.finishedAt ?? undefined)
+    : undefined;
   const dur =
     facts.durationMs ??
     (startedAt && endedAt ? new Date(endedAt).getTime() - new Date(startedAt).getTime() : undefined);
+  // A run still going shows the time so far; one that never started says so.
+  const elapsed = (k: string) =>
+    dur !== undefined ? (
+      <Stat k={k} v={duration(dur)} />
+    ) : startedAt && !terminal ? (
+      <Elapsed k={k} since={startedAt} />
+    ) : (
+      <Stat k={k} v={terminal ? "—" : "not started"} />
+    );
 
   const a = approval.data;
   const agent = issueReq ? agentFacts(events) : undefined;
@@ -117,11 +137,15 @@ function RunBody({ jobId }: { jobId: string }) {
     a?.action.repositoryFullName ??
     j.issue?.fullName ??
     repos.data?.items.find((r) => r.id === issueReq?.repositoryId)?.fullName;
-  const sandboxStat = facts.sandbox
-    ? [facts.sandbox.runtime === "none" ? "none · host" : facts.sandbox.runtime, facts.sandbox.image]
+  // Shown only once the runner reported it (no "—" forever when a run never reaches a sandbox).
+  const sandboxStat = facts.sandbox && (
+    <Stat
+      k="sandbox"
+      v={[facts.sandbox.runtime === "none" ? "none · host" : facts.sandbox.runtime, facts.sandbox.image]
         .filter(Boolean)
-        .join(" · ")
-    : "—";
+        .join(" · ")}
+    />
+  );
 
   return (
     <>
@@ -191,7 +215,7 @@ function RunBody({ jobId }: { jobId: string }) {
                 )}
                 <div className="grid grid-cols-2 gap-2.5">
                   <Stat k="status" v={statusLabel(status)} />
-                  <Stat k="elapsed" v={dur === undefined ? "—" : duration(dur)} />
+                  {elapsed("elapsed")}
                   <Stat k="turns" v={`${agent.turns ?? "—"} / ${issueReq.budget.maxTurns}`} />
                   <Stat
                     k="cost (estimate)"
@@ -206,7 +230,7 @@ function RunBody({ jobId }: { jobId: string }) {
                     k="runner"
                     v={runner?.name ?? (j.runnerId ? j.runnerId.slice(0, 8) : "not claimed yet")}
                   />
-                  <Stat k="sandbox" v={sandboxStat} />
+                  {sandboxStat}
                 </div>
               </div>
             </div>
@@ -219,9 +243,11 @@ function RunBody({ jobId }: { jobId: string }) {
                 <h3 id="agent-report" className="kicker m-0">
                   Agent report (unverified)
                 </h3>
-                <p className="m-0 text-[13px] leading-[1.55] break-words whitespace-pre-wrap text-ink2">
-                  {agent.report}
-                </p>
+                <Markdown
+                  text={agent.report}
+                  headingLevel={4}
+                  className="text-[13px] leading-[1.55] text-ink2"
+                />
               </section>
             )}
           </>
@@ -229,9 +255,9 @@ function RunBody({ jobId }: { jobId: string }) {
           <div className="grid flex-none grid-cols-2 gap-2.5 sm:grid-cols-5">
             <Stat k="status" v={statusLabel(status)} />
             <Stat k="runner" v={runner?.name ?? (j.runnerId ? j.runnerId.slice(0, 8) : "not claimed yet")} />
-            <Stat k="duration" v={dur === undefined ? "—" : duration(dur)} />
+            {elapsed("duration")}
             <Stat k="exit code" v={facts.exitCode === undefined ? "—" : String(facts.exitCode)} />
-            <Stat k="sandbox" v={sandboxStat} />
+            {sandboxStat}
           </div>
         )}
         {!terminal && status !== "RECOVERY_REQUIRED" && (
@@ -341,9 +367,11 @@ function Stat({ k, v }: { k: string; v: string }) {
   );
 }
 
-const tokens = (f: AgentFacts) =>
-  f.inputTokens === undefined ? "—" : `${kilo(f.inputTokens)} / ${kilo(f.outputTokens ?? 0)}`;
-const kilo = (n: number) => (n < 1000 ? String(n) : `${Math.round(n / 1000)}k`);
+/** Time so far for a run that is still going; its own component so only it re-renders every second. */
+function Elapsed({ k, since }: { k: string; since: string }) {
+  const now = useNow();
+  return <Stat k={`${k} (so far)`} v={duration(Math.max(0, Math.round(now - new Date(since).getTime())))} />;
+}
 
 const CHANGE_TONE: Record<ChangeType, string> = {
   added: "var(--green)",

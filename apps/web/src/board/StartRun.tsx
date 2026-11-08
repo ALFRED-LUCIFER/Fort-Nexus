@@ -103,6 +103,7 @@ export function StartRunPreview({
     mutationFn: () => api.createJob(IssueJob.parse(body), idemKey),
     onSuccess: (res) => {
       void queryClient.invalidateQueries({ queryKey: keys.jobs });
+      void queryClient.invalidateQueries({ queryKey: keys.homeAll });
       void navigate({ search: { ...keep, drawer: `run:${res.jobId}` } });
     },
   });

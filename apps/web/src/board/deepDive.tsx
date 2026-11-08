@@ -249,6 +249,7 @@ function StartDeepDive({
       setQuestion("");
       onSeedChange([]);
       void queryClient.invalidateQueries({ queryKey: keys.deepDivesOf(projectId) });
+      void queryClient.invalidateQueries({ queryKey: keys.homeAll });
       onStarted(d.id);
     },
   });

@@ -42,6 +42,9 @@ export const SourceRef = z.object({
     "DEEP_DIVE",
     "OPPORTUNITY",
     "WEB_PAGE",
+    "PLAN",
+    "JOB_DRAFT",
+    "INCIDENT",
   ]),
   id: z.string().max(200),
   label: z.string().max(200),
@@ -57,7 +60,15 @@ export type Basis = z.infer<typeof Basis>;
 // The typed router's output (FR-CXR-03). Unknown or shell-like requests become UNSUPPORTED, never an action.
 export const Intent = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("RUN_STATUS"), jobId: z.uuid().optional() }),
-  z.strictObject({ kind: z.literal("LIST_RUNS") }),
+  // status: only runs in progress (ACTIVE) or that failed in the last 7 days (FAILED); period TODAY: today's runs,
+  // summarised by outcome.
+  z.strictObject({
+    kind: z.literal("LIST_RUNS"),
+    status: z.enum(["ACTIVE", "FAILED"]).optional(),
+    period: z.literal("TODAY").optional(),
+  }),
+  // What waits on the owner (the records behind Home's "Waiting on you"), plus the runs still in progress.
+  z.strictObject({ kind: z.literal("WAITING_ON_YOU") }),
   z.strictObject({
     kind: z.literal("START_ISSUE_RUN"),
     repositoryFullName: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),

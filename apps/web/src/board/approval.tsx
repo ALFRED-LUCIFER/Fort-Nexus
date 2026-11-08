@@ -45,6 +45,7 @@ export function DecisionButtons({
       setConfirming(null);
       void queryClient.invalidateQueries({ queryKey: keys.approvals });
       void queryClient.invalidateQueries({ queryKey: keys.jobs });
+      void queryClient.invalidateQueries({ queryKey: keys.homeAll });
     },
   });
   const error =

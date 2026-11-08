@@ -13,9 +13,11 @@ import {
   job,
   json,
   mockFetch,
+  quietHome,
   renderApp,
   runner,
 } from "../test/helpers.tsx";
+import { keys } from "../lib/api.ts";
 import { issueStages } from "./runEvents.ts";
 
 const T0 = "2026-10-28T10:00:00.000Z";
@@ -101,6 +103,7 @@ const approval = (over: Partial<Approval> = {}): Approval => ({
   ...over,
 });
 
+let queryClient: ReturnType<typeof renderApp>["queryClient"];
 function open(j: Job, extra: Parameters<typeof mockFetch>[0] = {}) {
   const calls = mockFetch({
     "GET /v1/me": () => json(ME),
@@ -109,7 +112,7 @@ function open(j: Job, extra: Parameters<typeof mockFetch>[0] = {}) {
     [`GET /v1/jobs/${JOB_ID}`]: () => json(j),
     ...extra,
   });
-  renderApp(`${IN_PROJECT}&drawer=run:${JOB_ID}`);
+  ({ queryClient } = renderApp(`${IN_PROJECT}&drawer=run:${JOB_ID}`));
   return calls;
 }
 
@@ -251,10 +254,25 @@ describe("approval gate", () => {
     });
     const user = userEvent.setup();
     const gate = await screen.findByRole("region", { name: `Push ${HEAD} and open a draft PR?` });
+    // Home (this project's and "All") still lists the push as waiting: the decision must make both stale now.
+    queryClient.setQueryData(keys.home(PROJECT_ID), quietHome());
+    queryClient.setQueryData(keys.home(undefined), quietHome());
     await user.click(within(gate).getByRole("button", { name: "Deny" }));
     expect(screen.queryByRole("alertdialog")).toBeNull();
     await waitFor(() => expect(decisions(calls)).toHaveLength(1));
     expect(decisions(calls)[0]!.body).toEqual({ decision: "deny", actionHash: HASH });
+    // The project's Home is on screen (Today under the drawer): it refetches at once. "All" isn't: it goes stale.
+    const decidedAt = calls.indexOf(decisions(calls)[0]!);
+    await waitFor(() =>
+      expect(
+        calls
+          .slice(decidedAt + 1)
+          .some(
+            (c) => c.method === "GET" && c.path === "/v1/home" && c.query.get("projectId") === PROJECT_ID,
+          ),
+      ).toBe(true),
+    );
+    expect(queryClient.getQueryState(keys.home(undefined))?.isInvalidated).toBe(true);
     expect(
       await screen.findByRole("region", { name: "You denied this push. Nothing was pushed." }),
     ).toBeTruthy();
@@ -483,7 +501,7 @@ describe("issue run", () => {
     expect(term.querySelector("[data-alert]")!.textContent).toMatch(
       /Blocked: network blocked → github\.com:443/,
     );
-    expect(term.textContent).toMatch(/12 turns · 412000 in \/ 38000 out tokens · \$0\.84 \(estimate\)/);
+    expect(term.textContent).toMatch(/12 turns · 412k \/ 38k tokens in \/ out · \$0\.84 \(estimate\)/);
 
     const tile = (k: string) =>
       screen.getByText(k, { selector: "span.font-mono" }).nextElementSibling!.textContent;
@@ -493,6 +511,85 @@ describe("issue run", () => {
     expect(tile("branch")).toBe("named when changes are ready");
     const report = screen.getByRole("region", { name: "Agent report (unverified)" });
     expect(report.textContent).toMatch(/Fixed rounding\. All tests pass\./);
+  });
+
+  it("counts cached input, names the agent's sandbox, ticks elapsed time and counts the changeset's files", async () => {
+    const started = new Date(Date.now() - 90_000).toISOString();
+    open(issueJob({ status: "AWAITING_APPROVAL", startedAt: started }), {
+      "GET /v1/approvals": () => json({ items: [approval()] }),
+    });
+    const es = await stream();
+    act(() => {
+      es.emit(SSE_RUN_EVENT, { ...event(1, "job.state.changed", { to: "RUNNING" }), occurredAt: started });
+      es.emit(
+        SSE_RUN_EVENT,
+        event(2, "agent.started", {
+          engine: "claude-agent-sdk",
+          model: "claude-x",
+          sandbox: { runtime: "docker-desktop", image: "nexus-sandbox:3", container: "nx-1", network: "n" },
+        }),
+      );
+      es.emit(
+        SSE_RUN_EVENT,
+        event(3, "agent.message", {
+          kind: "summary",
+          turns: 4,
+          estimatedCostUsd: 0.12,
+          usage: {
+            inputTokens: 10,
+            outputTokens: 1_200,
+            cacheReadInputTokens: 9_000,
+            cacheCreationInputTokens: 2_990,
+          },
+          text: "## Done\n\n- Added `typecheck`\n- [x] Ran **tsc**\n\n```sh\nnpm run typecheck\n```",
+        }),
+      );
+      es.emit(SSE_RUN_EVENT, event(4, "artifact.created", { kind: "diff", fileCount: 2, secretLeak: false }));
+      // The API's changeset copy has no fileCount: it is counted from its files.
+      es.emit(
+        SSE_RUN_EVENT,
+        event(5, "artifact.created", {
+          artifactType: "changeset",
+          files: approval().action.files,
+          stats: { added: 12, removed: 3 },
+        }),
+      );
+    });
+    const term = screen.getByRole("region", { name: "Run output" });
+    await waitFor(() => expect(term.querySelectorAll("[data-seq]")).toHaveLength(5));
+    expect(term.textContent).toMatch(/4 turns · 12k \/ 1k · 12k from cache tokens in \/ out/);
+    expect(term.textContent).toMatch(/2 files changed/);
+    expect(term.textContent).toMatch(/changeset for your review · 2 files changed · \+12 −3/);
+    expect(term.textContent).not.toMatch(/\?/);
+
+    const tile = (k: string) =>
+      screen.getByText(k, { selector: "span.font-mono" }).nextElementSibling!.textContent;
+    expect(tile("tokens in / out")).toBe("12k / 1k · 12k from cache");
+    expect(tile("sandbox")).toBe("docker-desktop · nexus-sandbox:3");
+    expect(tile("elapsed (so far)")).toMatch(/^1m 3\ds$/);
+
+    // The agent's report is Markdown, shown as structure: heading, list, checkbox, inline and fenced code.
+    const report = screen.getByRole("region", { name: "Agent report (unverified)" });
+    expect(within(report).getByRole("heading", { name: "Done" })).toBeTruthy();
+    expect(
+      within(report)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual(["Added typecheck", "Ran tsc"]);
+    expect(within(report).getByRole("checkbox")).toHaveProperty("checked", true);
+    expect(within(report).getByText("typecheck").tagName).toBe("CODE");
+    expect(within(report).getByLabelText("sh code").textContent).toBe("npm run typecheck");
+  });
+
+  it("drops the sandbox tile until the runner reports one", async () => {
+    open(issueJob({ status: "QUEUED" }), { "GET /v1/approvals": () => json({ items: [] }) });
+    const es = await stream();
+    act(() => es.emit(SSE_RUN_EVENT, event(1, "agent.message", { kind: "summary", turns: 1 })));
+    await screen.findByText("tokens in / out");
+    expect(screen.queryByText("sandbox", { selector: "span.font-mono" })).toBeNull();
+    expect(screen.getByText("elapsed", { selector: "span.font-mono" }).nextElementSibling!.textContent).toBe(
+      "not started",
+    );
   });
 });
 

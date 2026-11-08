@@ -337,9 +337,45 @@ describe("daily budget", () => {
     expect(await leasedBudget(fits)).toMatchObject({ maxCostUsd: 1.23 });
     await spendToday(5.999);
     expect(await leaseRequest(db, fits, "Asia/Dubai")).toBeNull();
+    expect((await system()).budget.exhausted).toBe(true); // the queued run still reserves its $4
+    await sql.query(`update jobs set status = 'CANCELLED' where id = $1`, [fits.id]);
     expect((await system()).budget.exhausted).toBe(false);
     await spendToday(6);
     expect((await system()).budget.exhausted).toBe(true);
+  });
+
+  it("reserves the cap of every run still going: parallel creates can't all fit; a stopped run counts its cost", async () => {
+    await sql.query(`update jobs set estimated_cost_usd = null`);
+    await owner("PUT", "/v1/system/budget", { dailyCapUsd: 10 });
+
+    // Three $4 runs at once against $10: the creates queue on the controls row and only two fit.
+    const settled = await Promise.allSettled([createIssueJob(4), createIssueJob(4), createIssueJob(4)]);
+    const created = settled.flatMap((s) => (s.status === "fulfilled" ? [s.value] : []));
+    const refused = settled.flatMap((s) => (s.status === "rejected" ? [s.reason as { code: string }] : []));
+    expect(created).toHaveLength(2);
+    expect(refused.map((e) => e.code)).toEqual(["BUDGET_EXHAUSTED"]);
+    const [a, b] = created as [
+      Awaited<ReturnType<typeof createIssueJob>>,
+      Awaited<ReturnType<typeof createIssueJob>>,
+    ];
+    // Reserved, not reported: the budget shows both caps once, with nothing double counted.
+    expect((await system()).budget.spentTodayUsd).toBe(8);
+    // A lease sizes the run from what the others leave: its own reservation doesn't count against it.
+    expect(await leasedBudget(a)).toEqual(issueJob(4).budget);
+
+    // a ran and reported $0.50: only that counts now. b was cancelled while queued: its cap is free again.
+    await sql.query(`update jobs set status = 'COMPLETED', estimated_cost_usd = 0.5 where id = $1`, [a.id]);
+    await sql.query(`update jobs set status = 'CANCELLED' where id = $1`, [b.id]);
+    expect((await system()).budget.spentTodayUsd).toBe(0.5);
+
+    // A run still going that reported more than its cap counts what it reported; at the gate, only its cost.
+    const c = await createIssueJob(2);
+    await sql.query(`update jobs set status = 'RUNNING', estimated_cost_usd = 3 where id = $1`, [c.id]);
+    expect((await system()).budget.spentTodayUsd).toBe(3.5);
+    await sql.query(`update jobs set status = 'QUEUED', estimated_cost_usd = 0.25 where id = $1`, [c.id]);
+    expect((await system()).budget.spentTodayUsd).toBe(2.5);
+    await sql.query(`update jobs set status = 'AWAITING_APPROVAL' where id = $1`, [c.id]);
+    expect((await system()).budget.spentTodayUsd).toBe(0.75);
   });
 
   it("fails an issue run at lease time when nothing is left", async () => {

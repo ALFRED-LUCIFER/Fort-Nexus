@@ -92,6 +92,161 @@ const jobTitle = (j: { issueNumber: number | null; issueTitle: string | null; pr
     ? `#${j.issueNumber} ${j.issueTitle ?? ""}`.trimEnd()
     : `Runner diagnostic${j.preset ? ` · ${j.preset}` : ""}`;
 
+type HomeScope = Awaited<ReturnType<typeof homeScope>>;
+
+/**
+ * What waits on the owner (HomeDecisions): one set of predicates for the counts and the most urgent items, shared by
+ * GET /v1/home and Talk's "what's waiting on me" so the two never disagree.
+ */
+function decisionSources(db: Db, ownerId: string, scope: HomeScope, now: Date) {
+  const scopedJobIds = db.select({ id: jobs.id }).from(jobs).where(scope.jobs);
+  const pendingApproval = and(
+    eq(approvals.status, "PENDING"),
+    gt(approvals.expiresAt, now),
+    inArray(approvals.jobId, scopedJobIds),
+  )!;
+  const pendingPlan = and(
+    scope.of(plans),
+    eq(plans.ownerId, ownerId),
+    eq(plans.status, "DRAFT"),
+    isNotNull(plans.planHash),
+  );
+  const pendingDraft = and(
+    scope.of(jobDrafts),
+    eq(jobDrafts.ownerId, ownerId),
+    inArray(jobDrafts.status, ["READY", "NEEDS_REPO"]),
+  );
+  const openOpportunity = and(scope.of(researchOpportunities), eq(researchOpportunities.status, "OPEN"));
+  const openIncident = and(scope.of(incidents), eq(incidents.status, "OPEN"));
+  const at = (c: AnyPgColumn) => sql<Date>`${c}`.mapWith(c).as("created_at");
+  const noNumber = sql<number | null>`null::int`.as("number");
+  const noExpiry = sql<Date | null>`null::timestamptz`.mapWith(approvals.expiresAt).as("expires_at");
+  const kind = (k: HomeRef["kind"]) => sql<HomeRef["kind"]>`${k}::text`.as("kind");
+  // Open incidents sort before everything else (the union can only order by result columns).
+  const urgency = (k: HomeRef["kind"]) => sql<number>`${k === "INCIDENT" ? 1 : 0}::int`.as("urgency");
+
+  return {
+    where: { pendingApproval },
+    counts: {
+      approvals: db.$count(approvals, pendingApproval),
+      plans: db.$count(plans, pendingPlan),
+      jobDrafts: db.$count(jobDrafts, pendingDraft),
+      opportunities: db.$count(researchOpportunities, openOpportunity),
+      incidents: db.$count(incidents, openIncident),
+    },
+    top: (limit: number) =>
+      unionAll(
+        // An open incident is the most urgent: it sorts before everything else.
+        db
+          .select({
+            kind: kind("INCIDENT"),
+            urgency: urgency("INCIDENT"),
+            id: sql<string>`${incidents.id}`.as("id"),
+            title: sql<string>`${incidents.severity} || ' · ' || ${incidents.title}`.as("title"),
+            number: noNumber,
+            expiresAt: noExpiry,
+            createdAt: at(incidents.openedAt),
+          })
+          .from(incidents)
+          .where(openIncident),
+        // A push approval opens through its run.
+        db
+          .select({
+            kind: kind("JOB"),
+            urgency: urgency("JOB"),
+            id: sql<string>`${approvals.jobId}`.as("id"),
+            title: sql<string>`${approvals.action}->>'title'`.as("title"),
+            number: sql<number | null>`(${approvals.action}->>'issueNumber')::int`.as("number"),
+            expiresAt: sql<Date | null>`${approvals.expiresAt}`.mapWith(approvals.expiresAt).as("expires_at"),
+            createdAt: at(approvals.createdAt),
+          })
+          .from(approvals)
+          .where(pendingApproval),
+        db
+          .select({
+            kind: kind("PLAN"),
+            urgency: urgency("PLAN"),
+            id: sql<string>`${plans.id}`.as("id"),
+            title: sql<string>`${plans.goal}`.as("title"),
+            number: noNumber,
+            expiresAt: noExpiry,
+            createdAt: at(plans.createdAt),
+          })
+          .from(plans)
+          .where(pendingPlan),
+        db
+          .select({
+            kind: kind("JOB_DRAFT"),
+            urgency: urgency("JOB_DRAFT"),
+            id: sql<string>`${jobDrafts.id}`.as("id"),
+            title: sql<string>`coalesce(${jobDrafts.issueTitle}, ${jobDrafts.text})`.as("title"),
+            number: sql<number | null>`${jobDrafts.issueNumber}`.as("number"),
+            expiresAt: noExpiry,
+            createdAt: at(jobDrafts.createdAt),
+          })
+          .from(jobDrafts)
+          .where(pendingDraft),
+        db
+          .select({
+            kind: kind("OPPORTUNITY"),
+            urgency: urgency("OPPORTUNITY"),
+            id: sql<string>`${researchOpportunities.id}`.as("id"),
+            title: sql<string>`${researchOpportunities.title}`.as("title"),
+            number: noNumber,
+            expiresAt: noExpiry,
+            createdAt: at(researchOpportunities.createdAt),
+          })
+          .from(researchOpportunities)
+          .where(openOpportunity),
+      )
+        .orderBy(sql`urgency desc`, sql`created_at desc`, sql`id desc`)
+        .limit(limit),
+  };
+}
+
+type DecisionRow = Awaited<ReturnType<ReturnType<typeof decisionSources>["top"]>>[number];
+
+export type DecisionItem = {
+  ref: HomeRef;
+  title: string;
+  expiresAt: string | null;
+  createdAt: string;
+};
+
+/**
+ * A push approval's title is the PR title, which already starts with "#N: " (issue-to-pr.ts), so the number is
+ * shown once: "#N <title>".
+ */
+function decisionItem(r: DecisionRow): DecisionItem {
+  const title =
+    r.number === null ? r.title : `#${r.number} ${r.title.replace(new RegExp(`^#${r.number}:?\\s+`), "")}`;
+  return {
+    ref: { kind: r.kind, id: r.id },
+    title: cut(title, 300),
+    expiresAt: r.expiresAt?.toISOString() ?? null,
+    createdAt: (r.createdAt as Date).toISOString(), // mapped by the timestamp column it reads
+  };
+}
+
+/** What waits on the owner in one project: the same counts and order as Home's "Waiting on you". */
+export async function waitingOnYou(
+  db: Db,
+  ownerId: string,
+  projectId: string,
+  limit: number,
+  now = new Date(),
+): Promise<{ counts: Omit<HomeDecisions, "top">; items: DecisionItem[] }> {
+  const d = decisionSources(db, ownerId, await homeScope(db, ownerId, projectId), now);
+  const [rows, [counts]] = await Promise.all([
+    d.top(limit),
+    db.select(d.counts).from(user).where(eq(user.id, ownerId)),
+  ]);
+  return {
+    counts: counts ?? { approvals: 0, plans: 0, jobDrafts: 0, opportunities: 0, incidents: 0 },
+    items: rows.map(decisionItem),
+  };
+}
+
 export async function homeSummary(
   db: Db,
   ownerId: string,
@@ -161,30 +316,7 @@ export async function homeSummary(
     .where(and(scope.jobs, inArray(jobs.status, [...ACTIVE, ...NEEDS_YOU])))
     .as("open_jobs");
 
-  const pendingApproval = and(
-    eq(approvals.status, "PENDING"),
-    gt(approvals.expiresAt, now),
-    inArray(approvals.jobId, scopedJobIds),
-  );
-  const pendingPlan = and(
-    scope.of(plans),
-    eq(plans.ownerId, ownerId),
-    eq(plans.status, "DRAFT"),
-    isNotNull(plans.planHash),
-  );
-  const pendingDraft = and(
-    scope.of(jobDrafts),
-    eq(jobDrafts.ownerId, ownerId),
-    inArray(jobDrafts.status, ["READY", "NEEDS_REPO"]),
-  );
-  const openOpportunity = and(scope.of(researchOpportunities), eq(researchOpportunities.status, "OPEN"));
-  const openIncident = and(scope.of(incidents), eq(incidents.status, "OPEN"));
-  const at = (c: AnyPgColumn) => sql<Date>`${c}`.mapWith(c).as("created_at");
-  const noNumber = sql<number | null>`null::int`.as("number");
-  const noExpiry = sql<Date | null>`null::timestamptz`.mapWith(approvals.expiresAt).as("expires_at");
-  const kind = (k: HomeRef["kind"]) => sql<HomeRef["kind"]>`${k}::text`.as("kind");
-  // Open incidents sort before everything else (the union can only order by result columns).
-  const urgency = (k: HomeRef["kind"]) => sql<number>`${k === "INCIDENT" ? 1 : 0}::int`.as("urgency");
+  const d = decisionSources(db, ownerId, scope, now);
 
   const [jobRows, openRows, [dive], stepRows, topRows, [counts], spendRows] = await Promise.all([
     db
@@ -223,82 +355,13 @@ export async function homeSummary(
       .innerJoin(plans, eq(plans.id, planSteps.planId))
       .where(and(scope.of(planSteps), eq(plans.ownerId, ownerId), eq(planSteps.status, "RUNNING")))
       .orderBy(planSteps.agent, sql`${planSteps.startedAt} desc nulls last`),
-    unionAll(
-      // An open incident is the most urgent: it sorts before everything else.
-      db
-        .select({
-          kind: kind("INCIDENT"),
-          urgency: urgency("INCIDENT"),
-          id: sql<string>`${incidents.id}`.as("id"),
-          title: sql<string>`${incidents.severity} || ' · ' || ${incidents.title}`.as("title"),
-          number: noNumber,
-          expiresAt: noExpiry,
-          createdAt: at(incidents.openedAt),
-        })
-        .from(incidents)
-        .where(openIncident),
-      // A push approval opens through its run.
-      db
-        .select({
-          kind: kind("JOB"),
-          urgency: urgency("JOB"),
-          id: sql<string>`${approvals.jobId}`.as("id"),
-          title: sql<string>`${approvals.action}->>'title'`.as("title"),
-          number: sql<number | null>`(${approvals.action}->>'issueNumber')::int`.as("number"),
-          expiresAt: sql<Date | null>`${approvals.expiresAt}`.mapWith(approvals.expiresAt).as("expires_at"),
-          createdAt: at(approvals.createdAt),
-        })
-        .from(approvals)
-        .where(pendingApproval),
-      db
-        .select({
-          kind: kind("PLAN"),
-          urgency: urgency("PLAN"),
-          id: sql<string>`${plans.id}`.as("id"),
-          title: sql<string>`${plans.goal}`.as("title"),
-          number: noNumber,
-          expiresAt: noExpiry,
-          createdAt: at(plans.createdAt),
-        })
-        .from(plans)
-        .where(pendingPlan),
-      db
-        .select({
-          kind: kind("JOB_DRAFT"),
-          urgency: urgency("JOB_DRAFT"),
-          id: sql<string>`${jobDrafts.id}`.as("id"),
-          title: sql<string>`coalesce(${jobDrafts.issueTitle}, ${jobDrafts.text})`.as("title"),
-          number: sql<number | null>`${jobDrafts.issueNumber}`.as("number"),
-          expiresAt: noExpiry,
-          createdAt: at(jobDrafts.createdAt),
-        })
-        .from(jobDrafts)
-        .where(pendingDraft),
-      db
-        .select({
-          kind: kind("OPPORTUNITY"),
-          urgency: urgency("OPPORTUNITY"),
-          id: sql<string>`${researchOpportunities.id}`.as("id"),
-          title: sql<string>`${researchOpportunities.title}`.as("title"),
-          number: noNumber,
-          expiresAt: noExpiry,
-          createdAt: at(researchOpportunities.createdAt),
-        })
-        .from(researchOpportunities)
-        .where(openOpportunity),
-    )
-      .orderBy(sql`urgency desc`, sql`created_at desc`, sql`id desc`)
-      .limit(MAX_TOP),
+    d.top(MAX_TOP),
     // The owner's own row only carries the scalar counts.
     db
       .select({
-        approvals: db.$count(approvals, pendingApproval),
-        plans: db.$count(plans, pendingPlan),
-        jobDrafts: db.$count(jobDrafts, pendingDraft),
-        opportunities: db.$count(researchOpportunities, openOpportunity),
-        incidents: db.$count(incidents, openIncident),
+        ...d.counts,
         newestPush: sql<number | null>`(select (${approvals.action}->>'issueNumber')::int from ${approvals}
-          where ${pendingApproval} order by ${approvals.createdAt} desc limit 1)`,
+          where ${d.where.pendingApproval} order by ${approvals.createdAt} desc limit 1)`,
         pullRequests: db.$count(
           approvals,
           and(
@@ -569,11 +632,7 @@ export async function homeSummary(
     headline,
     decisions: {
       ...decisions,
-      top: topRows.map((r) => ({
-        ref: { kind: r.kind, id: r.id },
-        title: cut(r.number !== null ? `#${r.number} ${r.title}` : r.title, 300),
-        expiresAt: r.expiresAt?.toISOString() ?? null,
-      })),
+      top: topRows.map(decisionItem).map(({ ref, title, expiresAt }) => ({ ref, title, expiresAt })),
     },
     kpis,
     agents,

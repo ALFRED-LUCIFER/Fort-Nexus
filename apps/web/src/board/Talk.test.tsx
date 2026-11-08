@@ -147,6 +147,34 @@ describe("Talk drawer", () => {
     await waitFor(() => expect(router.state.location.search).toMatchObject({ drawer: `run:${JOB}` }));
   });
 
+  it("a 'waiting on you' answer's sources open their own drawers (job draft, plan, incident, opportunity)", async () => {
+    const DRAFT = "88888888-8888-4888-8888-888888888888";
+    const PLAN = "99999999-9999-4999-8999-999999999999";
+    const waiting = detail();
+    waiting.turns.push(
+      turn({
+        id: "77777777-7777-4777-8777-000000000009",
+        role: "ASSISTANT",
+        text: "2 things are waiting on you in this project:\n• Job draft to review: Add typecheck script\n• Plan to approve: Ship it\nNo run is in progress.",
+        intent: { kind: "WAITING_ON_YOU" },
+        basis: "OBSERVED",
+        sources: [
+          { kind: "JOB_DRAFT", id: DRAFT, label: "Add typecheck script", asOf: T0 },
+          { kind: "PLAN", id: PLAN, label: "Ship it", asOf: T0 },
+        ],
+      }),
+    );
+    mockFetch({ ...base, [`GET /v1/conversations/${THREAD}`]: () => json(waiting) });
+    const { router } = renderApp(`/?drawer=talk:${THREAD}`);
+    const log = await screen.findByRole("log", { name: "Conversation" });
+    expect(within(log).getByText(/^2 things are waiting on you/).textContent).toContain(
+      "\n• Plan to approve: Ship it\n",
+    );
+    const user = userEvent.setup();
+    await user.click(within(log).getByRole("button", { name: "job draft · Add typecheck script" }));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ drawer: `jobdraft:${DRAFT}` }));
+  });
+
   it("confirms a proposal with the hash it shows, then links the queued run", async () => {
     let current = proposal();
     const calls = mockFetch({

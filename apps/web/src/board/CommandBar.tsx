@@ -331,6 +331,7 @@ function ExecutePreview({
     mutationFn: (body: CreateJobRequest) => api.createJob(body, idemKey),
     onSuccess: (res) => {
       void queryClient.invalidateQueries({ queryKey: keys.jobs });
+      void queryClient.invalidateQueries({ queryKey: keys.homeAll });
       onQueued(res.jobId);
     },
   });

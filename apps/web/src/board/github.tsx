@@ -18,6 +18,7 @@ import {
   useRunners,
 } from "../lib/queries.ts";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
+import { Markdown } from "./Markdown.tsx";
 import { P1Button } from "./P1Button.tsx";
 import { RepoDetails } from "./repos.tsx";
 import { useScope } from "./scope.tsx";
@@ -481,10 +482,12 @@ function IssueBody({ repoId, number }: { repoId: string; number: number }) {
             Open on GitHub<span className="sr-only"> (new tab)</span> ↗
           </a>
         </div>
-        {/* Markdown source as plain text: React escapes it, nothing is rendered as HTML. */}
-        <p className="m-0 flex-none text-[15px] leading-[1.6] break-words whitespace-pre-wrap text-ink2">
-          {d.body || "No description."}
-        </p>
+        {/* A safe Markdown subset as React elements: React escapes it, nothing is rendered as HTML. */}
+        {d.body ? (
+          <Markdown text={d.body} className="flex-none text-[15px] leading-[1.6] text-ink2" />
+        ) : (
+          <p className="m-0 flex-none text-[15px] leading-[1.6] text-ink2">No description.</p>
+        )}
 
         {d.missingAcceptanceCriteria ? (
           <div
@@ -541,9 +544,7 @@ function IssueBody({ repoId, number }: { repoId: string; number: number }) {
                 <span className="font-mono text-[11px] text-ink3">
                   {c.author ?? "ghost"} · {ago(c.createdAt, now)}
                 </span>
-                <p className="m-0 text-[13px] leading-[1.5] break-words whitespace-pre-wrap text-ink2">
-                  {c.body}
-                </p>
+                <Markdown text={c.body} headingLevel={4} className="text-[13px] leading-[1.5] text-ink2" />
               </div>
             ))}
           </section>

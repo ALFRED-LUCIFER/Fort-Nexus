@@ -425,7 +425,10 @@ function IncidentBody({ incident: i }: { incident: Incident }) {
   const set = useMutation({
     mutationFn: (status: "ACKNOWLEDGED" | "RESOLVED") => api.setIncidentStatus(i.id, status),
     onSuccess: (updated) => queryClient.setQueryData(keys.incident(i.id), updated),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: keys.monitoring }),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: keys.monitoring });
+      void queryClient.invalidateQueries({ queryKey: keys.homeAll });
+    },
   });
   const triage = useMutation({ mutationFn: () => api.triageIncident(i.id) });
   // Triage is advice: a resolved incident can still be triaged afterwards; All and archived projects can't.

@@ -376,6 +376,7 @@ export async function postTurn(
             subjectJobId: thread.subjectJobId,
             connectorsDir: deps.config.connectorsDir,
             correlationId: input.correlationId,
+            timezone: deps.config.ownerTimezone,
           });
   } catch (err) {
     // The message never stays unanswered: HttpError text is written for the owner; anything else stays in the log.

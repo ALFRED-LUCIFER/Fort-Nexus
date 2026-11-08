@@ -135,7 +135,8 @@ export function runFacts(events: readonly RunEvent[]): RunFacts {
     argv,
     exitCode: num(done?.exitCode),
     durationMs: num(done?.durationMs),
-    sandbox: SandboxInfo.safeParse(ws?.sandbox).data,
+    // Diagnostics report it when the workspace is ready; issue runs when the agent's container starts.
+    sandbox: SandboxInfo.safeParse(ws?.sandbox ?? start?.sandbox).data,
   };
 }
 
@@ -183,7 +184,10 @@ export type ChangeType = "added" | "modified" | "deleted";
 export interface AgentFacts {
   turns?: number;
   costUsd?: number;
+  /** All input tokens: new ones plus prompt-cache reads and writes (the SDK reports them apart). */
   inputTokens?: number;
+  /** The part of `inputTokens` read from or written to the prompt cache. */
+  cachedInputTokens?: number;
   outputTokens?: number;
   report?: string;
   files?: { path: string; change: ChangeType }[];
@@ -193,33 +197,65 @@ export interface AgentFacts {
   failBudget?: string;
 }
 
-// git name-status letters from the runner's artifact scan; "?" = untracked, i.e. a new file.
-const CHANGE: Record<string, ChangeType> = { A: "added", "?": "added", D: "deleted" };
+// git name-status letters from the runner's artifact scan; "?" = untracked, i.e. a new file. The API's changeset
+// event carries the approval's own `change` word instead.
+const CHANGE: Record<string, ChangeType> = {
+  A: "added",
+  "?": "added",
+  D: "deleted",
+  added: "added",
+  modified: "modified",
+  deleted: "deleted",
+};
+
+/** A changed-files event: the runner's scan (`fileCount`) or the API's changeset (`files` only). */
+export function changedFiles(p: Record<string, unknown> | undefined) {
+  const files = Array.isArray(p?.files)
+    ? p.files.flatMap((f: unknown) => {
+        const { path, status, change } = (f ?? {}) as Record<string, unknown>;
+        return typeof path === "string"
+          ? [{ path, change: CHANGE[str(status) ?? str(change) ?? ""] ?? ("modified" as const) }]
+          : [];
+      })
+    : undefined;
+  return { files, fileCount: num(p?.fileCount) ?? files?.length };
+}
 
 export function agentFacts(events: readonly RunEvent[]): AgentFacts {
   const summary = events.findLast((e) => e.type === "agent.message" && e.payload.kind === "summary")?.payload;
   const usage = summary?.usage as Record<string, unknown> | undefined;
-  const art = find(events, "artifact.created")?.payload;
+  // The runner's scan is the one that carries the secret check and every file; the API's later changeset copy
+  // (the approval's files) is only a fallback.
+  const art = (
+    events.findLast((e) => e.type === "artifact.created" && e.payload.kind === "diff") ??
+    find(events, "artifact.created")
+  )?.payload;
   const failed = find(events, "job.failed")?.payload;
-  const files = Array.isArray(art?.files)
-    ? art.files.flatMap((f: unknown) => {
-        const { path, status } = (f ?? {}) as Record<string, unknown>;
-        return typeof path === "string" ? [{ path, change: CHANGE[str(status) ?? ""] ?? "modified" }] : [];
-      })
-    : undefined;
+  const { files, fileCount } = changedFiles(art);
+  const fresh = num(usage?.inputTokens);
+  const cached = (num(usage?.cacheReadInputTokens) ?? 0) + (num(usage?.cacheCreationInputTokens) ?? 0);
   return {
     turns: num(summary?.turns),
     costUsd: num(summary?.estimatedCostUsd),
-    inputTokens: num(usage?.inputTokens),
+    inputTokens: fresh === undefined ? undefined : fresh + cached,
+    cachedInputTokens: fresh === undefined ? undefined : cached,
     outputTokens: num(usage?.outputTokens),
     report: str(summary?.text),
     files,
-    fileCount: num(art?.fileCount),
+    fileCount,
     secretLeak: art?.secretLeak === true,
     failReason: str(failed?.reason),
     failBudget: str(failed?.budget),
   };
 }
+
+const kilo = (n: number) => (n < 1000 ? String(n) : `${Math.round(n / 1000)}k`);
+
+/** "12k / 1k · 11k from cache": all input (cache included, as it is billed) / output, and the cached part. */
+export const tokens = (f: AgentFacts) =>
+  f.inputTokens === undefined
+    ? "—"
+    : `${kilo(f.inputTokens)} / ${kilo(f.outputTokens ?? 0)}${f.cachedInputTokens ? ` · ${kilo(f.cachedInputTokens)} from cache` : ""}`;
 
 /** Plain words for NEXUS's own test result (FR-DEV-05). */
 export const TEST_WORD: Record<Verification["status"], string> = {
@@ -439,7 +475,7 @@ export function toLine(e: RunEvent): TermLine {
         const f = agentFacts([e]);
         return line(
           "summary",
-          `${f.turns ?? "?"} turns · ${f.inputTokens ?? "?"} in / ${f.outputTokens ?? "?"} out tokens · $${f.costUsd?.toFixed(2) ?? "?"} (estimate)`,
+          `${f.turns ?? "?"} turns · ${tokens(f)} tokens in / out · $${f.costUsd?.toFixed(2) ?? "?"} (estimate)`,
           VIOLET,
         );
       }
@@ -457,12 +493,26 @@ export function toLine(e: RunEvent): TermLine {
         ),
         alert: "Blocked: ",
       };
-    case "artifact.created":
+    case "artifact.created": {
+      // The runner's scan carries fileCount; the API's changeset for the approval carries files and stats.
+      const { fileCount } = changedFiles(p);
+      const stats = (p.stats ?? {}) as Record<string, unknown>;
+      const [added, removed] = [num(stats.added), num(stats.removed)];
       return line(
         "diff",
-        `${num(p.fileCount) ?? "?"} files changed${p.secretLeak === true ? " · SECRET FOUND — will not be pushed" : ""}`,
+        [
+          p.artifactType === "changeset" ? "changeset for your review" : undefined,
+          fileCount === undefined
+            ? "changes recorded"
+            : `${fileCount} ${fileCount === 1 ? "file" : "files"} changed`,
+          added !== undefined && removed !== undefined ? `+${added} −${removed}` : undefined,
+          p.secretLeak === true ? "SECRET FOUND — will not be pushed" : undefined,
+        ]
+          .filter(Boolean)
+          .join(" · "),
         p.secretLeak === true ? CORAL : GREEN,
       );
+    }
     case "test.completed": {
       const v = Verification.safeParse(p).data;
       if (!v) return line("tests", "result unreadable", CORAL);

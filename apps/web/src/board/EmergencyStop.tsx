@@ -18,6 +18,7 @@ function useSetStop() {
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: keys.system });
       void queryClient.invalidateQueries({ queryKey: keys.jobs });
+      void queryClient.invalidateQueries({ queryKey: keys.homeAll });
       void queryClient.invalidateQueries({ queryKey: keys.approvals });
     },
   });

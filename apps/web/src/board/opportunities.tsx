@@ -130,7 +130,10 @@ function useCreateIssue(o: Opportunity) {
       queryClient.setQueryData(keys.opportunity(o.id), updated);
       queryClient.removeQueries({ queryKey: keys.issuePreview(o.id), exact: true });
     },
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: keys.opportunities }),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: keys.opportunities });
+      void queryClient.invalidateQueries({ queryKey: keys.homeAll });
+    },
   });
 }
 
@@ -291,7 +294,10 @@ function Detail({ o, focus }: { o: Opportunity; focus?: "preview" }) {
   const dismiss = useMutation({
     mutationFn: () => api.dismissOpportunity(o.id),
     onSuccess: (updated) => queryClient.setQueryData(keys.opportunity(o.id), updated),
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: keys.opportunities }),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: keys.opportunities });
+      void queryClient.invalidateQueries({ queryKey: keys.homeAll });
+    },
   });
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-6 py-5">

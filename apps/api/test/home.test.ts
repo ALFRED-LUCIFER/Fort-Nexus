@@ -171,7 +171,8 @@ async function seedApproval(
         baseBranch: "main",
         baseSha: "a".repeat(40),
         headBranch: `nexus/${issueNumber}-${job.id.slice(0, 8)}`,
-        title: "Fix cart totals",
+        // The PR title as issue-to-pr.ts builds it: Home must not show the number twice.
+        title: `#${issueNumber}: Fix cart totals`,
         body: "",
         changesetSha256: "b".repeat(64),
         files: [{ path: "src/cart.ts", change: "modified" }],

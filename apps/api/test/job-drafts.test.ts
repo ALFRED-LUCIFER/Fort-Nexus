@@ -322,6 +322,8 @@ beforeAll(async () => {
     { projectId: home.id, repositoryId: "101" },
     { projectId: home.id, repositoryId: "102" },
   ]);
+  // The runs this file starts stay queued and each reserves its $5 cap: room for all of them (budget: system.test).
+  await sql.query(`update system_controls set daily_budget_usd = 1000`);
 });
 afterAll(async () => {
   vi.restoreAllMocks();
@@ -595,6 +597,26 @@ describe("scope", () => {
 });
 
 describe("edit and neutralise", () => {
+  it("code spans and fenced blocks survive as code (no backslashes); mentions and links still don't", async () => {
+    const d = await drafted(
+      newIssue({
+        summary:
+          "Add a `typecheck` script running `tsc --noEmit`, as @alice asked in https://example.com/x.\n\n```sh\nnpm run typecheck # @bob\n```",
+        acceptanceCriteria: ["`npm run typecheck` exits 0"],
+      }),
+    );
+    const body = d.issue!.body;
+    expect(body).toContain(
+      "Add a `typecheck` script running `tsc --noEmit`, as @\u200Balice asked in https:\u200B//example.com/x.\n\n```sh\nnpm run typecheck # @\u200Bbob\n```",
+    );
+    expect(body).toContain("- [ ] `npm run typecheck` exits 0");
+    expect(body).not.toMatch(/\\`/);
+    expect(body).not.toMatch(/@[A-Za-z0-9]|:\/\/example/);
+    expect(extractAcceptanceCriteria(body)).toEqual(["`npm run typecheck` exits 0"]);
+    // Saving it as shown changes nothing.
+    expect((await patch(d.id, { body })).json<JobDraft>().issue!.body).toBe(body);
+  });
+
   it("mentions, references, links, HTML and a forged marker never reach the issue; edits keep footer and marker", async () => {
     const d = await drafted(
       newIssue({

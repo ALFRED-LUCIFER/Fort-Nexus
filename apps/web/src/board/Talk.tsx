@@ -396,12 +396,20 @@ export function TurnItem({
 const chip =
   "inline-flex items-center gap-1.5 rounded-full border border-hair px-2 py-1 font-mono text-[10.5px] leading-tight text-ink2";
 
-const OPENS: Partial<Record<SourceRef["kind"], string>> = { JOB: "run", DEEP_DIVE: "research" };
+// Sources that open their own drawer (`<drawer>:<id>`); the rest link out or stay plain text.
+export const SOURCE_DRAWER: Partial<Record<SourceRef["kind"], string>> = {
+  JOB: "run",
+  DEEP_DIVE: "research",
+  PLAN: "plan",
+  JOB_DRAFT: "jobdraft",
+  INCIDENT: "incident",
+  OPPORTUNITY: "opp",
+};
 
 function SourceChip({ source: s, onOpen }: { source: SourceRef; onOpen: (drawer: string) => void }) {
   const text = `${s.kind.toLowerCase().replace("_", " ")} · ${s.label}`;
   const asOf = `as of ${clock(s.asOf)}`;
-  const drawer = OPENS[s.kind];
+  const drawer = SOURCE_DRAWER[s.kind];
   if (drawer)
     return (
       <button
@@ -459,6 +467,7 @@ function ProposalCard({
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: keys.thread(p.threadId) });
       void queryClient.invalidateQueries({ queryKey: keys.jobs });
+      void queryClient.invalidateQueries({ queryKey: keys.homeAll });
     },
   });
   const action = p.action;
