@@ -1,8 +1,40 @@
-# Handoff — 2026-11-08 (cloud handoff session)
+# Handoff — 2026-11-08 (Today + areas, first real runs)
 
 Read this first in a new session, then `CLAUDE.md`, `docs/mvp-tracker.md` and `docs/p1-tracker.md`.
 
-## Where things stand
+## This session (2026-11-08 evening)
+
+**Shipped (pushed to `origin/main`):**
+- **Home and Board are one page** (spec `docs/specs/today-and-areas.md`): header, a live sidebar of areas (Today, Code, Systems, Business, Research, Agents, Plans), the area in the middle, the Cofounder panel docked at ≥1280px. The zoomable canvas is gone; `area=` replaced `view=` (old `view=` links redirect and keep their drawer). Phone: bottom nav Home · Inbox · Talk · Workspaces · Settings, command bar on its own row, STOP always visible. PRD C-06, Part D, §D.3/§D.4 updated.
+- **Incidents wait on you** (GET /v1/home, Today, Talk).
+- **Every AI call is metered** (`apps/api/src/ai-spend.ts`): Explain, Triage, Talk and plan drafting reserve before the call and settle from usage; all honour the emergency stop. Issue runs count their full cost cap against the day while active (no parallel overshoot). Migration `0012_ai_spend_sources`.
+- **Plans**: steps need a `why`; issues NEXUS is already on are never re-run; uncovered work comes back as `gaps` with "Start as a new job". Plan steps succeed only on `PR_CREATED`. Migration `0013_plan_gaps`.
+- **Talk** answers "What's waiting on me?", "Summarize today's runs", "What failed?" from server records with source chips.
+- **Sandbox shell fix**: the Alpine sandbox had no bash, so the agent's Bash tool always failed. Now `nexus-sandbox:3` (bash + `SHELL`). Rebuild with `pnpm --filter @nexus/runner sandbox:build`.
+- Robustness: stale Talk/plan claims recover; stranded APPROVED approvals reconcile on the reaper; reaper re-entrancy guard; Postgres ≥18 check; Octokit 20 s timeouts; `callTool` no retries + timeout; SSE stops on session expiry; PEM/JWT/key redaction in run output; compose mounts `~/.nexus` read-only; `/v1/auth/status` no longer exposes the owner login; issue text keeps code spans; Markdown rendered safely (no HTML) in issue bodies and agent reports; Home refreshes after every decision.
+
+**Live end-to-end test (real GitHub, real Anthropic, Sonnet 5.5):**
+- Runner **AEDU-MAC-DEV10 paired**; project Home bound to **`ALFRED-LUCIFER/tts-test`** (safe test repo).
+- tts-test #1 → **draft PR #2**; tts-test #3 → **draft PR #4** (both open drafts, not merged; ~$0.04 each). A runner diagnostic also completed.
+- Emergency stop blocks jobs and plan drafts and releases cleanly; a failing monitor opened a SEV2 incident that led Today; DevOps triage gave evidence-linked LOW/MEDIUM hypotheses; deep dive without `search.json` refuses with a clear 409.
+- Test leftovers: monitored app `e2e-always-500` (disabled; there is no delete), one gaps-only plan (DRAFT), one job draft waiting on the Issues permission.
+
+**Owner actions still needed:**
+1. GitHub App permission **Issues: read & write** (accept it on the installation). Until then New job / job drafts / opportunity → issue fail with a clear message.
+2. `~/.nexus/ai.json` model is **claude-sonnet-5-5** for testing; the original Opus config is `~/.nexus/ai.json.opus.bak`.
+3. Optional: `search.json` (deep dives), `claude-cloud.json` (cloud handoff), `voice.json`.
+4. Review/close the test PRs #2 and #4 on tts-test.
+
+**Still pending (known, not done):**
+- A plan with only gaps is listed in Waiting on you / Talk as "Plan to approve" though it can't be approved (wording).
+- A transient GitHub 5xx during an approved push still fails the job (audit item 4); the owner must re-run.
+- Issues with a closed/merged NEXUS PR stay "taken" for the planner (uses NEXUS's own records only).
+- Cloud handoffs don't count as "in progress" for the planner.
+- The tests-in-sandbox step runs `npm ci` + `npm test`; repos whose test script needs a missing dev dependency (tts-test: jest) fail honestly with exit 127.
+- Visual check done at 390 and 1440 only (agents measured 320–1440 in headless Chromium).
+
+## Where things stand (previous session)
+
 
 - `main` = `origin/main` after the Cofounder wave push (see `docs/p1-tracker.md` "Cofounder wave"); CI watched after the push.
 - Tests on `main`: api 389, web 246, runner 165 (+1 skipped), contracts 23. Typecheck, lint, prettier and the web build pass.

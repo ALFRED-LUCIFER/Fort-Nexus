@@ -15,7 +15,7 @@ Single source of truth for delivery progress. Update it at the end of every wave
 |---|---|---|
 | 01 Private UI; no access without a valid session | ✅ GitHub sign-in, session list/revoke, Tailscale runbook (owner applies it) | `docs/runbooks/remote-access.md` |
 | 02 Repos/issues match the GitHub App install | ✅ (stubbed GitHub) | ENG-06 |
-| 03 Issue runs Claude on the home host, not the client | ✅ (real model not run yet) | ENG-05/07 |
+| 03 Issue runs Claude on the home host, not the client | ✅ real runs 2026-11-08 (claude-sonnet-5-5) | ENG-05/07 |
 | 04 Live stream; reconnect replays, no second run | ✅ verified by hand | Spike 0 |
 | 05 Isolated workspace; tests captured; draft PR only if allowed | ✅ NEXUS runs the repo's tests in the sandbox (config from the base commit); result is part of the approved hash and the PR | `apps/runner/src/verify.ts` |
 | 06 Protected branch / paid ops need authorization | ✅ | ENG-07 |
@@ -26,7 +26,7 @@ Single source of truth for delivery progress. Update it at the end of every wave
 | CR-001 #1 Workspaces/projects, zero cross-project access | ✅ decoy-tested (repo bound to A unusable from B; lists never leak; archived blocks) | `apps/api/src/workspaces.ts` |
 | CR-001 #2 Job done/failed → inbox alert → contextual summary | ✅ exactly-once, fact-based notifications + toasts + deep links | `apps/api/src/notifications.ts` |
 | CR-001 #8 Host offline → no false execution claim | ✅ | |
-| Real run: one real issue → draft PR on a test repo | ❌ needs owner setup (below) | |
+| Real run: one real issue → draft PR on a test repo | ✅ 2026-11-08: tts-test #1 → draft PR #2, #3 → draft PR #4 | `docs/handoff.md` |
 
 ## Done (on `main`)
 
