@@ -19,6 +19,7 @@ import {
 import type { Db } from "./db/index.ts";
 import { aiSpend, approvals, jobs, runEvents, user, type AiSpendSource } from "./db/schema.ts";
 import { jobDrafts } from "./job-drafts/schema.ts";
+import { incidents } from "./monitoring/schema.ts";
 import { planSteps, plans } from "./plans/schema.ts";
 import { researchDeepDives } from "./research/deep/schema.ts";
 import { researchOpportunities } from "./research/opportunities/schema.ts";
@@ -170,10 +171,13 @@ export async function homeSummary(
     inArray(jobDrafts.status, ["READY", "NEEDS_REPO"]),
   );
   const openOpportunity = and(scope.of(researchOpportunities), eq(researchOpportunities.status, "OPEN"));
+  const openIncident = and(scope.of(incidents), eq(incidents.status, "OPEN"));
   const at = (c: AnyPgColumn) => sql<Date>`${c}`.mapWith(c).as("created_at");
   const noNumber = sql<number | null>`null::int`.as("number");
   const noExpiry = sql<Date | null>`null::timestamptz`.mapWith(approvals.expiresAt).as("expires_at");
   const kind = (k: HomeRef["kind"]) => sql<HomeRef["kind"]>`${k}::text`.as("kind");
+  // Open incidents sort before everything else (the union can only order by result columns).
+  const urgency = (k: HomeRef["kind"]) => sql<number>`${k === "INCIDENT" ? 1 : 0}::int`.as("urgency");
 
   const [jobRows, openRows, [dive], stepRows, topRows, [counts], spendRows] = await Promise.all([
     db
@@ -213,10 +217,24 @@ export async function homeSummary(
       .where(and(scope.of(planSteps), eq(plans.ownerId, ownerId), eq(planSteps.status, "RUNNING")))
       .orderBy(planSteps.agent, sql`${planSteps.startedAt} desc nulls last`),
     unionAll(
+      // An open incident is the most urgent: it sorts before everything else.
+      db
+        .select({
+          kind: kind("INCIDENT"),
+          urgency: urgency("INCIDENT"),
+          id: sql<string>`${incidents.id}`.as("id"),
+          title: sql<string>`${incidents.severity} || ' · ' || ${incidents.title}`.as("title"),
+          number: noNumber,
+          expiresAt: noExpiry,
+          createdAt: at(incidents.openedAt),
+        })
+        .from(incidents)
+        .where(openIncident),
       // A push approval opens through its run.
       db
         .select({
           kind: kind("JOB"),
+          urgency: urgency("JOB"),
           id: sql<string>`${approvals.jobId}`.as("id"),
           title: sql<string>`${approvals.action}->>'title'`.as("title"),
           number: sql<number | null>`(${approvals.action}->>'issueNumber')::int`.as("number"),
@@ -228,6 +246,7 @@ export async function homeSummary(
       db
         .select({
           kind: kind("PLAN"),
+          urgency: urgency("PLAN"),
           id: sql<string>`${plans.id}`.as("id"),
           title: sql<string>`${plans.goal}`.as("title"),
           number: noNumber,
@@ -239,6 +258,7 @@ export async function homeSummary(
       db
         .select({
           kind: kind("JOB_DRAFT"),
+          urgency: urgency("JOB_DRAFT"),
           id: sql<string>`${jobDrafts.id}`.as("id"),
           title: sql<string>`coalesce(${jobDrafts.issueTitle}, ${jobDrafts.text})`.as("title"),
           number: sql<number | null>`${jobDrafts.issueNumber}`.as("number"),
@@ -250,6 +270,7 @@ export async function homeSummary(
       db
         .select({
           kind: kind("OPPORTUNITY"),
+          urgency: urgency("OPPORTUNITY"),
           id: sql<string>`${researchOpportunities.id}`.as("id"),
           title: sql<string>`${researchOpportunities.title}`.as("title"),
           number: noNumber,
@@ -259,7 +280,7 @@ export async function homeSummary(
         .from(researchOpportunities)
         .where(openOpportunity),
     )
-      .orderBy(sql`created_at desc`, sql`id desc`)
+      .orderBy(sql`urgency desc`, sql`created_at desc`, sql`id desc`)
       .limit(MAX_TOP),
     // The owner's own row only carries the scalar counts.
     db
@@ -268,6 +289,7 @@ export async function homeSummary(
         plans: db.$count(plans, pendingPlan),
         jobDrafts: db.$count(jobDrafts, pendingDraft),
         opportunities: db.$count(researchOpportunities, openOpportunity),
+        incidents: db.$count(incidents, openIncident),
         newestPush: sql<number | null>`(select (${approvals.action}->>'issueNumber')::int from ${approvals}
           where ${pendingApproval} order by ${approvals.createdAt} desc limit 1)`,
         pullRequests: db.$count(
@@ -351,8 +373,14 @@ export async function homeSummary(
     plans: counts?.plans ?? 0,
     jobDrafts: counts?.jobDrafts ?? 0,
     opportunities: counts?.opportunities ?? 0,
+    incidents: counts?.incidents ?? 0,
   };
-  const waiting = decisions.approvals + decisions.plans + decisions.jobDrafts + decisions.opportunities;
+  const waiting =
+    decisions.approvals +
+    decisions.plans +
+    decisions.jobDrafts +
+    decisions.opportunities +
+    decisions.incidents;
 
   const kpis: HomeKpi[] = [
     {
@@ -396,7 +424,7 @@ export async function homeSummary(
       previous: null,
       better: "DOWN",
       series: [...Array<null>(DAYS - 1).fill(null), waiting],
-      source: "approvals, plans, drafts, opportunities · now",
+      source: "approvals, plans, drafts, opportunities, incidents · now",
     },
   ];
 
@@ -505,6 +533,7 @@ export async function homeSummary(
     decisions.plans + stepRows.length,
     decisions.jobDrafts + (counts?.draftIssues ?? 0),
     decisions.opportunities + (counts?.opportunityIssues ?? 0),
+    decisions.incidents,
     (dive ? 1 : 0) + (counts?.deepDives ?? 0),
     spendRows.length,
   ].filter((n) => n > 0).length;
@@ -559,9 +588,10 @@ function headlineSegments(f: {
   passedToday: number;
   quiet: boolean;
 }): Segment[] {
-  const { approvals: a, plans: p, jobDrafts: d, opportunities: o } = f.decisions;
+  const { approvals: a, plans: p, jobDrafts: d, opportunities: o, incidents: i } = f.decisions;
   if (f.waiting > 0) {
     const kinds = [
+      [i, plural(i, "incident open", "incidents open")],
       [a, a === 1 && f.newestPush !== null ? `a push for #${f.newestPush}` : plural(a, "push", "pushes")],
       [p, plural(p, "plan", "plans")],
       [d, plural(d, "job draft", "job drafts")],

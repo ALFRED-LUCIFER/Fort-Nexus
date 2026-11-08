@@ -20,6 +20,7 @@ import { aiSpend, approvals, jobs, projects, runEvents, user, workspaces } from 
 import { homeSummary } from "../src/home.ts";
 import { jobDrafts, type JobDraftRowStatus } from "../src/job-drafts/schema.ts";
 import { planSteps, plans } from "../src/plans/schema.ts";
+import { incidents, monitoredApps } from "../src/monitoring/schema.ts";
 import { researchDeepDives } from "../src/research/deep/schema.ts";
 import { researchOpportunities } from "../src/research/opportunities/schema.ts";
 import { localDate } from "../src/research/schedule.ts";
@@ -420,7 +421,14 @@ describe("GET /v1/home", () => {
     expect(text(h)).toBe("A quiet start. Describe a job in plain words and the Developer drafts it.");
     expect(emphasised(h)).toEqual(["Describe a job in plain words"]);
     expect(h.headline).toMatchObject({ sources: 0, decisionsWaiting: 0 });
-    expect(h.decisions).toEqual({ approvals: 0, plans: 0, jobDrafts: 0, opportunities: 0, top: [] });
+    expect(h.decisions).toEqual({
+      approvals: 0,
+      plans: 0,
+      jobDrafts: 0,
+      opportunities: 0,
+      incidents: 0,
+      top: [],
+    });
     expect(h.kpis.map((k) => [k.key, k.value, k.previous])).toEqual([
       ["REVIEW_READY_MEDIAN", null, null],
       ["TESTS_PASS_RATE", null, null],
@@ -683,6 +691,73 @@ describe("GET /v1/home", () => {
     expect(emphasised(h2)).toEqual(["a push for #42", "1 opportunity"]);
   });
 
+  it("open incidents come first in Waiting on you and count as decisions; resolved, acknowledged and other projects' do not", async () => {
+    const projectId = await newProject();
+    const other = await newProject();
+    const seedIncident = async (
+      pid: string,
+      o: { status?: "OPEN" | "ACKNOWLEDGED" | "RESOLVED"; severity?: "SEV1" | "SEV2" | "SEV3" },
+    ) => {
+      const [app] = await db
+        .insert(monitoredApps)
+        .values({
+          ...scopeOf(pid),
+          name: "checkout-api",
+          environment: "PROD",
+          healthUrl: "https://example.test/health",
+          intervalSeconds: 60,
+          timeoutMs: 2000,
+          failureThreshold: 1,
+          createdBy: "test",
+          nextCheckAt: new Date("2100-01-01T00:00:00Z"),
+        })
+        .returning();
+      const [i] = await db
+        .insert(incidents)
+        .values({
+          ...scopeOf(pid),
+          appId: app!.id,
+          fingerprint: `fp-${randomUUID()}`,
+          severity: o.severity ?? "SEV2",
+          status: o.status ?? "OPEN",
+          title: "checkout-api (PROD) health check failing",
+          openedAt: new Date(NOW.getTime() - 60 * MIN),
+        })
+        .returning();
+      return i!;
+    };
+    const open = await seedIncident(projectId, { severity: "SEV1" });
+    await seedIncident(projectId, { status: "RESOLVED" });
+    await seedIncident(projectId, { status: "ACKNOWLEDGED" });
+    await seedIncident(other, {});
+    // A newer opportunity still sorts after the (older) incident.
+    const opp = await seedOpportunity(projectId, { title: "Payout matching", createdAt: NOW });
+
+    const h = await at(projectId);
+    expect(h.decisions).toMatchObject({ incidents: 1, opportunities: 1 });
+    expect(h.decisions.top).toEqual([
+      {
+        ref: { kind: "INCIDENT", id: open.id },
+        title: "SEV1 · checkout-api (PROD) health check failing",
+        expiresAt: null,
+      },
+      { ref: { kind: "OPPORTUNITY", id: opp.id }, title: "Payout matching", expiresAt: null },
+    ]);
+    expect(h.headline.decisionsWaiting).toBe(2);
+    expect(kpi(h, "WAITING_ON_YOU").value).toBe(2);
+    expect(text(h)).toBe("2 things are ready for you: 1 incident open and 1 opportunity.");
+
+    // The other project sees only its own; the route serializes the same contract.
+    const ho = await at(other);
+    expect(ho.decisions.incidents).toBe(1);
+    expect(ho.decisions.top.map((x) => x.ref.id)).not.toContain(open.id);
+    expect((await home(projectId)).decisions.top[0]!.ref.kind).toBe("INCIDENT");
+
+    // Resolving it removes it.
+    await db.update(incidents).set({ status: "RESOLVED" }).where(eq(incidents.id, open.id));
+    expect((await at(projectId)).decisions.incidents).toBe(0);
+  });
+
   it("headline without decisions: runs today with passing tests, or no runs yet today", async () => {
     const projectId = await newProject();
     const old = await seedJob({ projectId, createdAt: utc("2026-03-07T10:00:00") });
@@ -784,7 +859,7 @@ describe("GET /v1/home", () => {
     const all = await at();
     const each = await Promise.all(mine.map((p) => at(p)));
     const total = (f: (h: HomeSummary) => number) => each.reduce((n, h) => n + f(h), 0);
-    for (const k of ["approvals", "plans", "jobDrafts", "opportunities"] as const)
+    for (const k of ["approvals", "plans", "jobDrafts", "opportunities", "incidents"] as const)
       expect(all.decisions[k], k).toBe(total((h) => h.decisions[k]));
     for (const kind of HomeResultKind.options)
       expect(result(all, kind), kind).toBeCloseTo(

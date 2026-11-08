@@ -61,6 +61,7 @@ const summary = (over: Partial<HomeSummary> = {}): HomeSummary => ({
     plans: 1,
     jobDrafts: 1,
     opportunities: 1,
+    incidents: 0,
     top: [
       { ref: { kind: "JOB", id: JOB2 }, title: "#42 Cart totals round wrong", expiresAt: SOON },
       { ref: { kind: "PLAN", id: PLAN_ID }, title: "Ship the CSV export", expiresAt: null },
@@ -289,7 +290,7 @@ describe("Cofounder home", () => {
       "GET /v1/home": () =>
         json(
           summary({
-            decisions: { approvals: 0, plans: 0, jobDrafts: 0, opportunities: 0, top: [] },
+            decisions: { approvals: 0, plans: 0, jobDrafts: 0, opportunities: 0, incidents: 0, top: [] },
             execution: [],
           }),
         ),

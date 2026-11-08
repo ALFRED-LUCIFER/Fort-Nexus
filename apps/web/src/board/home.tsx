@@ -52,6 +52,7 @@ const WAITING_KIND: Record<HomeRef["kind"], string> = {
   JOB_DRAFT: "Job draft",
   OPPORTUNITY: "Opportunity",
   DEEP_DIVE: "Deep dive",
+  INCIDENT: "Incident",
 };
 const REF_DRAWER: Record<HomeRef["kind"], string> = {
   JOB: "run",
@@ -59,6 +60,7 @@ const REF_DRAWER: Record<HomeRef["kind"], string> = {
   OPPORTUNITY: "opp",
   DEEP_DIVE: "research",
   JOB_DRAFT: "jobdraft",
+  INCIDENT: "incident",
 };
 const drawerOf = (ref: HomeRef) => `${REF_DRAWER[ref.kind]}:${ref.id}`;
 
