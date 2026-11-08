@@ -2,9 +2,8 @@ import { z } from "zod";
 
 /** `GET /v1/auth/status` (public): what the login page needs before anyone is signed in. Never ids or secrets. */
 export const AuthStatus = z.object({
-  // ownerLogin: no longer sent (an anonymous visitor doesn't learn the owner's GitHub login); optional, so clients
-  // that still read it render without it.
-  github: z.object({ configured: z.boolean(), ownerLogin: z.string().optional() }),
+  // No owner login: an anonymous visitor doesn't learn who owns this NEXUS.
+  github: z.object({ configured: z.boolean() }),
 });
 export type AuthStatus = z.infer<typeof AuthStatus>;
 

@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { GITHUB_SETUP_COMMAND } from "@nexus/contracts";
 import { apiError, json, mockFetch, renderApp } from "./test/helpers.tsx";
 
-const CONFIGURED = { github: { configured: true, ownerLogin: "octo-owner" } };
+const CONFIGURED = { github: { configured: true } };
 const status = (body: unknown = CONFIGURED) => ({ "GET /v1/auth/status": () => json(body) });
 const continueButton = () => screen.findByRole("button", { name: "Continue with GitHub" });
 
@@ -17,7 +17,7 @@ describe("login", () => {
     mockFetch({ "GET /v1/me": () => apiError(401, "UNAUTHENTICATED", "Sign in first."), ...status() });
     renderApp("/");
     expect(await continueButton()).toBeTruthy();
-    expect(screen.getByText(/Only @octo-owner can sign in/)).toBeTruthy();
+    expect(screen.getByText(/Only the owner of this NEXUS can sign in/)).toBeTruthy();
   });
 
   it("starts Better Auth's GitHub sign-in and follows its redirect", async () => {

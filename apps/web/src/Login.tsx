@@ -83,12 +83,9 @@ export function Login() {
           <GithubMark />
           {pending ? "Opening GitHub…" : "Continue with GitHub"}
         </button>
-        {status.data.github.ownerLogin && (
-          <p className="m-0 text-[12px] leading-relaxed text-ink3">
-            Only @{status.data.github.ownerLogin} can sign in. GitHub's two-factor authentication protects
-            this NEXUS.
-          </p>
-        )}
+        <p className="m-0 text-[12px] leading-relaxed text-ink3">
+          Only the owner of this NEXUS can sign in. GitHub's two-factor authentication protects it.
+        </p>
       </>
     );
 
