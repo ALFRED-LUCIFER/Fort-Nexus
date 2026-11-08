@@ -14,6 +14,8 @@ PRD §18.1, in order, for this stack: Postgres + API (serving the web app) in Do
 
 Write `~/.nexus/ai.json` (mode `0600`) with your **personal** key: [ai-provider.md](ai-provider.md). Never paste keys into NEXUS chat.
 
+The compose stack mounts the whole `~/.nexus` directory (`NEXUS_HOME`) read-only at `/run/nexus` and points `ai.json`, `search.json`, `voice.json`, `claude-cloud.json`, `github-app.json` and `connectors/` there. The API refuses a key file that is not mode `0600` or not owned by the user it runs as; a bind mount keeps the host owner, so `pnpm nexus` runs the container as your own uid/gid (`NEXUS_UID`/`NEXUS_GID`). Keep the files owned by the user who starts NEXUS. If you run `docker compose` yourself, export `NEXUS_UID=$(id -u) NEXUS_GID=$(id -g)` first, otherwise the files are rejected as "must be owned by the API user".
+
 ## 3. Isolation
 
 Run NEXUS under a dedicated OS user if the machine is shared (e.g. a `nexus` account); everything below then happens as that user. Jobs already run in a fresh container each (FR-RUN-03).

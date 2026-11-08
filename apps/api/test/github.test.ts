@@ -431,6 +431,22 @@ describe("lost access and GitHub errors", () => {
     expect(res.json().error.message).toMatch(/GitHub is unavailable/);
   });
 
+  it("gives every GitHub request its own deadline and maps a timeout to an owner-safe 502", async () => {
+    const signals: (AbortSignal | null | undefined)[] = [];
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      signals.push(init?.signal);
+      throw new DOMException("The operation timed out.", "TimeoutError");
+    });
+    const res = await get("/v1/github/status");
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error.message).toBe("GitHub didn't answer in time. Try again shortly.");
+    vi.setSystemTime((clock += 120_000));
+    await get("/v1/github/status");
+    expect(spy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(signals.every((s) => s instanceof AbortSignal)).toBe(true);
+    expect(new Set(signals).size).toBe(signals.length); // a fresh signal per request, never a shared one
+  });
+
   it("never puts an installation token or the app key in a response", async () => {
     stubGithub(
       catalogRoutes({

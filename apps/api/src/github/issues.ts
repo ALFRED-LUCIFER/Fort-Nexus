@@ -1,17 +1,15 @@
-import { App } from "@octokit/app";
 import type { FastifyBaseLogger } from "fastify";
 import type { Repository } from "@nexus/contracts";
 import { HttpError, notFound } from "../errors.ts";
 import type { GithubAppConfig } from "./app-config.ts";
 import type { GithubCatalog } from "./catalog.ts";
+import { GITHUB_TIMEOUT_MS, createGithubApp, isAbort } from "./timeout.ts";
 
 // FR-CXR-09: the one GitHub write the AI researcher can lead to, an issue the owner approved by its exact hash.
 // Tokens are minted per repository with `issues: write` only and never leave this module.
 
 export const ISSUES_RUNBOOK = "docs/runbooks/github-setup.md";
 const PERMISSION = "Issues: read & write";
-// Each GitHub call gets its own deadline, so an attempt always ends well inside the caller's claim lease.
-const CALL_TIMEOUT_MS = 20_000;
 // shortcut: the marker search reads the newest 500 issues updated since the claim; enough for one owner's repos.
 const FIND_PAGES = 5;
 
@@ -47,7 +45,7 @@ export const missingIssuesPermission = (fullName: string) =>
  * only repositories of the app's installations exist); `find` and `create` call GitHub with a fresh scoped token.
  */
 export function createIssueWriter(config: GithubAppConfig, catalog: GithubCatalog, log: FastifyBaseLogger) {
-  const app = new App({ appId: config.appId, privateKey: config.privateKey });
+  const app = createGithubApp(config);
   const bot = `${config.slug}[bot]`;
   const Octokit = app.octokit.constructor as new (o: { auth: string }) => typeof app.octokit;
   const lost = (r: Repository) =>
@@ -55,6 +53,7 @@ export function createIssueWriter(config: GithubAppConfig, catalog: GithubCatalo
 
   /** Maps a GitHub failure to an owner-safe ApiError; never retries with other credentials (GH-G04). */
   function mapped(e: unknown, repo: Repository): unknown {
+    if (isAbort(e)) return new HttpError(502, "INTERNAL", "GitHub didn't answer in time. Try again shortly.");
     if (!isGithubError(e)) return e;
     const h = e.response?.headers ?? {};
     log.warn(
@@ -114,7 +113,7 @@ export function createIssueWriter(config: GithubAppConfig, catalog: GithubCatalo
   const at = (r: Repository) => ({
     owner: r.owner,
     repo: r.name,
-    request: { signal: AbortSignal.timeout(CALL_TIMEOUT_MS) },
+    request: { signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS) },
   });
   const toCreated = (r: Repository, i: GhIssue): CreatedIssue => ({
     repositoryFullName: r.fullName,

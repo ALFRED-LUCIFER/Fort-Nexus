@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   JobStatus,
   RunEvent,
@@ -10,10 +11,15 @@ import {
   type Job,
   type JobOutcome,
 } from "@nexus/contracts";
+import { ApiRequestError, api, keys } from "../lib/api.ts";
 import { clock, duration } from "../lib/queries.ts";
 
 export type StreamState = "connecting" | "live" | "reconnecting" | "ended";
 const RECONNECT_MS = 3_000;
+const RECONNECT_MAX_MS = 60_000;
+
+/** Delay before reopening a closed stream: doubles per failed attempt, capped. */
+export const reconnectDelay = (attempt: number) => Math.min(RECONNECT_MS * 2 ** attempt, RECONNECT_MAX_MS);
 
 /** Inserts an event in sequence order; a sequence already seen (reconnect replay) is dropped. */
 export function mergeEvent(list: readonly RunEvent[], e: RunEvent): readonly RunEvent[] {
@@ -32,17 +38,23 @@ export function mergeEvent(list: readonly RunEvent[], e: RunEvent): readonly Run
 export function useRunEvents(jobId: string) {
   const [events, setEvents] = useState<readonly RunEvent[]>([]);
   const [stream, setStream] = useState<StreamState>("connecting");
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     let es: EventSource | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let last = 0;
+    let attempt = 0;
+    let disposed = false;
     const connect = () => {
       es = new EventSource(
         `/v1/jobs/${encodeURIComponent(jobId)}/events${last ? `?afterSequence=${last}` : ""}`,
       );
       const source = es;
-      source.onopen = () => setStream("live");
+      source.onopen = () => {
+        attempt = 0;
+        setStream("live");
+      };
       source.addEventListener(SSE_RUN_EVENT, (m: MessageEvent<string>) => {
         let data: unknown;
         try {
@@ -61,15 +73,29 @@ export function useRunEvents(jobId: string) {
       });
       source.onerror = () => {
         setStream("reconnecting");
-        if (source.readyState === EventSource.CLOSED) timer = setTimeout(connect, RECONNECT_MS);
+        if (source.readyState !== EventSource.CLOSED) return; // the browser is retrying by itself
+        // A closed stream is a refusal or an outage. Ask who we are first: an expired session (401) goes to
+        // sign-in (the query cache navigates) instead of retrying forever; anything else retries with backoff.
+        void queryClient
+          .fetchQuery({ queryKey: keys.me, queryFn: api.me, staleTime: 0, retry: false })
+          .then(
+            () => true,
+            (e: unknown) => !(e instanceof ApiRequestError && e.status === 401),
+          )
+          .then((retry) => {
+            if (disposed) return;
+            if (!retry) return setStream("ended");
+            timer = setTimeout(connect, reconnectDelay(attempt++));
+          });
       };
     };
     connect();
     return () => {
+      disposed = true;
       clearTimeout(timer);
       es?.close();
     };
-  }, [jobId]);
+  }, [jobId, queryClient]);
 
   return { events, stream };
 }

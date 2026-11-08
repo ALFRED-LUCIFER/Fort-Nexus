@@ -85,6 +85,47 @@ describe("run drawer", () => {
     expect(second.readyState).toBe(FakeEventSource.CLOSED);
   });
 
+  it("stops reconnecting and goes to sign-in when the session expired", async () => {
+    let signedIn = true;
+    mockFetch({
+      "GET /v1/me": () =>
+        signedIn ? json(ME) : json({ error: { code: "UNAUTHENTICATED", message: "x" } }, 401),
+      "GET /v1/runners": () => json({ items: [runner()] }),
+      "GET /v1/jobs": () =>
+        json({ items: [job({ status: "RUNNING", runnerId: RUNNER_ID })], nextCursor: null }),
+      [`GET /v1/jobs/${JOB_ID}`]: () => json(job({ status: "RUNNING", runnerId: RUNNER_ID })),
+    });
+    const { router } = renderApp(`/?drawer=run:${JOB_ID}`);
+    await screen.findByRole("dialog");
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    signedIn = false;
+    act(() => FakeEventSource.instances[0]!.fail());
+    await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
+    await act(() => vi.advanceTimersByTimeAsync(120_000));
+    expect(FakeEventSource.instances).toHaveLength(1);
+  });
+
+  it("backs off between reconnects while the API is down", async () => {
+    mockFetch({
+      "GET /v1/me": () => json(ME),
+      "GET /v1/runners": () => json({ items: [runner()] }),
+      "GET /v1/jobs": () =>
+        json({ items: [job({ status: "RUNNING", runnerId: RUNNER_ID })], nextCursor: null }),
+      [`GET /v1/jobs/${JOB_ID}`]: () => json(job({ status: "RUNNING", runnerId: RUNNER_ID })),
+    });
+    renderApp(`/?drawer=run:${JOB_ID}`);
+    await screen.findByRole("dialog");
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => FakeEventSource.instances[0]!.fail());
+    await act(() => vi.advanceTimersByTimeAsync(3_000));
+    expect(FakeEventSource.instances).toHaveLength(2);
+    act(() => FakeEventSource.instances[1]!.fail());
+    await act(() => vi.advanceTimersByTimeAsync(3_000));
+    expect(FakeEventSource.instances).toHaveLength(2); // the second wait is 6 s
+    await act(() => vi.advanceTimersByTimeAsync(3_000));
+    expect(FakeEventSource.instances).toHaveLength(3);
+  });
+
   it("offers Cancel only for a live job and shows its stats", async () => {
     open(job({ status: "COMPLETED", runnerId: RUNNER_ID, lastEventSequence: 9 }));
     await screen.findByRole("heading", { name: "node-version on test-host" });

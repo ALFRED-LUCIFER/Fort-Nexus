@@ -38,15 +38,23 @@ services:
       API_HOST: 0.0.0.0
       API_BIND_ALL_IN_CONTAINER: "1"
       API_PORT: "8787"
+      # The owner's NEXUS home (see the volume below), read-only. Each file is read on every use, so rotating a key
+      # needs no restart; one that is missing is reported by the feature that needs it, not at boot.
       GITHUB_APP_FILE: /run/nexus/github-app.json
-    # The host user, so the mounted 0600 github-app.json is readable (set by scripts/nexus.mjs).
+      NEXUS_AI_FILE: /run/nexus/ai.json
+      NEXUS_SEARCH_FILE: /run/nexus/search.json
+      NEXUS_VOICE_FILE: /run/nexus/voice.json
+      NEXUS_CLAUDE_CLOUD_FILE: /run/nexus/claude-cloud.json
+      NEXUS_CONNECTORS_DIR: /run/nexus/connectors
+    # The host user (set by scripts/nexus.mjs): the API insists that each key file is mode 0600 and owned by the user
+    # it runs as, and a bind mount keeps the host's owner, so the container must run as that same uid.
     user: "${NEXUS_UID:-10001}:${NEXUS_GID:-10001}"
     ports:
       - "127.0.0.1:${API_PORT:-8787}:8787"
     volumes:
       - type: bind
-        source: ${NEXUS_HOME:-${HOME}/.nexus}/github-app.json
-        target: /run/nexus/github-app.json
+        source: ${NEXUS_HOME:-${HOME}/.nexus}
+        target: /run/nexus
         read_only: true
         bind:
           create_host_path: false

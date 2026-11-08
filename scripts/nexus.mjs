@@ -52,7 +52,9 @@ function preflight() {
 
   const ai = join(NEXUS_HOME, "ai.json");
   if (!existsSync(ai))
-    console.warn(`! ${ai} not found: coding jobs will fail until it exists (docs/runbooks/ai-provider.md)`);
+    console.warn(
+      `! ${ai} not found: every AI feature (Talk, plans, job drafts, Explain, Triage, deep dives, coding jobs) will fail until it exists (docs/runbooks/ai-provider.md)`,
+    );
   else need(isPrivate(ai), `${ai} is group/world-readable`, `chmod 600 ${ai}`);
 
   if (problems.length > 0) fail(`Not ready to start NEXUS:\n  - ${problems.join("\n  - ")}`);

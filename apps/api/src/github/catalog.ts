@@ -1,4 +1,3 @@
-import { App } from "@octokit/app";
 import type { FastifyBaseLogger } from "fastify";
 import {
   ISSUE_MAX_PAGE,
@@ -26,6 +25,7 @@ import {
 import { HttpError, notFound } from "../errors.ts";
 import { extractAcceptanceCriteria, stripHtmlComments } from "./acceptance-criteria.ts";
 import type { GithubAppConfig } from "./app-config.ts";
+import { createGithubApp, isAbort } from "./timeout.ts";
 
 // shortcut: in-memory 60 s cache per API process (syncedAt shows its age); DB sync + webhooks replace it with FR-GH-10.
 const TTL_MS = 60_000;
@@ -153,7 +153,7 @@ export type PushResult = NonNullable<Approval["result"]> & { adopted: boolean };
  * tokens stay inside Octokit (cached until shortly before expiry) and never reach responses or logs.
  */
 export function createGithubCatalog(config: GithubAppConfig, log: FastifyBaseLogger) {
-  const app = new App({ appId: config.appId, privateKey: config.privateKey });
+  const app = createGithubApp(config);
   const installUrl = `${config.htmlUrl}/installations/new`;
   const cache = new Map<string, { at: number; value: unknown }>();
   // What the repository list says beyond the `Repository` contract, refreshed with it.
@@ -204,6 +204,8 @@ export function createGithubCatalog(config: GithubAppConfig, log: FastifyBaseLog
     try {
       return await call();
     } catch (e) {
+      if (isAbort(e))
+        throw new HttpError(502, "INTERNAL", "GitHub didn't answer in time. Try again shortly.");
       if (!isGithubError(e)) throw e;
       log.warn(
         { githubStatus: e.status, githubRequestId: e.response?.headers?.["x-github-request-id"] },

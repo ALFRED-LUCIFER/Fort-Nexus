@@ -148,6 +148,14 @@ export function CloudHandoffPanel({ cloud, onClose }: { cloud: CloudHandoffFlow;
 
 // ---------------------------------------------------------------- status
 
+/** "sent" only once Anthropic confirmed the session; every other status says what NEXUS actually knows. */
+const HEADING: Record<CloudHandoff["status"], (when: string) => string> = {
+  STARTED: (when) => `sent ${when}`,
+  STARTING: (when) => `sending, started ${when}`,
+  UNKNOWN: (when) => `requested ${when}, not confirmed`,
+  FAILED: (when) => `attempted ${when}, not sent`,
+};
+
 const prState = (p: NonNullable<CloudHandoff["pullRequest"]>) =>
   p.state === "MERGED" ? "Merged" : p.state === "CLOSED" ? "Closed" : p.draft ? "Draft" : "Open";
 
@@ -188,7 +196,7 @@ function HandoffStatus({ h }: { h: CloudHandoff }) {
       className="flex flex-none flex-col gap-2.5 rounded-[18px] border border-hair p-4"
     >
       <h3 id="cloud-status-title" className="kicker m-0">
-        Claude cloud handoff · sent {ago(h.createdAt, now)}
+        Claude cloud handoff · {HEADING[h.status](ago(h.createdAt, now))}
       </h3>
       <div aria-live="polite" className="flex flex-col gap-2.5">
         {h.status === "STARTING" && (

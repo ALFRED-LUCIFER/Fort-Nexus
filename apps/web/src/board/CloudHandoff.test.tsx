@@ -145,7 +145,8 @@ const posts = (calls: ReturnType<typeof mockFetch>) =>
   calls.filter((c) => c.method === "POST" && c.path === STATE_PATH);
 const handOff = () => screen.findByRole("button", { name: "Hand off to Claude (cloud)" });
 const card = () => screen.findByRole("region", { name: "Here’s exactly what Claude will receive." });
-const status = () => screen.findByRole("region", { name: /^Claude cloud handoff · sent/ });
+const status = () =>
+  screen.findByRole("region", { name: /^Claude cloud handoff · (sent|sending|requested|attempted)/ });
 
 beforeEach(() => {
   FakeEventSource.instances = [];
@@ -218,6 +219,7 @@ describe("Claude cloud handoff in the issue drawer", () => {
     await user.click(within(c).getByRole("button", { name: "Approve and send" }));
 
     const s = await status();
+    expect(s.querySelector("h3")?.textContent).toMatch(/^Claude cloud handoff · sent .+ ago$/);
     expect(within(s).getByText("Session started")).toBeTruthy();
     const link = within(s).getByRole("link", { name: /Open the session on claude\.ai\s?\(new tab\)/ });
     expect(link.getAttribute("href")).toBe(SESSION);
@@ -339,6 +341,8 @@ describe("Claude cloud handoff in the issue drawer", () => {
     expect(within(c).queryByRole("button", { name: "Approve and send" })).toBeNull();
 
     const s = await status();
+    expect(s.querySelector("h3")?.textContent).toMatch(/· requested .+ ago, not confirmed$/);
+    expect(s.querySelector("h3")?.textContent).not.toMatch(/\bsent\b/);
     expect(within(s).getByRole("note").textContent).toMatch(
       /Couldn't confirm the session.*A session may exist.*NEXUS never retries on its own/,
     );
@@ -358,6 +362,7 @@ describe("Claude cloud handoff in the issue drawer", () => {
       ),
     );
     const s = await status();
+    expect(s.querySelector("h3")?.textContent).toMatch(/· attempted .+ ago, not sent$/);
     expect(
       within(s).getByText("Not sent: Rate limited: the routine's hourly limit is reached."),
     ).toBeTruthy();
