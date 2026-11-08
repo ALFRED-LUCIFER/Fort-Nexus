@@ -77,6 +77,9 @@ export type Deps = {
 };
 
 const REAPER_INTERVAL_MS = 5_000;
+// Approvals stranded APPROVED are retried this often (each pass may call GitHub), once decided this long ago.
+const APPROVAL_RECONCILE_INTERVAL_MS = 60_000;
+const APPROVAL_RECONCILE_GRACE_MS = 60_000;
 const WEB_DIST = fileURLToPath(new URL("../../web/dist", import.meta.url));
 const CODE_BY_STATUS: Record<number, ErrorCode> = {
   401: "UNAUTHENTICATED",
@@ -256,8 +259,9 @@ export async function buildApp(
 
   app
     .withTypeProvider<ZodTypeProvider>()
+    // Anonymous: only whether sign-in is set up. The owner's GitHub login isn't the visitor's to learn.
     .get("/v1/auth/status", { schema: { response: { 200: AuthStatus } } }, async () => ({
-      github: github ? { configured: true, ownerLogin: github.ownerGithubLogin } : { configured: false },
+      github: { configured: github !== null },
     }));
 
   // Better Auth owns /api/auth/*; the raw body is passed through untouched.
@@ -334,32 +338,58 @@ export async function buildApp(
     return sendError(reply, request, 404, "NOT_FOUND", "Route not found");
   });
 
-  let reaper: NodeJS.Timeout | undefined;
-  const reap = () =>
-    Promise.all([
-      reapExpiredLeases(db).then((n) => {
-        if (n > 0) app.log.warn({ count: n }, "expired leases moved to RECOVERY_REQUIRED");
-      }),
-      expireApprovals(db).then((n) => {
-        if (n > 0) app.log.info({ count: n }, "pending approvals expired");
-      }),
-      research.tick(),
-      monitoring.tick(),
-      planExecutor.tick(),
-    ]).catch((err: unknown) => app.log.error({ err }, "reaper failed"));
-  app.addHook("onReady", async () => {
-    await reap();
-    await diver.reconcile(); // dives a restart interrupted fail (reservation kept); queued ones start
-    reaper = setInterval(reap, REAPER_INTERVAL_MS);
-    // Approved pushes a crash interrupted; in the background so GitHub latency never blocks startup.
-    // Held while the emergency stop is engaged: releasing it reconciles them (routes/system.ts).
-    if (await emergencyStopEngaged(db)) return;
+  // Approved pushes left APPROVED (a crash, or an execution whose final write failed): in the background so GitHub
+  // latency never blocks startup or the reaper, one pass at a time. Held while the emergency stop is engaged:
+  // releasing it reconciles them (routes/system.ts). `graceMs` leaves approvals just decided to their own request.
+  let reconciling = false;
+  let reconciledAt = 0;
+  const reconcileApprovals = async (graceMs: number) => {
+    if (reconciling || (await emergencyStopEngaged(db))) return;
+    reconciling = true;
+    reconciledAt = Date.now();
     executor
-      .reconcile()
+      .reconcile(graceMs > 0 ? { decidedBefore: new Date(Date.now() - graceMs) } : {})
       .then((n) => {
         if (n > 0) app.log.warn({ count: n }, "reconciled interrupted approved pushes");
       })
-      .catch((err: unknown) => app.log.error({ err }, "approval reconciliation failed"));
+      .catch((err: unknown) => app.log.error({ err }, "approval reconciliation failed"))
+      .finally(() => {
+        reconciling = false;
+      });
+  };
+
+  let reaper: NodeJS.Timeout | undefined;
+  let reaping = false; // a slow tick never overlaps the next one
+  const reap = async () => {
+    if (reaping) return;
+    reaping = true;
+    try {
+      await Promise.all([
+        reapExpiredLeases(db).then((n) => {
+          if (n > 0) app.log.warn({ count: n }, "expired leases moved to RECOVERY_REQUIRED");
+        }),
+        expireApprovals(db).then((n) => {
+          if (n > 0) app.log.info({ count: n }, "pending approvals expired");
+        }),
+        research.tick(),
+        monitoring.tick(),
+        planExecutor.tick(),
+        Date.now() - reconciledAt >= APPROVAL_RECONCILE_INTERVAL_MS
+          ? reconcileApprovals(APPROVAL_RECONCILE_GRACE_MS)
+          : undefined,
+      ]);
+    } catch (err) {
+      app.log.error({ err }, "reaper failed");
+    } finally {
+      reaping = false;
+    }
+  };
+  app.addHook("onReady", async () => {
+    reconciledAt = Date.now(); // the startup pass below covers every APPROVED row
+    await reap();
+    await diver.reconcile(); // dives a restart interrupted fail (reservation kept); queued ones start
+    reaper = setInterval(() => void reap(), REAPER_INTERVAL_MS);
+    await reconcileApprovals(0);
   });
   app.addHook("preClose", async () => {
     clearInterval(reaper);

@@ -16,7 +16,8 @@ import {
 import { buildApp } from "../src/app.ts";
 import { createDb, type Db } from "../src/db/index.ts";
 import { projectRepositories } from "../src/db/schema.ts";
-import { buildAction, expireApprovals } from "../src/issue-to-pr.ts";
+import { createGithubCatalog } from "../src/github/catalog.ts";
+import { buildAction, createExecutor, decideApproval, expireApprovals } from "../src/issue-to-pr.ts";
 import { canonical, reapExpiredLeases, sha256 } from "../src/jobs.ts";
 import { createTestApp, homeProjectId, ownerSession, type TestApp } from "./helpers/owner-session.ts";
 
@@ -816,6 +817,32 @@ describe("execution", () => {
     const res = await interrupted;
     expect(res.json()).toMatchObject({ status: "EXECUTED" });
     expect(await job(l.jobId)).toMatchObject({ status: "COMPLETED", outcome: "PR_CREATED" });
+  });
+
+  it("an approval a failed execution left APPROVED is finished by the periodic reconcile, without a restart", async () => {
+    const { l, approvalId, actionHash } = await pendingApproval();
+    // The decision committed but its execution never finished (e.g. the final write threw): APPROVED, ledger PENDING.
+    const { initiator_id: ownerId } = (
+      await sql.query<{ initiator_id: string }>(`select initiator_id from jobs where id = $1`, [l.jobId])
+    ).rows[0]!;
+    await decideApproval(db, {
+      ownerId,
+      approvalId,
+      body: { decision: "approve", actionHash },
+      correlationId: randomUUID(),
+    });
+    expect((await decide(approvalId, "approve", actionHash)).statusCode).toBe(409); // a repeat can't unstick it
+    const ex = createExecutor(db, createGithubCatalog(t.githubApp!, app.log), app.log);
+    // Within the grace period it is left to the request that decided it.
+    expect(await ex.reconcile({ decidedBefore: new Date(Date.now() - 60_000) })).toBe(0);
+    expect(gh.writes()).toEqual([]);
+    // Past it (a future cutoff here, so the app's own reaper keeps its grace and stays out of this test).
+    expect(await ex.reconcile({ decidedBefore: new Date(Date.now() + 1_000) })).toBe(1);
+    expect((await sql.query(`select status from approvals where id = $1`, [approvalId])).rows[0].status).toBe(
+      "EXECUTED",
+    );
+    expect(await job(l.jobId)).toMatchObject({ status: "COMPLETED", outcome: "PR_CREATED" });
+    expect(gh.pulls.filter((p) => p.head.ref === l.task!.workBranch)).toHaveLength(1);
   });
 
   it("never moves a branch it didn't create", async () => {

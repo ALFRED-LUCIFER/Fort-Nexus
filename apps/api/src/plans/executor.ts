@@ -1,6 +1,14 @@
 import type { FastifyBaseLogger } from "fastify";
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
-import { isTerminal, type PlanStepStatus, type SourceRef, type StepArtifact } from "@nexus/contracts";
+import {
+  isTerminal,
+  type JobOutcome,
+  type JobStatus,
+  type JobType,
+  type PlanStepStatus,
+  type SourceRef,
+  type StepArtifact,
+} from "@nexus/contracts";
 import type { Deps } from "../app.ts";
 import { audit } from "../audit.ts";
 import { getSalesSummary } from "../business/metrics.ts";
@@ -27,6 +35,19 @@ const FAILED_DEP = new Set<PlanStepStatus>(["FAILED", "SKIPPED", "CANCELLED"]);
 const short = (id: string) => id.slice(0, 8);
 const words = (s: string) => s.toLowerCase().replaceAll("_", " ");
 const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
+
+// The outcome that makes a run's step succeed: a draft PR GitHub confirmed, or the diagnostic command's success.
+const SUCCESS_OUTCOME: Record<JobType, JobOutcome> = {
+  DEV_ISSUE_TO_PR: "PR_CREATED",
+  RUNNER_DIAGNOSTIC: "COMMAND_SUCCEEDED",
+};
+const NO_PR: Partial<Record<JobOutcome, string>> = {
+  APPROVAL_DENIED: "The run finished without a pull request: the push was denied.",
+  COMPLETED_NO_CHANGES: "The run finished without a pull request: it made no changes.",
+};
+const runError = (status: JobStatus, outcome: JobOutcome | null) =>
+  (status === "COMPLETED" && outcome && NO_PR[outcome]) ||
+  `The run ended ${words(status)}${outcome ? ` (${words(outcome)})` : ""}.`;
 
 type Finish = { status: "SUCCEEDED" | "FAILED"; artifact: StepArtifact | null; error: string | null };
 const failed = (error: string): Finish => ({ status: "FAILED", artifact: null, error });
@@ -98,7 +119,7 @@ export function createPlanExecutor(
       const { plan, steps } = await lockPlan(tx, planId);
       const step = steps.find((s) => s.index === index);
       if (step?.status !== "RUNNING") return; // already settled
-      Object.assign(step, { status: f.status });
+      Object.assign(step, { status: f.status, error: f.error }); // the notification below cites this error
       await tx
         .update(planSteps)
         .set({ ...f, finishedAt: new Date() })
@@ -250,13 +271,13 @@ export function createPlanExecutor(
           label: `job.state.changed → ${words(job.status)}`,
           asOf: event.occurredAt.toISOString(),
         });
-      const ok = job.status === "COMPLETED";
+      // A run succeeds only with its job type's success outcome: COMPLETED alone also covers a denied push or a run
+      // without changes, which opened no PR.
+      const ok = job.status === "COMPLETED" && job.outcome === SUCCESS_OUTCOME[job.jobType];
       return finish(plan.id, step.index, {
         status: ok ? "SUCCEEDED" : "FAILED",
         artifact: { kind: "job", id: job.id, evidence, verifiedAt },
-        error: ok
-          ? null
-          : `The run ended ${words(job.status)}${job.outcome ? ` (${words(job.outcome)})` : ""}.`,
+        error: ok ? null : runError(job.status, job.outcome),
       });
     }
     if (step.deepDiveId) {

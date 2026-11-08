@@ -9,6 +9,7 @@ import type {
   AgentKey,
   AgentList,
   AgentProfileSettings,
+  JobOutcome,
   JobStatus,
   Notification,
   Plan,
@@ -19,12 +20,12 @@ import type {
 } from "@nexus/contracts";
 import { AgentTool } from "@nexus/contracts";
 import { createDb } from "../src/db/index.ts";
-import { auditRecords, jobs, notifications } from "../src/db/schema.ts";
-import { moveJob, type NewEvent } from "../src/jobs.ts";
+import { aiSpend, auditRecords, jobs, notifications } from "../src/db/schema.ts";
+import { canonical, moveJob, sha256, type NewEvent } from "../src/jobs.ts";
 import type { DeepDives } from "../src/plans/deep-dives.ts";
 import { createPlanExecutor } from "../src/plans/executor.ts";
 import { planHash } from "../src/plans/service.ts";
-import { planSteps } from "../src/plans/schema.ts";
+import { planSteps, plans } from "../src/plans/schema.ts";
 import { createResearch } from "../src/research/service.ts";
 import { fakeDeepDives, report } from "./helpers/fake-deep-dives.ts";
 import { createTestApp, ownerSession, type TestApp } from "./helpers/owner-session.ts";
@@ -221,7 +222,7 @@ const planJobs = (planId: string) =>
     .where(like(jobs.idempotencyKey, `plan:${planId}:%`));
 
 /** Drives a job through the runner's states as the server records them (events last, before the final move). */
-async function driveJob(jobId: string, path: JobStatus[], events: NewEvent[] = []) {
+async function driveJob(jobId: string, path: JobStatus[], events: NewEvent[] = [], outcome?: JobOutcome) {
   for (const [i, to] of path.entries())
     await db.db.transaction(async (tx) => {
       const [j] = await tx.select().from(jobs).where(eq(jobs.id, jobId)).for("update");
@@ -232,9 +233,9 @@ async function driveJob(jobId: string, path: JobStatus[], events: NewEvent[] = [
         "runner:test",
         i === path.length - 1 ? events : [],
         to === "COMPLETED"
-          ? { outcome: "COMMAND_SUCCEEDED" }
+          ? { outcome: outcome ?? "COMMAND_SUCCEEDED" }
           : to === "FAILED"
-            ? { outcome: "COMMAND_FAILED" }
+            ? { outcome: outcome ?? "COMMAND_FAILED" }
             : {},
       );
     });
@@ -401,6 +402,58 @@ describe("drafting (FR-AGT-01)", () => {
     } finally {
       renameSync(`${aiFile}.off`, aiFile);
     }
+  });
+
+  it("FR-CSP-08: the draft call reserves its worst case with the claim and settles; a spent budget or the stop is 409 first", async () => {
+    const p = await draft([step(diag())]);
+    const [spend] = await db.db.select().from(aiSpend).where(eq(aiSpend.sourceId, p.id));
+    expect(spend).toMatchObject({ source: "PLAN_DRAFT", projectId: home.id, settledAt: expect.any(Date) });
+    expect(spend!.costUsd).toBeCloseTo(0.00006, 6); // 1 token in and out, an unknown model at the highest price
+    expect(spend!.reservedUsd).toBeGreaterThan(spend!.costUsd!);
+
+    const before = (await db.db.select().from(plans)).length;
+    await db.pool.query(`update system_controls set daily_budget_usd = 0.01`);
+    try {
+      const res = await post(home.id, "Check node");
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toMatchObject({ code: "BUDGET_EXHAUSTED", message: /this plan draft/ });
+      await db.pool.query(`update system_controls set daily_budget_usd = 20, emergency_stop_engaged = true`);
+      expect((await post(home.id, "Check node")).json().error.code).toBe("EMERGENCY_STOP");
+    } finally {
+      await db.pool.query(`update system_controls set daily_budget_usd = 20, emergency_stop_engaged = false`);
+    }
+    expect(fake.modelRequests).toHaveLength(1);
+    expect(await db.db.select().from(plans)).toHaveLength(before); // no claim was left behind
+  });
+
+  it("a claim a dead request left answers 409 within its lease; past it, a retry with the same key drafts the plan", async () => {
+    const goal = "Check node";
+    const claim = async (ageMinutes: number) => {
+      const key = randomUUID();
+      await db.db.insert(plans).values({
+        workspaceId: home.workspaceId,
+        projectId: home.id,
+        ownerId: (await db.pool.query(`select id from "user" limit 1`)).rows[0].id as string,
+        goal,
+        idempotencyKey: key,
+        requestHash: sha256(canonical({ projectId: home.id, goal })),
+        createdAt: new Date(Date.now() - ageMinutes * 60_000),
+      });
+      return key;
+    };
+    const fresh = await claim(1);
+    const busy = await post(home.id, goal, fresh);
+    expect(busy.statusCode).toBe(409);
+    expect(busy.json().error.message).toMatch(/still being drafted/);
+    expect(fake.modelRequests).toHaveLength(0);
+
+    const stale = await claim(10);
+    fake.replies.push(planCall([step(diag())]));
+    const res = await post(home.id, goal, stale);
+    expect(res.statusCode, res.body).toBe(201);
+    expect(res.json<Plan>().steps).toHaveLength(1);
+    expect((await post(home.id, goal, stale)).json<Plan>().id).toBe(res.json<Plan>().id);
+    expect(fake.modelRequests).toHaveLength(1);
   });
 
   it("narrows an issue run's budget to the Developer's caps before hashing; a later, tighter cap blocks it", async () => {
@@ -615,6 +668,33 @@ describe("executor (FR-AGT-01/09)", () => {
       error: "Emergency stop is engaged: the step didn't start.",
     });
     expect(await planJobs(p.id)).toHaveLength(0);
+  });
+
+  it("an issue run succeeds only with a PR: a denied push or no changes fail the step honestly, never 'all succeeded'", async () => {
+    // The issue run's terminal states as the server records them (GitHub isn't set up in this suite, so the step's
+    // run is created as a diagnostic and recorded as the issue run it stands for).
+    const cases: [JobOutcome, "SUCCEEDED" | "FAILED", string | null][] = [
+      ["APPROVAL_DENIED", "FAILED", "The run finished without a pull request: the push was denied."],
+      ["COMPLETED_NO_CHANGES", "FAILED", "The run finished without a pull request: it made no changes."],
+      ["PR_CREATED", "SUCCEEDED", null],
+    ];
+    for (const [outcome, status, error] of cases) {
+      const p = await approved([step(diag())]);
+      const e = executor();
+      await e.tick();
+      const [job] = await planJobs(p.id);
+      await db.db.update(jobs).set({ jobType: "DEV_ISSUE_TO_PR" }).where(eq(jobs.id, job!.id));
+      await driveJob(job!.id, ["PREPARING", "RUNNING", "VERIFYING", "COMPLETED"], [], outcome);
+      await e.tick();
+      const now = await get(p.id);
+      expect(now.steps[0], outcome).toMatchObject({ status, error });
+      expect(now.status).toBe(status === "SUCCEEDED" ? "COMPLETED" : "FAILED");
+      const [note] = await planNotices(p.id);
+      if (status === "FAILED") {
+        expect(note).toMatchObject({ category: "TASK_FAILED" });
+        expect(note!.body).toBe(`0 of 1 steps succeeded. Step 1 failed: ${error}`);
+      } else expect(note!.body).toMatch(/^All 1 steps succeeded/);
+    }
   });
 
   it("a metric step settles from the tool's answer: UNAVAILABLE fails it with the reason", async () => {

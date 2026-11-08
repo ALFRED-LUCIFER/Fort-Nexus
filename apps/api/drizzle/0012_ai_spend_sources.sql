@@ -1,0 +1,2 @@
+ALTER TABLE "ai_spend" DROP CONSTRAINT "ai_spend_source_valid";--> statement-breakpoint
+ALTER TABLE "ai_spend" ADD CONSTRAINT "ai_spend_source_valid" CHECK ("ai_spend"."source" in ('DEEP_DIVE', 'JOB_DRAFT', 'EXPLAIN', 'TRIAGE', 'TALK', 'PLAN_DRAFT'));

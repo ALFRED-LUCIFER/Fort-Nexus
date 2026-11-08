@@ -1,8 +1,10 @@
-import { and, eq, inArray, isNotNull, isNull, lt } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import { IncidentTriage } from "@nexus/contracts";
 import { resolveAgentProfile } from "../agents/service.ts";
-import { callTool, loadAi, urlsIn } from "../ai.ts";
+import { callTool, loadAi, toolCallCapUsd, urlsIn } from "../ai.ts";
+import { meteredCall, reserveCall } from "../ai-spend.ts";
+import type { Deps } from "../app.ts";
 import { audit } from "../audit.ts";
 import type { Db } from "../db/index.ts";
 import { HttpError, notFound } from "../errors.ts";
@@ -16,9 +18,10 @@ import { getIncident, type Ctx } from "./service.ts";
 const AGENT = "DEVOPS";
 const TOOL = "record_triage";
 const MAX_TOKENS = 8192;
-// Older than any live call (the SDK gives up after 3 × 60 s): the request that claimed it died, so it may be retaken.
+// Older than any live call (one attempt, 60 s timeout): the request that claimed it died, so it may be retaken.
 // shortcut: a request that dies mid-call blocks retries with 409 until its claim is 5 min old; add a claim heartbeat if
-// that wait shows up in practice. Profile maxCostUsdPerTask/responseDetail aren't applied (max_tokens caps the call).
+// that wait shows up in practice. Profile maxCostUsdPerTask/responseDetail aren't applied (max_tokens caps the call,
+// and its worst case is reserved against today's budget).
 const STALE_CLAIM_MS = 5 * 60_000;
 
 const Output = z.strictObject(IncidentTriage.pick({ hypotheses: true, suggestedNextStep: true }).shape);
@@ -56,14 +59,15 @@ export async function getTriage(db: Db, ownerId: string, incidentId: string) {
 /**
  * POST …/triage: returns the stored triage, or writes it with one model call. Cache-once holds under races: the
  * unique row per incident is inserted (claimed) before the call, so a concurrent request finds the claim and gets
- * 409 instead of calling the model; a failed call deletes its claim and stores nothing.
+ * 409 instead of calling the model; a failed call deletes its claim and stores nothing. The call's worst case is
+ * reserved with the claim (emergency stop and budget 409s) and settled to its measured cost.
  */
 export async function triageIncident(
-  db: Db,
-  aiFile: string,
+  deps: Pick<Deps, "db" | "config" | "shutdown">,
   ctx: Ctx,
   incidentId: string,
 ): Promise<{ created: boolean; triage: IncidentTriage }> {
+  const { db, config } = deps;
   const i = await getIncident(db, ctx.ownerId, incidentId); // 404 unless the owner's; newest 50 checks
   const s = await resolveProject(db, ctx.ownerId, i.projectId, { write: true }); // archived → 409
   const profile = await resolveAgentProfile(db, ctx.ownerId, i.projectId, AGENT);
@@ -76,7 +80,7 @@ export async function triageIncident(
   const [cached] = await db.select().from(triages).where(written(incidentId));
   if (cached) return { created: false, triage: toDto(cached) };
 
-  const ai = await loadAi(aiFile); // 409 with the runbook path until ai.json exists
+  const ai = await loadAi(config.aiFile); // 409 with the runbook path until ai.json exists
   const model = profile.settings.model ?? ai.model;
   const [app] = await db
     .select({
@@ -88,30 +92,7 @@ export async function triageIncident(
     .where(eq(monitoredApps.id, i.appId));
   const host = new URL(app!.healthUrl).host;
 
-  const claimedAt = new Date();
-  const scope = { workspaceId: s.workspaceId, projectId: s.projectId };
-  const [claim] = await db
-    .insert(triages)
-    .values({ ...scope, incidentId, model, profileVersionId: profile.versionId, claimedAt })
-    .onConflictDoUpdate({
-      target: triages.incidentId,
-      set: { model, profileVersionId: profile.versionId, claimedAt },
-      setWhere: and(
-        isNull(triages.createdAt),
-        lt(triages.claimedAt, new Date(claimedAt.getTime() - STALE_CLAIM_MS)),
-      ),
-    })
-    .returning();
-  if (!claim) {
-    const [other] = await db.select().from(triages).where(written(incidentId));
-    if (other) return { created: false, triage: toDto(other) };
-    throw new HttpError(409, "CONFLICT", "This incident is being triaged. Try again in a moment.", {
-      reason: "in_progress",
-    });
-  }
-  const mine = and(eq(triages.id, claim.id), eq(triages.claimedAt, claimedAt), isNull(triages.createdAt));
-
-  const res = await callTool(ai, {
+  const req = {
     model,
     system: SYSTEM,
     tool: TOOL,
@@ -136,7 +117,46 @@ export async function triageIncident(
         error: c.error,
       })),
     },
+  };
+
+  const claimedAt = new Date();
+  const scope = { workspaceId: s.workspaceId, projectId: s.projectId };
+  const claimed = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(triages)
+      .values({ ...scope, incidentId, model, profileVersionId: profile.versionId, claimedAt })
+      .onConflictDoUpdate({
+        target: triages.incidentId,
+        // A retaken claim is a new attempt with its own id and reservation (the dead one's stays counted in full).
+        set: { id: sql`uuidv7()`, model, profileVersionId: profile.versionId, claimedAt },
+        setWhere: and(
+          isNull(triages.createdAt),
+          lt(triages.claimedAt, new Date(claimedAt.getTime() - STALE_CLAIM_MS)),
+        ),
+      })
+      .returning();
+    if (!row) return null;
+    const spend = await reserveCall(tx, {
+      ...scope,
+      source: "TRIAGE",
+      sourceId: row.id,
+      model,
+      maxUsd: toolCallCapUsd(req),
+      timezone: config.ownerTimezone,
+    });
+    return { claim: row, spend };
   });
+  if (!claimed) {
+    const [other] = await db.select().from(triages).where(written(incidentId));
+    if (other) return { created: false, triage: toDto(other) };
+    throw new HttpError(409, "CONFLICT", "This incident is being triaged. Try again in a moment.", {
+      reason: "in_progress",
+    });
+  }
+  const { claim, spend } = claimed;
+  const mine = and(eq(triages.id, claim.id), eq(triages.claimedAt, claimedAt), isNull(triages.createdAt));
+
+  const { res, costUsd } = await meteredCall(db, spend, () => callTool(ai, req, { signal: deps.shutdown }));
   const checkIds = new Set(i.evidence.map((c) => c.id));
   const outside =
     res.ok &&
@@ -151,7 +171,15 @@ export async function triageIncident(
     action: "incident.triage",
     resourceType: "incident" as const,
     resourceId: incidentId,
-    metadata: { ...scope, appId: i.appId, agent: AGENT, profileVersionId: profile.versionId, model, outcome },
+    metadata: {
+      ...scope,
+      appId: i.appId,
+      agent: AGENT,
+      profileVersionId: profile.versionId,
+      model,
+      outcome,
+      costUsd,
+    },
   };
   if (!res.ok || outside) {
     await db.transaction(async (tx) => {

@@ -38,7 +38,8 @@ const ctx = (req: FastifyRequest): Ctx => {
 };
 
 /** EPIC MON. Registered inside the owner scope: session required, mutations need a trusted Origin. */
-export async function monitoringRoutes(app: FastifyInstance, { db, monitoring, config }: Deps) {
+export async function monitoringRoutes(app: FastifyInstance, deps: Deps) {
+  const { db, monitoring } = deps;
   const r = app.withTypeProvider<ZodTypeProvider>();
 
   r.get(
@@ -99,7 +100,7 @@ export async function monitoringRoutes(app: FastifyInstance, { db, monitoring, c
     "/v1/incidents/:id/triage",
     { schema: { params: IdParams, response: { 200: IncidentTriage, 201: IncidentTriage } } },
     async (req, reply) => {
-      const { created, triage } = await triageIncident(db, config.aiFile, ctx(req), req.params.id);
+      const { created, triage } = await triageIncident(deps, ctx(req), req.params.id);
       reply.code(created ? 201 : 200);
       return triage;
     },

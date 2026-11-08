@@ -34,7 +34,7 @@ import type {
 } from "@nexus/contracts";
 
 // Direct model calls that reserve budget (FR-CSP-08). Each source belongs to one agent for the performance view.
-export type AiSpendSource = "DEEP_DIVE" | "JOB_DRAFT";
+export type AiSpendSource = "DEEP_DIVE" | "JOB_DRAFT" | "EXPLAIN" | "TRIAGE" | "TALK" | "PLAN_DRAFT";
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, mode: "date" });
 // Postgres 18 uuidv7(): time-ordered ids double as the newest-first list cursor.
@@ -437,7 +437,10 @@ export const aiSpend = pgTable(
   (t) => [
     uniqueIndex("ai_spend_source_uq").on(t.source, t.sourceId),
     index("ai_spend_created_idx").on(t.createdAt),
-    check("ai_spend_source_valid", sql`${t.source} in ('DEEP_DIVE', 'JOB_DRAFT')`),
+    check(
+      "ai_spend_source_valid",
+      sql`${t.source} in ('DEEP_DIVE', 'JOB_DRAFT', 'EXPLAIN', 'TRIAGE', 'TALK', 'PLAN_DRAFT')`,
+    ),
     check("ai_spend_reserved_positive", sql`${t.reservedUsd} > 0`),
     check("ai_spend_cost_nonnegative", sql`${t.costUsd} is null or ${t.costUsd} >= 0`),
   ],

@@ -407,7 +407,8 @@ export async function decideApproval(
 /**
  * Runs approved push actions. One in-flight execution per approval per process; finishing writes are
  * conditional on the approval still being APPROVED, so a second executor can't overwrite the first.
- * `reconcile` picks up approvals a crashed process left APPROVED (startup path).
+ * `reconcile` picks up approvals left APPROVED by a crash (startup) or by an execution whose final write failed
+ * (the reaper, periodically).
  */
 export function createExecutor(db: Db, github: GithubCatalog | null, log: FastifyBaseLogger) {
   const inFlight = new Map<string, Promise<Approval>>();
@@ -540,14 +541,27 @@ export function createExecutor(db: Db, github: GithubCatalog | null, log: Fastif
 
   return {
     execute,
-    /** Startup: finish approvals left APPROVED by a crash (DEV-G08: the push adopts what already exists). */
-    async reconcile(): Promise<number> {
+    /**
+     * Finishes approvals left APPROVED (DEV-G08: the push adopts what already exists), skipping any executing in this
+     * process and, with `decidedBefore`, any decided since (its own request is still executing it). One failing
+     * approval doesn't hold up the others: it is logged and stays APPROVED for the next pass.
+     */
+    async reconcile(opts: { decidedBefore?: Date } = {}): Promise<number> {
       const open = await db
         .select({ id: approvals.id })
         .from(approvals)
-        .where(eq(approvals.status, "APPROVED"));
-      for (const { id } of open) await execute(id);
-      return open.length;
+        .where(
+          and(
+            eq(approvals.status, "APPROVED"),
+            opts.decidedBefore ? lt(approvals.decidedAt, opts.decidedBefore) : undefined,
+          ),
+        );
+      const due = open.filter(({ id }) => !inFlight.has(id));
+      for (const { id } of due)
+        await execute(id).catch((err: unknown) =>
+          log.error({ err, approvalId: id }, "reconciling an approved push failed; retried later"),
+        );
+      return due.length;
     },
   };
 }

@@ -1,8 +1,10 @@
-import { and, eq, inArray, isNotNull, isNull, lt } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import { FindingExplanation } from "@nexus/contracts";
 import { resolveAgentProfile } from "../agents/service.ts";
-import { callTool, loadAi, urlsIn } from "../ai.ts";
+import { callTool, loadAi, toolCallCapUsd, urlsIn } from "../ai.ts";
+import { meteredCall, reserveCall } from "../ai-spend.ts";
+import type { Deps } from "../app.ts";
 import { audit } from "../audit.ts";
 import type { Db } from "../db/index.ts";
 import { HttpError, notFound } from "../errors.ts";
@@ -20,9 +22,10 @@ import type { Ctx } from "./service.ts";
 const AGENT = "AI_RESEARCHER";
 const TOOL = "record_explanation";
 const MAX_TOKENS = 8192;
-// Older than any live call (the SDK gives up after 3 × 60 s): the request that claimed it died, so it may be retaken.
+// Older than any live call (one attempt, 60 s timeout): the request that claimed it died, so it may be retaken.
 // shortcut: a request that dies mid-call blocks retries with 409 until its claim is 5 min old; add a claim heartbeat if
-// that wait shows up in practice. Profile maxCostUsdPerTask/responseDetail aren't applied (max_tokens caps the call).
+// that wait shows up in practice. Profile maxCostUsdPerTask/responseDetail aren't applied (max_tokens caps the call,
+// and its worst case is reserved against today's budget).
 const STALE_CLAIM_MS = 5 * 60_000;
 
 const Output = z.strictObject(
@@ -64,14 +67,15 @@ export async function getExplanation(db: Db, ownerId: string, findingId: string)
 /**
  * POST …/explain: returns the stored explanation, or writes it with one model call. Cache-once holds under races:
  * the unique row per finding is inserted (claimed) before the call, so a concurrent request finds the claim and
- * gets 409 instead of calling the model; a failed call deletes its claim and stores nothing.
+ * gets 409 instead of calling the model; a failed call deletes its claim and stores nothing. The call's worst case
+ * is reserved with the claim (emergency stop and budget 409s) and settled to its measured cost.
  */
 export async function explainFinding(
-  db: Db,
-  aiFile: string,
+  deps: Pick<Deps, "db" | "config" | "shutdown">,
   ctx: Ctx,
   findingId: string,
 ): Promise<{ created: boolean; explanation: FindingExplanation }> {
+  const { db, config } = deps;
   const [f] = await db
     .select()
     .from(researchFindings)
@@ -94,7 +98,7 @@ export async function explainFinding(
   const [cached] = await db.select().from(explanations).where(written(findingId));
   if (cached) return { created: false, explanation: toDto(cached) };
 
-  const ai = await loadAi(aiFile); // 409 with the runbook path until ai.json exists
+  const ai = await loadAi(config.aiFile); // 409 with the runbook path until ai.json exists
   const model = profile.settings.model ?? ai.model;
   const sources = await db
     .select({
@@ -106,20 +110,42 @@ export async function explainFinding(
     .where(eq(researchFindingSources.findingId, findingId))
     .orderBy(researchFindingSources.id);
 
+  const req = {
+    model,
+    system: SYSTEM,
+    tool: TOOL,
+    schema: Output,
+    maxTokens: MAX_TOKENS,
+    data: { finding: { title: f.title, excerpt: f.excerpt, verification: f.label }, sources },
+  };
+
   const claimedAt = new Date();
-  const [claim] = await db
-    .insert(explanations)
-    .values({ ...s, findingId, model, profileVersionId: profile.versionId, claimedAt })
-    .onConflictDoUpdate({
-      target: explanations.findingId,
-      set: { model, profileVersionId: profile.versionId, claimedAt },
-      setWhere: and(
-        isNull(explanations.createdAt),
-        lt(explanations.claimedAt, new Date(claimedAt.getTime() - STALE_CLAIM_MS)),
-      ),
-    })
-    .returning();
-  if (!claim) {
+  const claimed = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(explanations)
+      .values({ ...s, findingId, model, profileVersionId: profile.versionId, claimedAt })
+      .onConflictDoUpdate({
+        target: explanations.findingId,
+        // A retaken claim is a new attempt with its own id and reservation (the dead one's stays counted in full).
+        set: { id: sql`uuidv7()`, model, profileVersionId: profile.versionId, claimedAt },
+        setWhere: and(
+          isNull(explanations.createdAt),
+          lt(explanations.claimedAt, new Date(claimedAt.getTime() - STALE_CLAIM_MS)),
+        ),
+      })
+      .returning();
+    if (!row) return null;
+    const spend = await reserveCall(tx, {
+      ...s,
+      source: "EXPLAIN",
+      sourceId: row.id,
+      model,
+      maxUsd: toolCallCapUsd(req),
+      timezone: config.ownerTimezone,
+    });
+    return { claim: row, spend };
+  });
+  if (!claimed) {
     const [other] = await db.select().from(explanations).where(written(findingId));
     if (other) return { created: false, explanation: toDto(other) };
     throw new HttpError(
@@ -131,20 +157,14 @@ export async function explainFinding(
       },
     );
   }
+  const { claim, spend } = claimed;
   const mine = and(
     eq(explanations.id, claim.id),
     eq(explanations.claimedAt, claimedAt),
     isNull(explanations.createdAt),
   );
 
-  const res = await callTool(ai, {
-    model,
-    system: SYSTEM,
-    tool: TOOL,
-    schema: Output,
-    maxTokens: MAX_TOKENS,
-    data: { finding: { title: f.title, excerpt: f.excerpt, verification: f.label }, sources },
-  });
+  const { res, costUsd } = await meteredCall(db, spend, () => callTool(ai, req, { signal: deps.shutdown }));
   const allowed = new Set(sources.map((x) => x.url));
   const uncited =
     res.ok &&
@@ -158,7 +178,15 @@ export async function explainFinding(
     action: "research.finding.explain",
     resourceType: "research_watchlist" as const, // findings are part of their watchlist (as markRead records)
     resourceId: f.watchlistId,
-    metadata: { ...s, findingId, agent: AGENT, profileVersionId: profile.versionId, model, outcome },
+    metadata: {
+      ...s,
+      findingId,
+      agent: AGENT,
+      profileVersionId: profile.versionId,
+      model,
+      outcome,
+      costUsd,
+    },
   };
   if (!res.ok || uncited) {
     await db.transaction(async (tx) => {

@@ -73,6 +73,7 @@ export async function conversationRoutes(app: FastifyInstance, deps: Deps) {
         idempotencyKey: req.headers[IDEMPOTENCY_HEADER],
         body: req.body,
         correlationId: req.id,
+        log: req.log,
       }),
   );
 

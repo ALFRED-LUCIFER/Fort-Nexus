@@ -26,7 +26,17 @@ import { createTestApp, ownerSession, type TestApp } from "./helpers/owner-sessi
 const seams = vi.hoisted(() => ({
   dives: null as ReturnType<typeof fakeDeepDives> | null,
   profile: new Map<string, Record<string, unknown>>(),
+  /** While set, answering a routed intent throws it (an internal error after the paid call). */
+  answerError: null as Error | null,
 }));
+vi.mock("../src/conversations/tools.ts", async (importOriginal) => {
+  const m = await importOriginal<typeof import("../src/conversations/tools.ts")>();
+  return {
+    ...m,
+    answer: (...a: Parameters<typeof m.answer>) =>
+      seams.answerError ? Promise.reject(seams.answerError) : m.answer(...a),
+  };
+});
 vi.mock("../src/plans/deep-dives.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/plans/deep-dives.ts")>()),
   deepDiveOps: () => ({
@@ -260,6 +270,7 @@ beforeEach(() => {
   ip = `127.0.1.${++tests}`;
   seams.dives = fakeDeepDives();
   seams.profile.clear();
+  seams.answerError = null;
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -876,6 +887,103 @@ describe("profile pinning (FR-WKS-05)", () => {
     expect(audit.rows.map((r) => [r.metadata.profileVersionId, r.metadata.model])).toEqual([
       [v1.id, "claude-pinned-1"],
       [v1.id, "claude-pinned-1"],
+    ]);
+  });
+});
+
+describe("AI spend and unanswered turns (FR-CSP-08)", () => {
+  const spends = (sourceId: string) =>
+    sql.query<{ source: string; reserved_usd: string; cost_usd: string | null; settled_at: Date | null }>(
+      `select source, reserved_usd, cost_usd, settled_at from ai_spend where source_id = $1`,
+      [sourceId],
+    );
+  const setControls = (set: string) => sql.query(`update system_controls set ${set}`);
+  afterEach(async () => {
+    await setControls("daily_budget_usd = 20, emergency_stop_engaged = false");
+  });
+
+  it("the routing call reserves its worst case with the owner's turn and settles to the measured cost", async () => {
+    const thread = await newThread();
+    const r = await turn(thread.id, "List my runs", toolCall({ kind: "LIST_RUNS" }));
+    const { rows } = await spends(r.userTurn.id);
+    expect(rows).toEqual([
+      {
+        source: "TALK",
+        reserved_usd: expect.any(String),
+        cost_usd: expect.any(String),
+        settled_at: expect.any(Date),
+      },
+    ]);
+    // 1 token in and 1 out of an unknown model, at the highest listed price ($10 and $50 per million).
+    expect(Number(rows[0]!.cost_usd)).toBeCloseTo(0.00006, 6);
+    expect(Number(rows[0]!.reserved_usd)).toBeGreaterThan(0.00006);
+  });
+
+  it("a spent budget or an engaged emergency stop is a 409 that stores no turn and calls no model", async () => {
+    const thread = await newThread();
+    await setControls("daily_budget_usd = 0.01");
+    const spent = await say(thread.id, "List my runs");
+    expect(spent.statusCode).toBe(409);
+    expect(spent.json().error).toMatchObject({ code: "BUDGET_EXHAUSTED", message: /this answer/ });
+    await setControls("daily_budget_usd = 20, emergency_stop_engaged = true");
+    const stopped = await say(thread.id, "List my runs");
+    expect(stopped.statusCode).toBe(409);
+    expect(stopped.json().error.code).toBe("EMERGENCY_STOP");
+    expect(fake.modelRequests).toHaveLength(0);
+    expect(((await call("GET", `/v1/conversations/${thread.id}`)).json() as ThreadDetail).turns).toEqual([]);
+  });
+
+  it("an internal error while answering records a failed reply (never the error) and the key replays it", async () => {
+    const thread = await newThread();
+    seams.answerError = new Error("connection reset by peer at 10.0.0.7");
+    fake.replies.push(toolCall({ kind: "LIST_RUNS" }));
+    const key = randomUUID();
+    const res = await say(thread.id, "List my runs", key);
+    expect(res.statusCode, res.body).toBe(200);
+    const r = res.json() as PostTurnResponse;
+    expect(r.assistantTurn).toMatchObject({ intent: null, basis: "NONE", sources: [] });
+    expect(r.assistantTurn.text).toMatch(/Something went wrong.*Nothing was done/);
+    expect(res.body).not.toContain("10.0.0.7");
+    expect(r.proposal).toBeNull();
+    seams.answerError = null;
+    const again = await say(thread.id, "List my runs", key);
+    expect(again.json()).toEqual(r);
+    expect(fake.modelRequests).toHaveLength(1);
+    // The paid call still settled.
+    expect((await spends(r.userTurn.id)).rows[0]!.settled_at).toBeInstanceOf(Date);
+  });
+
+  it("a message a dead request left unanswered answers 409 within its lease, then a failed reply the owner can resend", async () => {
+    const thread = await newThread();
+    const text = "List my runs";
+    const orphan = async (age: string) => {
+      const key = randomUUID();
+      await sql.query(
+        `insert into conversation_turns (workspace_id, project_id, thread_id, role, text, basis, sources,
+           idempotency_key, request_hash, correlation_id, created_at)
+         values ($1, $2, $3, 'USER', $4, 'NONE', '[]', $5, $6, 'test', now() - $7::interval)`,
+        [home.workspaceId, home.id, thread.id, text, key, sha256(canonical({ text })), age],
+      );
+      return key;
+    };
+    const fresh = await orphan("1 minute");
+    const busy = await say(thread.id, text, fresh);
+    expect(busy.statusCode).toBe(409);
+    expect(busy.json().error.message).toMatch(/still being answered/);
+
+    const stale = await orphan("10 minutes");
+    const res = await say(thread.id, text, stale);
+    expect(res.statusCode, res.body).toBe(200);
+    const r = res.json() as PostTurnResponse;
+    expect(r.assistantTurn.text).toMatch(/interrupted before it could answer.*send it again/);
+    expect((await say(thread.id, text, stale)).json()).toEqual(r); // recorded once
+    expect(fake.modelRequests).toHaveLength(0);
+    const audit = await sql.query<{ outcome: string; metadata: { reason: string } }>(
+      `select outcome, metadata from audit_records where action = 'conversation.turn' and resource_id = $1`,
+      [thread.id],
+    );
+    expect(audit.rows).toEqual([
+      { outcome: "FAILED", metadata: expect.objectContaining({ reason: "interrupted" }) },
     ]);
   });
 });

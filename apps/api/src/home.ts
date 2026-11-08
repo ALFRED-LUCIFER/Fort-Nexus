@@ -34,7 +34,14 @@ const MAX_EXECUTION = 8;
 const MAX_TOP = 5;
 const ACTIVE: readonly JobStatus[] = JOB_STATUS_GROUPS.ACTIVE;
 const NEEDS_YOU: readonly JobStatus[] = JOB_STATUS_GROUPS.NEEDS_YOU;
-const SPEND_AGENT: Record<AiSpendSource, AgentKey> = { DEEP_DIVE: "AI_RESEARCHER", JOB_DRAFT: "DEVELOPER" };
+const SPEND_AGENT: Record<AiSpendSource, AgentKey> = {
+  DEEP_DIVE: "AI_RESEARCHER",
+  JOB_DRAFT: "DEVELOPER",
+  EXPLAIN: "AI_RESEARCHER",
+  TRIAGE: "DEVOPS",
+  TALK: "CHIEF_OF_STAFF",
+  PLAN_DRAFT: "CHIEF_OF_STAFF",
+};
 const STATUS_WORD: Partial<Record<JobStatus, string>> = {
   DRAFT: "draft",
   VALIDATING: "validating",

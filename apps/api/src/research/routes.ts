@@ -43,7 +43,8 @@ const ctx = (req: FastifyRequest): Ctx => ({
 });
 
 /** EPIC RES. Registered inside the owner scope: session required, mutations need a trusted Origin. */
-export async function researchRoutes(app: FastifyInstance, { db, research, config }: Deps) {
+export async function researchRoutes(app: FastifyInstance, deps: Deps) {
+  const { db, research } = deps;
   const r = app.withTypeProvider<ZodTypeProvider>();
 
   r.get(
@@ -129,7 +130,7 @@ export async function researchRoutes(app: FastifyInstance, { db, research, confi
     "/v1/research/findings/:id/explain",
     { schema: { params: IdParams, response: { 200: FindingExplanation, 201: FindingExplanation } } },
     async (req, reply) => {
-      const { created, explanation } = await explainFinding(db, config.aiFile, ctx(req), req.params.id);
+      const { created, explanation } = await explainFinding(deps, ctx(req), req.params.id);
       reply.code(created ? 201 : 200);
       return explanation;
     },

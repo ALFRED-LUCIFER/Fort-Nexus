@@ -87,7 +87,7 @@ export const AgentPerformanceRow = z.object({
   // Draft PRs GitHub confirmed (EXECUTED approvals) for the window's jobs.
   pullRequests: z.int().nonnegative(),
   // Estimates, not invoices (FR-OBS-03): the jobs' estimatedCostUsd plus the agent's ai_spend in the window
-  // (cost once settled, else the reservation, as the daily budget counts it). DEEP_DIVE → AI_RESEARCHER, JOB_DRAFT → DEVELOPER.
+  // (cost once settled, else the reservation, as the daily budget counts it); each ledger source belongs to one agent.
   costUsd: z.number().nonnegative(),
   costPerPullRequestUsd: z.number().nonnegative().nullable(),
   // Median of job created → its first push/PR approval created ("review-ready"); null without any.

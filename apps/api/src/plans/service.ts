@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lt } from "drizzle-orm";
 import {
   AgentKey,
   DEEP_DIVE_DEPTH_LIMITS,
@@ -11,7 +11,8 @@ import {
   type PlanStep,
   type PlanStepAction,
 } from "@nexus/contracts";
-import { loadAi } from "../ai.ts";
+import { loadAi, requestCapUsd } from "../ai.ts";
+import { meteredCall, reserveCall } from "../ai-spend.ts";
 import type { Deps } from "../app.ts";
 import { audit } from "../audit.ts";
 import type { Db, Tx } from "../db/index.ts";
@@ -21,7 +22,7 @@ import { canonical, cancelJob, ownerActor, sha256 } from "../jobs.ts";
 import { listWatchlists } from "../research/service.ts";
 import { boundRepositoryIds, ownerWorkspaceIds, resolveProject, type ProjectScope } from "../workspaces.ts";
 import { resolveAgentProfile } from "../agents/service.ts";
-import { draftPlan, type DraftPlan } from "./draft.ts";
+import { draftPlan, planRequest, type DraftPlan } from "./draft.ts";
 import { planSteps, plans } from "./schema.ts";
 
 // EPIC AGT FR-AGT-01/09, PRD §11.7: draft (model) → block + hash (server) → approve the exact hash (owner).
@@ -31,6 +32,9 @@ export type StepRow = typeof planSteps.$inferSelect;
 
 const LIST_LIMIT = 50;
 const CATALOG_ISSUES = 20;
+// Older than any live draft (one model attempt, 60 s timeout): the request that claimed the key died, so a retry with
+// the same key may take it over.
+const STALE_DRAFTING_MS = 5 * 60_000;
 const iso = (d: Date | null) => d?.toISOString() ?? null;
 
 export const AGENT_LABEL: Record<AgentKey, string> = {
@@ -232,8 +236,14 @@ async function stepsOf(db: Db | Tx, ids: string[]) {
 
 // ── Owner operations ──
 
+/**
+ * One model call drafts the plan. The row claims the Idempotency-Key and the call's cap is reserved with it before
+ * the call, so a concurrent retry never pays twice and an engaged stop or a spent budget refuses (409) before any
+ * call; the spend settles to the measured cost. A claim a crashed request left behind is taken over after
+ * STALE_DRAFTING_MS (its reservation stays counted in full: its outcome is unknown).
+ */
 export async function createPlan(
-  deps: Pick<Deps, "db" | "github" | "config">,
+  deps: Pick<Deps, "db" | "github" | "config" | "shutdown">,
   input: { ownerId: string; idempotencyKey: string; body: CreatePlanRequest; correlationId: string },
 ): Promise<Plan> {
   const { db } = deps;
@@ -256,8 +266,13 @@ export async function createPlan(
       );
     return toPlanDto(p, await stepsOf(db, [p.id]));
   };
+  const staleBefore = new Date(Date.now() - STALE_DRAFTING_MS);
   const [existing] = await db.select().from(plans).where(byKey);
-  if (existing) return replay(existing);
+  const staleId =
+    existing && !existing.planHash && existing.requestHash === requestHash && existing.createdAt < staleBefore
+      ? existing.id
+      : null;
+  if (existing && !staleId) return replay(existing);
 
   const ai = await loadAi(deps.config.aiFile); // 409 with the runbook path until ai.json exists
   const profiles = new Map<AgentKey, EffectiveAgentProfile>();
@@ -265,27 +280,54 @@ export async function createPlan(
     profiles.set(agent, await resolveAgentProfile(db, ownerId, scope.projectId, agent));
   const chief = profiles.get("CHIEF_OF_STAFF")!;
   const model = chief.settings.model ?? ai.model;
+  const { targets, data } = await catalog(deps, ownerId, scope);
+  const request = {
+    goal: body.goal,
+    catalog: {
+      ...data,
+      agents: AgentKey.options.map((a) => ({
+        agent: a,
+        tools: profiles.get(a)!.settings.tools,
+        autonomy: profiles.get(a)!.settings.autonomy,
+      })),
+    },
+  };
 
-  // The row claims the key before the paid call, so a concurrent retry never pays twice.
-  // shortcut: a process crash during the model call leaves this claim, so that one key answers 409 for good (a new key
-  // works); expire claims older than a few minutes if it ever happens.
-  const [claim] = await db
-    .insert(plans)
-    .values({
+  const claimed = await db.transaction(async (tx) => {
+    if (staleId)
+      await tx
+        .delete(plans)
+        .where(and(eq(plans.id, staleId), isNull(plans.planHash), lt(plans.createdAt, staleBefore)));
+    const [row] = await tx
+      .insert(plans)
+      .values({
+        workspaceId: scope.workspaceId,
+        projectId: scope.projectId,
+        ownerId,
+        goal: body.goal,
+        profileVersionId: chief.versionId,
+        idempotencyKey: input.idempotencyKey,
+        requestHash,
+      })
+      .onConflictDoNothing({ target: [plans.ownerId, plans.idempotencyKey] })
+      .returning();
+    if (!row) return null;
+    const spend = await reserveCall(tx, {
       workspaceId: scope.workspaceId,
       projectId: scope.projectId,
-      ownerId,
-      goal: body.goal,
-      profileVersionId: chief.versionId,
-      idempotencyKey: input.idempotencyKey,
-      requestHash,
-    })
-    .onConflictDoNothing({ target: [plans.ownerId, plans.idempotencyKey] })
-    .returning();
-  if (!claim) {
+      source: "PLAN_DRAFT",
+      sourceId: row.id,
+      model,
+      maxUsd: requestCapUsd(planRequest(model, request)),
+      timezone: deps.config.ownerTimezone,
+    });
+    return { claim: row, spend };
+  });
+  if (!claimed) {
     const [raced] = await db.select().from(plans).where(byKey);
     return replay(raced!);
   }
+  const { claim, spend } = claimed;
 
   const record = (tx: Db | Tx, outcome: "SUCCEEDED" | "FAILED", extra: Record<string, unknown> = {}) =>
     audit(tx, {
@@ -306,22 +348,16 @@ export async function createPlan(
       },
     });
   try {
-    const { targets, data } = await catalog(deps, ownerId, scope);
-    const drafted = await draftPlan(ai, model, {
-      goal: body.goal,
-      catalog: {
-        ...data,
-        agents: AgentKey.options.map((a) => ({
-          agent: a,
-          tools: profiles.get(a)!.settings.tools,
-          autonomy: profiles.get(a)!.settings.autonomy,
-        })),
-      },
-    });
+    const { res: drafted, costUsd } = await meteredCall(db, spend, () =>
+      draftPlan(ai, model, request, { signal: deps.shutdown }),
+    );
     if ("failure" in drafted) {
       await db.transaction(async (tx) => {
         await tx.delete(plans).where(eq(plans.id, claim.id)); // nothing was produced: the key may be retried
-        await record(tx, "FAILED", { reason: drafted.provider ? "provider_error" : "invalid_output" });
+        await record(tx, "FAILED", {
+          reason: drafted.provider ? "provider_error" : "invalid_output",
+          costUsd,
+        });
       });
       throw new HttpError(
         drafted.provider ? 502 : 422,
@@ -357,6 +393,7 @@ export async function createPlan(
         steps: steps.length,
         blocked: steps.filter((s) => s.blockedReason).length,
         planHash: hash,
+        costUsd,
       });
       return toPlanDto(plan!, rows);
     });

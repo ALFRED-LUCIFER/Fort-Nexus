@@ -86,19 +86,26 @@ export async function getSystemControls(db: Db, timezone: string, now = new Date
   };
 }
 
+// How the owner calls each ledger source's work in a BUDGET_EXHAUSTED message; only a run's and a deep dive's cap is
+// theirs to lower.
+const SPEND_WORK: Record<AiSpendSource, string> = {
+  DEEP_DIVE: "deep dive",
+  JOB_DRAFT: "job draft",
+  EXPLAIN: "explanation",
+  TRIAGE: "triage",
+  TALK: "answer",
+  PLAN_DRAFT: "plan draft",
+};
+
 /** BUDGET_EXHAUSTED unless `max` fits in what is left of today's budget; `what` names the work for the owner. */
-async function assertFits(
-  tx: Db | Tx,
-  max: number,
-  timezone: string,
-  what: "run" | "deep dive" | "job draft",
-) {
+async function assertFits(tx: Db | Tx, max: number, timezone: string, what: string) {
   const b = await budgetStatus(tx, timezone, new Date());
+  const lower = what === "run" || what === "deep dive" ? `Lower the ${what}'s cost cap, or raise` : "Raise";
   if (micros(b.spentTodayUsd) + micros(max) > micros(b.dailyCapUsd))
     throw new HttpError(
       409,
       "BUDGET_EXHAUSTED",
-      `Today's AI budget can't cover this ${what}: ${usd(b.remainingUsd)} of ${usd(b.dailyCapUsd)} is left and this ${what} may use up to ${usd(max)}. Lower the ${what}'s cost cap, or raise the daily cap in Settings → Budgets & limits. It resets at midnight ${timezone}.`,
+      `Today's AI budget can't cover this ${what}: ${usd(b.remainingUsd)} of ${usd(b.dailyCapUsd)} is left and this ${what} may use up to ${usd(max)}. ${lower} the daily cap in Settings → Budgets & limits. It resets at midnight ${timezone}.`,
       {
         dailyCapUsd: b.dailyCapUsd,
         spentTodayUsd: b.spentTodayUsd,
@@ -140,7 +147,7 @@ export async function reserveAiSpend(
       "EMERGENCY_STOP",
       "Emergency stop is engaged: nothing new can start and approvals can't execute until you release it.",
     );
-  await assertFits(tx, i.maxUsd, i.timezone, i.source === "DEEP_DIVE" ? "deep dive" : "job draft");
+  await assertFits(tx, i.maxUsd, i.timezone, SPEND_WORK[i.source]);
   const [row] = await tx
     .insert(aiSpend)
     .values({

@@ -7,7 +7,8 @@ import { and, eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentTool, FindingExplanation, IncidentTriage, Project, WorkspaceList } from "@nexus/contracts";
 import { createDb, type Db } from "../src/db/index.ts";
-import { auditRecords } from "../src/db/schema.ts";
+import { costUsd } from "../src/ai-cost.ts";
+import { aiSpend, auditRecords } from "../src/db/schema.ts";
 import { incidentTriages, monitoredApps } from "../src/monitoring/schema.ts";
 import { MONITOR, recordCheck } from "../src/monitoring/service.ts";
 import { getTriage, triageIncident } from "../src/monitoring/triage.ts";
@@ -51,6 +52,13 @@ vi.mock("../src/agents/service.ts", async (importOriginal) => {
 });
 
 const MODEL = "claude-test-model";
+// What the fake provider's usage (1 token in, 1 out) costs; an unknown model is billed at the highest listed price.
+const CALL_COST = costUsd(MODEL, {
+  input_tokens: 1,
+  output_tokens: 1,
+  cache_creation_input_tokens: null,
+  cache_read_input_tokens: null,
+});
 const SRC_A = "https://acme.dev/blog/sdk-2";
 const SRC_B = "https://news.example/acme-sdk";
 const APP_URL = "https://status.example.test/internal/health?token=x";
@@ -199,6 +207,8 @@ const triageRows = (incidentId: string) =>
   db.select().from(incidentTriages).where(eq(incidentTriages.incidentId, incidentId));
 const audits = (action: string) => db.select().from(auditRecords).where(eq(auditRecords.action, action));
 const stranger = () => ({ ownerId: "someone-else", actor: "user:someone-else", correlationId: randomUUID() });
+/** The service's deps, for calls made directly rather than through a route. */
+const direct = () => ({ db, config: t.config, shutdown: new AbortController().signal });
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "nexus-ai-"));
@@ -310,6 +320,7 @@ describe("FR-RES-08 finding explanations", () => {
       profileVersionId: null,
       model: MODEL,
       outcome: "CREATED",
+      costUsd: CALL_COST,
     });
   });
 
@@ -421,7 +432,7 @@ describe("FR-RES-08 finding explanations", () => {
     const b = await newProject();
     const id = await seedFinding(a);
     await seedFinding(b, "Decoy finding of project B");
-    await expect(explainFinding(db, aiFile, stranger(), id)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(explainFinding(direct(), stranger(), id)).rejects.toMatchObject({ statusCode: 404 });
     await expect(getExplanation(db, "someone-else", id)).rejects.toMatchObject({ statusCode: 404 });
     expect((await call("POST", `/v1/research/findings/${randomUUID()}/explain`)).statusCode).toBe(404);
 
@@ -480,6 +491,7 @@ describe("FR-MON-07 incident triage", () => {
         profileVersionId: null,
         model: MODEL,
         outcome: "CREATED",
+        costUsd: CALL_COST,
       },
     ]);
   });
@@ -542,7 +554,7 @@ describe("FR-MON-07 incident triage", () => {
     }
     expect(requests).toEqual([]);
 
-    await expect(triageIncident(db, aiFile, stranger(), incident)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(triageIncident(direct(), stranger(), incident)).rejects.toMatchObject({ statusCode: 404 });
     replies.push(triageReply(checks));
     expect((await call("POST", `/v1/incidents/${incident}/triage`)).statusCode).toBe(201);
     await expect(getTriage(db, "someone-else", incident)).rejects.toMatchObject({ statusCode: 404 });
@@ -550,5 +562,100 @@ describe("FR-MON-07 incident triage", () => {
     await archive(p);
     expect((await call("POST", `/v1/incidents/${incident}/triage`)).statusCode).toBe(409);
     expect((await call("GET", `/v1/incidents/${incident}/triage`)).statusCode).toBe(200);
+  });
+});
+
+describe("FR-CSP-08: an explanation or a triage spends today's AI budget", () => {
+  const spends = (projectId: string) =>
+    db.select().from(aiSpend).where(eq(aiSpend.projectId, projectId)).orderBy(aiSpend.id);
+  const setCap = (usd: number) => sql.query(`update system_controls set daily_budget_usd = $1`, [usd]);
+  const setStop = (on: boolean) => sql.query(`update system_controls set emergency_stop_engaged = $1`, [on]);
+  afterEach(async () => {
+    await setCap(20);
+    await setStop(false);
+  });
+
+  it("reserves the call's worst case before it and settles to the measured cost; a provider error is tried once and keeps the cap", async () => {
+    const p = await newProject();
+    const id = await seedFinding(p);
+    replies.push({ status: 500 });
+    expect((await call("POST", `/v1/research/findings/${id}/explain`)).statusCode).toBe(502);
+    expect(requests).toHaveLength(1); // no SDK retry: the reservation covers exactly one attempt
+    replies.push(explanationReply());
+    expect((await call("POST", `/v1/research/findings/${id}/explain`)).statusCode).toBe(201);
+
+    const [failed, created] = await spends(p.id);
+    const [row] = await explanationRows(id);
+    expect(failed).toMatchObject({ source: "EXPLAIN", settledAt: expect.any(Date) });
+    expect(failed!.costUsd).toBe(failed!.reservedUsd); // no usage came back: it may have been billed
+    expect(created).toMatchObject({ source: "EXPLAIN", sourceId: row!.id, settledAt: expect.any(Date) });
+    expect(created!.costUsd).toBeCloseTo(CALL_COST, 6);
+    expect(created!.reservedUsd).toBeGreaterThan(CALL_COST);
+    // The daily budget counts it.
+    const system = (await call("GET", "/v1/system")).json<{ budget: { spentTodayUsd: number } }>();
+    expect(system.budget.spentTodayUsd).toBeGreaterThanOrEqual(failed!.reservedUsd + CALL_COST - 1e-6);
+  });
+
+  it("a spent budget or an engaged emergency stop refuses with 409 before any claim or model call", async () => {
+    const p = await newProject();
+    const id = await seedFinding(p);
+    const { incident, checks } = await seedIncident(p);
+    const urls = [`/v1/research/findings/${id}/explain`, `/v1/incidents/${incident}/triage`];
+    await setCap(0.01);
+    for (const url of urls) {
+      const res = await call("POST", url);
+      expect(res.statusCode, url).toBe(409);
+      expect(res.json().error).toMatchObject({
+        code: "BUDGET_EXHAUSTED",
+        details: { requestedMaxCostUsd: expect.any(Number) },
+      });
+    }
+    await setCap(20);
+    await setStop(true);
+    for (const url of urls) {
+      const res = await call("POST", url);
+      expect(res.statusCode, url).toBe(409);
+      expect(res.json().error.code).toBe("EMERGENCY_STOP");
+    }
+    expect(requests).toEqual([]);
+    expect(await explanationRows(id)).toEqual([]);
+    expect(await triageRows(incident)).toEqual([]);
+    expect(await spends(p.id)).toEqual([]);
+
+    await setStop(false);
+    replies.push(triageReply(checks));
+    expect((await call("POST", urls[1]!)).statusCode).toBe(201);
+    const [spend] = await spends(p.id);
+    expect(spend).toMatchObject({ source: "TRIAGE", sourceId: (await triageRows(incident))[0]!.id });
+    expect(spend!.costUsd).toBeCloseTo(CALL_COST, 6);
+  });
+
+  it("a claim a dead request left is retaken as a new attempt with its own reservation; the dead one's stays counted", async () => {
+    const p = await newProject();
+    const id = await seedFinding(p);
+    const [dead] = await db
+      .insert(researchFindingExplanations)
+      .values({
+        workspaceId: p.workspaceId,
+        projectId: p.id,
+        findingId: id,
+        model: MODEL,
+        claimedAt: new Date(Date.now() - 10 * 60_000),
+      })
+      .returning();
+    await db.insert(aiSpend).values({
+      workspaceId: p.workspaceId,
+      projectId: p.id,
+      source: "EXPLAIN",
+      sourceId: dead!.id,
+      reservedUsd: 0.5,
+    });
+    replies.push(explanationReply());
+    expect((await call("POST", `/v1/research/findings/${id}/explain`)).statusCode).toBe(201);
+    const [row] = await explanationRows(id);
+    expect(row!.id).not.toBe(dead!.id);
+    const [old, retaken] = await spends(p.id);
+    expect(old).toMatchObject({ sourceId: dead!.id, costUsd: null, settledAt: null });
+    expect(retaken).toMatchObject({ sourceId: row!.id, settledAt: expect.any(Date) });
   });
 });

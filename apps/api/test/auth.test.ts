@@ -100,10 +100,11 @@ describe("Sign in with GitHub", () => {
     }
   });
 
-  it("reports the configured owner login and nothing else", async () => {
+  it("tells an anonymous caller only that sign-in is set up, never the owner's login", async () => {
     const res = await t.app.inject({ method: "GET", url: "/v1/auth/status" });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ github: { configured: true, ownerLogin: t.githubApp!.ownerGithubLogin } });
+    expect(res.json()).toEqual({ github: { configured: true } });
+    expect(res.body).not.toContain(t.githubApp!.ownerGithubLogin);
   });
 });
 

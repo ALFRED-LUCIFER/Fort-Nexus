@@ -19,7 +19,14 @@ import { resolveProject } from "./workspaces.ts";
 
 // Jobs wave A: the Jobs page and agent performance, from NEXUS's own records only (FR-OBS-03/04, §D.4).
 
-const SPEND_AGENT: Record<AiSpendSource, AgentKey> = { DEEP_DIVE: "AI_RESEARCHER", JOB_DRAFT: "DEVELOPER" };
+const SPEND_AGENT: Record<AiSpendSource, AgentKey> = {
+  DEEP_DIVE: "AI_RESEARCHER",
+  JOB_DRAFT: "DEVELOPER",
+  EXPLAIN: "AI_RESEARCHER",
+  TRIAGE: "DEVOPS",
+  TALK: "CHIEF_OF_STAFF",
+  PLAN_DRAFT: "CHIEF_OF_STAFF",
+};
 const micros = (n: number) => Math.round(n * 1e6);
 
 /** Start of local day `date` in `tz`, as an instant. */

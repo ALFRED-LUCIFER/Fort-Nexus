@@ -1,3 +1,4 @@
+import type { FastifyBaseLogger } from "fastify";
 import { and, asc, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import {
   PROPOSAL_TTL_MS,
@@ -13,7 +14,8 @@ import {
   type Turn,
 } from "@nexus/contracts";
 import { pinnedAgentProfile, resolveAgentProfile } from "../agents/service.ts";
-import { loadAi } from "../ai.ts";
+import { loadAi, requestCapUsd } from "../ai.ts";
+import { meteredCall, reserveCall } from "../ai-spend.ts";
 import type { Deps } from "../app.ts";
 import { audit } from "../audit.ts";
 import type { Db, Tx } from "../db/index.ts";
@@ -22,7 +24,7 @@ import { HttpError, notFound } from "../errors.ts";
 import { canonical, createJob, ownerActor, sha256 } from "../jobs.ts";
 import { requireGithub } from "../routes/github.ts";
 import { ownerWorkspaceIds, resolveProject } from "../workspaces.ts";
-import { routeIntent } from "./router.ts";
+import { routeIntent, routeRequest } from "./router.ts";
 import { actionProposals, conversationThreads, conversationTurns } from "./schema.ts";
 import { answer, type Reply } from "./tools.ts";
 
@@ -34,6 +36,11 @@ const DEFAULT_TITLE = "New conversation";
 const CONTEXT_TURNS = 6;
 // shortcut: a thread shows its newest 200 turns; add paging when threads get that long.
 const DETAIL_TURNS = 200;
+// Older than any live answer (one routing attempt with a 60 s timeout, then NEXUS's own reads): the request that
+// stored the owner's message died, so a replay records it as unanswered and the owner sends it again.
+const TURN_LEASE_MS = 5 * 60_000;
+const UNANSWERED =
+  "NEXUS was interrupted before it could answer this message. Nothing was done; send it again.";
 
 const toThreadDto = (t: ThreadRow): Thread => ({
   id: t.id,
@@ -197,9 +204,9 @@ export async function getThreadDetail(db: Db, ownerId: string, threadId: string)
 }
 
 /**
- * FR-CWV-01/05: stores the owner's message, routes it (one model call), answers from NEXUS's own records and
+ * FR-CWV-01/05: stores the owner's message, routes it (one metered model call), answers from NEXUS's own records and
  * stores the reply, plus a proposal when the intent is an action. Replaying the Idempotency-Key returns the stored
- * turns without calling the model again.
+ * turns without calling the model again; a message left unanswered past TURN_LEASE_MS gets a failed reply instead.
  */
 export async function postTurn(
   deps: Deps,
@@ -209,6 +216,8 @@ export async function postTurn(
     idempotencyKey: string;
     body: PostTurnRequest;
     correlationId: string;
+    /** For errors that aren't the owner's to read (they get a generic failed reply). */
+    log?: FastifyBaseLogger;
   },
 ): Promise<PostTurnResponse> {
   const { db } = deps;
@@ -222,6 +231,42 @@ export async function postTurn(
     eq(conversationTurns.idempotencyKey, input.idempotencyKey),
   );
 
+  // A reply that never comes (the request died mid-answer) is recorded as failed, once: the unique reply_to index
+  // keeps the first reply, so a late normal answer and a replay can't both land.
+  const failReply = async (user: TurnRow, text: string, reason: string): Promise<TurnRow> => {
+    const stored = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(conversationTurns)
+        .values({
+          ...scope,
+          threadId: thread.id,
+          role: "ASSISTANT",
+          text,
+          intent: null,
+          basis: "NONE",
+          sources: [],
+          replyTo: user.id,
+          correlationId: input.correlationId,
+        })
+        .onConflictDoNothing()
+        .returning();
+      if (row)
+        await audit(tx, {
+          actor: ownerActor(input.ownerId),
+          action: "conversation.turn",
+          resourceType: "conversation",
+          resourceId: thread.id,
+          correlationId: input.correlationId,
+          outcome: "FAILED",
+          metadata: auditMeta(scope, { userTurnId: user.id, assistantTurnId: row.id, reason }),
+        });
+      return row;
+    });
+    if (stored) return stored;
+    const [reply] = await db.select().from(conversationTurns).where(eq(conversationTurns.replyTo, user.id));
+    return reply!;
+  };
+
   const replay = async (user: TurnRow): Promise<PostTurnResponse> => {
     if (user.requestHash !== requestHash)
       throw new HttpError(
@@ -229,13 +274,17 @@ export async function postTurn(
         "IDEMPOTENCY_KEY_REUSED",
         "Idempotency-Key was already used with a different message",
       );
-    const [reply] = await db.select().from(conversationTurns).where(eq(conversationTurns.replyTo, user.id));
-    if (!reply)
-      throw new HttpError(
-        409,
-        "CONFLICT",
-        "This message is still being answered. If no answer appears, send it again.",
-      );
+    let [reply] = await db.select().from(conversationTurns).where(eq(conversationTurns.replyTo, user.id));
+    if (!reply) {
+      if (user.createdAt.getTime() > Date.now() - TURN_LEASE_MS)
+        throw new HttpError(
+          409,
+          "CONFLICT",
+          "This message is still being answered. If no answer appears, send it again.",
+        );
+      // Past the lease nothing is answering it any more; its reservation stays counted in full (outcome unknown).
+      reply = await failReply(user, UNANSWERED, "interrupted");
+    }
     const [proposal] = reply.proposalId
       ? await db.select().from(actionProposals).where(eq(actionProposals.id, reply.proposalId))
       : [];
@@ -264,8 +313,11 @@ export async function postTurn(
         .from(jobs)
         .where(eq(jobs.id, thread.subjectJobId))
     : [];
+  const routeCtx = { text: input.body.text, subject: subject ?? null, recentTurns: recent.reverse() };
 
-  const user = await db.transaction(async (tx) => {
+  // The owner's turn claims the key and the routing call's cap is reserved with it (emergency stop and budget 409s
+  // store nothing), so a retry never pays twice.
+  const claimed = await db.transaction(async (tx) => {
     const [row] = await tx
       .insert(conversationTurns)
       .values({
@@ -282,41 +334,64 @@ export async function postTurn(
       })
       .onConflictDoNothing()
       .returning();
-    if (row && thread.title === DEFAULT_TITLE)
+    if (!row) return null;
+    if (thread.title === DEFAULT_TITLE)
       await tx
         .update(conversationThreads)
         .set({ title: input.body.text.replace(/\s+/g, " ").slice(0, 80) })
         .where(eq(conversationThreads.id, thread.id));
-    return row;
+    const spend = await reserveCall(tx, {
+      ...scope,
+      source: "TALK",
+      sourceId: row.id,
+      model,
+      maxUsd: requestCapUsd(routeRequest(model, routeCtx)),
+      timezone: deps.config.ownerTimezone,
+    });
+    return { user: row, spend };
   });
-  if (!user) {
+  if (!claimed) {
     // A concurrent request with the same key won the insert.
     const [raced] = await db.select().from(conversationTurns).where(byKey);
     return replay(raced!);
   }
+  const { user, spend } = claimed;
 
-  const routed = await routeIntent(
-    { ...ai, model },
-    {
-      text: input.body.text,
-      subject: subject ?? null,
-      recentTurns: recent.reverse(),
-    },
-  );
-  const reply: Omit<Reply, "intent"> & { intent: Reply["intent"] | null } =
-    "providerError" in routed
-      ? { intent: null, text: `${routed.providerError} Nothing was done.`, basis: "NONE", sources: [] }
-      : await answer(routed.intent, {
-          db,
-          github: deps.github,
-          ownerId: input.ownerId,
-          projectId: thread.projectId,
-          subjectJobId: thread.subjectJobId,
-          connectorsDir: deps.config.connectorsDir,
-          correlationId: input.correlationId,
-        });
+  let reply: Omit<Reply, "intent"> & { intent: Reply["intent"] | null };
+  let costUsd: number;
+  try {
+    const metered = await meteredCall(db, spend, () =>
+      routeIntent({ ...ai, model }, routeCtx, { signal: deps.shutdown }),
+    );
+    costUsd = metered.costUsd;
+    const routed = metered.res;
+    reply =
+      "providerError" in routed
+        ? { intent: null, text: `${routed.providerError} Nothing was done.`, basis: "NONE", sources: [] }
+        : await answer(routed.intent, {
+            db,
+            github: deps.github,
+            ownerId: input.ownerId,
+            projectId: thread.projectId,
+            subjectJobId: thread.subjectJobId,
+            connectorsDir: deps.config.connectorsDir,
+            correlationId: input.correlationId,
+          });
+  } catch (err) {
+    // The message never stays unanswered: HttpError text is written for the owner; anything else stays in the log.
+    const owned = err instanceof HttpError;
+    if (!owned) input.log?.error({ err, threadId: thread.id, userTurnId: user.id }, "talk turn failed");
+    const failed = await failReply(
+      user,
+      owned
+        ? `NEXUS couldn't answer this: ${err.message} Nothing was done.`
+        : "Something went wrong while NEXUS was answering. Nothing was done; send it again.",
+      owned ? err.code : "internal_error",
+    );
+    return { userTurn: toTurnDto(user), assistantTurn: toTurnDto(failed), proposal: null };
+  }
 
-  return db.transaction(async (tx) => {
+  const stored = await db.transaction(async (tx) => {
     const proposalId = reply.proposal
       ? (await tx.execute<{ id: string }>(sql`select uuidv7() as id`)).rows[0]!.id
       : null;
@@ -334,7 +409,9 @@ export async function postTurn(
         replyTo: user.id,
         correlationId: input.correlationId,
       })
+      .onConflictDoNothing()
       .returning();
+    if (!assistant) return null; // already recorded as unanswered (past its lease): that reply stands
     let proposal: ProposalRow | undefined;
     if (reply.proposal && proposalId) {
       const now = new Date();
@@ -344,7 +421,7 @@ export async function postTurn(
           id: proposalId,
           ...scope,
           threadId: thread.id,
-          turnId: assistant!.id,
+          turnId: assistant.id,
           // A sandboxed job (its push is a separate R2 approval) or a deep dive (spends budget, writes nothing outside
           // NEXUS): both R1.
           riskTier: reply.proposal.type === "research.deep_dive" ? TOOL_RISK["research.deep_dive"] : "R1",
@@ -380,21 +457,23 @@ export async function postTurn(
       correlationId: input.correlationId,
       metadata: auditMeta(scope, {
         userTurnId: user.id,
-        assistantTurnId: assistant!.id,
+        assistantTurnId: assistant.id,
         intent: reply.intent?.kind ?? null,
         basis: reply.basis,
         proposalId,
         subjectJobId: reply.subjectJobId ?? null,
         profileVersionId: thread.profileVersionId,
         model,
+        costUsd,
       }),
     });
     return {
       userTurn: toTurnDto(user),
-      assistantTurn: toTurnDto(assistant!),
+      assistantTurn: toTurnDto(assistant),
       proposal: proposal ? toProposalDto(proposal) : null,
     };
   });
+  return stored ?? replay(user);
 }
 
 /**
