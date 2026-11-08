@@ -22,6 +22,7 @@ import { P1Button } from "./P1Button.tsx";
 import { RepoDetails } from "./repos.tsx";
 import { useScope } from "./scope.tsx";
 import { StartRunPreview } from "./StartRun.tsx";
+import { CloudHandoffButton, CloudHandoffPanel, useCloudHandoff } from "./CloudHandoff.tsx";
 
 const route = getRouteApi("/");
 
@@ -417,6 +418,13 @@ function IssueBody({ repoId, number }: { repoId: string; number: number }) {
   const repo = repos.data?.items.find((r) => r.id === repoId);
   const [previewing, setPreviewing] = useState(false);
   const startRef = useRef<HTMLButtonElement>(null);
+  const cloudRef = useRef<HTMLButtonElement>(null);
+  // Same guard as Start run: only in the selected Dev project, on a repository bound to it.
+  const cloud = useCloudHandoff(
+    repoId,
+    number,
+    !blocked && project!.repositoryIds.includes(repoId) ? project!.id : undefined,
+  );
   const back = (
     <button
       type="button"
@@ -545,7 +553,7 @@ function IssueBody({ repoId, number }: { repoId: string; number: number }) {
           <span className="text-[12px] text-ink3">
             Runs at home in a sandbox. Push and PR always ask you first.
           </span>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <P1Button
               why="Plan only arrives with the plan step."
               className="rounded-[14px] border border-hair px-4 py-3 text-[13px] font-medium text-ink"
@@ -564,6 +572,11 @@ function IssueBody({ repoId, number }: { repoId: string; number: number }) {
             >
               Start run on {runner?.name ?? "home runner"}
             </button>
+            <CloudHandoffButton
+              ref={cloudRef}
+              cloud={cloud}
+              blockedBy={startBlocked ? "start-blocked" : null}
+            />
           </div>
         </div>
         {startBlocked && (
@@ -584,6 +597,7 @@ function IssueBody({ repoId, number }: { repoId: string; number: number }) {
             }}
           />
         )}
+        <CloudHandoffPanel cloud={cloud} onClose={() => cloudRef.current?.focus()} />
       </div>
     </>
   );

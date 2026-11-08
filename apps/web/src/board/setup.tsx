@@ -14,6 +14,7 @@ const TITLE: Record<SetupStepKey, string> = {
   AI_PROVIDER: "AI provider",
   RUNNER: "Home runner",
   WEB_SEARCH: "Web search",
+  CLAUDE_CLOUD: "Claude cloud handoff",
 };
 
 const btn = "self-start rounded-xl border border-hair px-3.5 py-2 text-[12.5px] font-medium text-ink";

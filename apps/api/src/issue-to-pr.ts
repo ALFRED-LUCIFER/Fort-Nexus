@@ -19,6 +19,7 @@ import type { Db, Tx } from "./db/index.ts";
 import { approvals, changesets, externalActions, jobs } from "./db/schema.ts";
 import { HttpError, invalidTransition, notFound } from "./errors.ts";
 import type { GithubCatalog } from "./github/catalog.ts";
+import { fenced } from "./github/issue-text.ts";
 import {
   canonical,
   moveJob,
@@ -60,13 +61,6 @@ export const toApprovalDto = (a: ApprovalRow): Approval => ({
   result: a.result,
   error: a.error,
 });
-
-/** Untrusted text inside a fence longer than any backtick run in it: no @mentions, links or closing keywords. */
-const fenced = (text: string) => {
-  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((r) => r.length));
-  const fence = "`".repeat(Math.max(3, longest + 1));
-  return `${fence}text\n${text}\n${fence}`;
-};
 
 const SYMBOL = { added: "A", modified: "M", deleted: "D" } as const;
 

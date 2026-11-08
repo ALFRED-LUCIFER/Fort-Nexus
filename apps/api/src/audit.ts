@@ -29,7 +29,8 @@ export type AuditEntry = {
     | "agent_profile"
     | "plan"
     | "job_draft"
-    | "voice";
+    | "voice"
+    | "cloud_handoff";
   resourceId: string;
   correlationId: string;
   outcome?: "SUCCEEDED" | "DENIED" | "FAILED";

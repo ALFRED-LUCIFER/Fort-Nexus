@@ -16,6 +16,7 @@ export default defineConfig({
     "./src/plans/schema.ts",
     "./src/job-drafts/schema.ts",
     "./src/voice/schema.ts",
+    "./src/cloud-handoff/schema.ts",
   ],
   out: "./drizzle",
   dbCredentials: { url: process.env.DATABASE_URL ?? "postgres://nexus:nexus@127.0.0.1:5432/nexus" },

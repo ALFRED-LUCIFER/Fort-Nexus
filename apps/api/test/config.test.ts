@@ -27,6 +27,15 @@ describe("loadConfig", () => {
     expect(loadConfig(base).githubAppFile).toBe(join(homedir(), ".nexus", "github-app.json"));
   });
 
+  it("expands ~ in NEXUS_CLAUDE_CLOUD_FILE; unset or empty (as in .env.example) is the default", () => {
+    const def = join(homedir(), ".nexus", "claude-cloud.json");
+    expect(loadConfig(base).claudeCloudFile).toBe(def);
+    expect(loadConfig({ ...base, NEXUS_CLAUDE_CLOUD_FILE: "" }).claudeCloudFile).toBe(def);
+    expect(loadConfig({ ...base, NEXUS_CLAUDE_CLOUD_FILE: "~/c.json" }).claudeCloudFile).toBe(
+      join(homedir(), "c.json"),
+    );
+  });
+
   it("fails fast on a short secret, non-loopback host or bad origin", () => {
     expect(() => loadConfig({ ...base, BETTER_AUTH_SECRET: "short" })).toThrow(/BETTER_AUTH_SECRET/);
     expect(() => loadConfig({ ...base, API_HOST: "0.0.0.0" })).toThrow(/loopback/);

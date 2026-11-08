@@ -3,8 +3,16 @@ import { z } from "zod";
 // What NEXUS still needs before it can do work, checked live on the home machine (no secret ever leaves it).
 // GITHUB: the app exists and is installed. REPOSITORIES: the project (or any Dev project) has a bound repository.
 // AI_PROVIDER: ~/.nexus/ai.json is usable. RUNNER: a paired runner is online. WEB_SEARCH (optional): search.json.
+// CLAUDE_CLOUD (optional): ~/.nexus/claude-cloud.json names at least one routine for issue handoff.
 
-export const SetupStepKey = z.enum(["GITHUB", "REPOSITORIES", "AI_PROVIDER", "RUNNER", "WEB_SEARCH"]);
+export const SetupStepKey = z.enum([
+  "GITHUB",
+  "REPOSITORIES",
+  "AI_PROVIDER",
+  "RUNNER",
+  "WEB_SEARCH",
+  "CLAUDE_CLOUD",
+]);
 export type SetupStepKey = z.infer<typeof SetupStepKey>;
 
 export const SetupStep = z.object({

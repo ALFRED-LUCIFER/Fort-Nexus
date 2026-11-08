@@ -104,6 +104,20 @@ Owner setup for voice: deploy a transcribe model (e.g. `gpt-4o-mini-transcribe`)
 
 Known follow-ups: phone calls (PSTN) and realtime voice with barge-in are later phases; WAITING_ON_YOU has no history yet (drafts and opportunities keep no status history); issue/PR result dates use row `updated_at` / `decidedAt`; Business KPIs reuse the Business zone tiles.
 
+## Cloud handoff (on `main`; spec: `docs/specs/cloud-handoff.md`)
+
+The owner asked (2026-11-08) to send a GitHub issue to Claude Code in Anthropic's cloud as well as to the home runner.
+
+| Builder | Delivered | Tests |
+|---|---|---|
+| A — API | `cloud-handoff/**`: `~/.nexus/claude-cloud.json` (routines per repository, strict api.anthropic.com fire URL, read per call); `GET …/issues/:n/cloud-handoff` (routine status + newest handoff + PR from GitHub), `POST …/preview` (server-built text, hash, TTL), `POST …/cloud-handoff` (R2, Idempotency-Key, claim row + per-issue advisory lock before one fire, never retried); 200 → STARTED, 400/401/403/404 → FAILED, 429 → FAILED + Retry-After, timeout/5xx/bad body → UNKNOWN; optional `CLAUDE_CLOUD` setup step; `NEXUS_CLAUDE_CLOUD_FILE`; `fenced()` moved to `github/issue-text.ts` | 58: config, text/hash, PR matching, fire mapping, routes on Testcontainers incl. token never in logs/audit/DB, one fire under concurrency, idempotent replay after preview expiry |
+| B — Web | `CloudHandoff.tsx`: "Hand off to Claude (cloud)" next to Start run, preview card with the exact text, approve, confirm-resend, session link, truth ladder (session started → PR opened → merged), UNKNOWN/FAILED/rate-limit states, 60 s polling while live; setup label | 12 |
+
+Coordinator: contracts (`cloud-handoff.ts`, `CLAUDE_CLOUD`, `UPSTREAM` error code), schema and migration `0011_cloud_handoff.sql`, runbook `docs/runbooks/claude-cloud.md` (routine prompt to paste), README. Review fix: an idempotent replay is answered before the preview-expiry check and only inside the same project and issue.
+Checks on the merged tree: typecheck, lint, prettier, tests (api 460, web 274, runner 165+1 skipped, contracts 23), web build, secret scan.
+
+Owner setup: claude.ai plan with Claude Code on the web, the Claude GitHub App on the repository, one routine per repository with an API trigger, `~/.nexus/claude-cloud.json` (mode 600). Not live-tested against Anthropic yet.
+
 ## Next
 
 - Owner check: one live Talk turn on Anthropic and on Foundry.

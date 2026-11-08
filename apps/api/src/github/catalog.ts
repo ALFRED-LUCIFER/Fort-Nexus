@@ -35,6 +35,19 @@ const MAX_REPO_PAGES = 10;
 // Repository health costs two GitHub calls per repository: keep it longer, and ask for a few repositories at a time.
 const HEALTH_TTL_MS = 180_000;
 const HEALTH_CONCURRENCY = 4;
+const PRS_SINCE_PAGES = 3;
+
+/** A pull request as a lookup by creation time sees it (cloud handoff, FR-GH). */
+export type PullRequestSummary = {
+  number: number;
+  url: string;
+  title: string;
+  branch: string;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  draft: boolean;
+  body: string;
+  createdAt: Date;
+};
 
 // GitHub check-run conclusions that mean the commit's CI is broken.
 const FAILED = new Set(["failure", "timed_out", "startup_failure", "action_required"]);
@@ -546,49 +559,105 @@ export function createGithubCatalog(config: GithubAppConfig, log: FastifyBaseLog
       };
     },
 
-    async issue(repoId: string, number: number): Promise<IssueDetail> {
+    /** `fresh` skips the cache: for text the owner approves and NEXUS sends on (e.g. a cloud handoff). */
+    async issue(repoId: string, number: number, { fresh = false } = {}): Promise<IssueDetail> {
       const { repo, octokit } = await repository(repoId);
       const params = { owner: repo.owner, repo: repo.name, issue_number: number };
       const missing = `Issue #${number} not found in ${repo.fullName}.`;
-      const { value, syncedAt } = await cached(`issue:${repo.id}:${number}`, async () => {
-        const issue = await github(
-          () => octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}", params),
-          lostAccess(repo),
-          missing,
-        ).catch(async (e: unknown) => {
-          // GitHub answers 404 both for a missing issue and for a repository the app lost: tell them apart.
-          if (e instanceof HttpError && e.statusCode === 404)
-            await github(
-              () => octokit.request("GET /repos/{owner}/{repo}", { owner: repo.owner, repo: repo.name }),
-              lostAccess(repo),
-            );
-          throw e;
-        });
-        if (issue.data.pull_request) throw new HttpError(404, "NOT_FOUND", `#${number} is a pull request.`);
-        const comments = await github(
+      const ttl = fresh ? 0 : TTL_MS;
+      const { value, syncedAt } = await cached(
+        `issue:${repo.id}:${number}`,
+        async () => {
+          const issue = await github(
+            () => octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}", params),
+            lostAccess(repo),
+            missing,
+          ).catch(async (e: unknown) => {
+            // GitHub answers 404 both for a missing issue and for a repository the app lost: tell them apart.
+            if (e instanceof HttpError && e.statusCode === 404)
+              await github(
+                () => octokit.request("GET /repos/{owner}/{repo}", { owner: repo.owner, repo: repo.name }),
+                lostAccess(repo),
+              );
+            throw e;
+          });
+          if (issue.data.pull_request) throw new HttpError(404, "NOT_FOUND", `#${number} is a pull request.`);
+          const comments = await github(
+            () =>
+              octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}/comments", {
+                ...params,
+                per_page: 100,
+              }),
+            lostAccess(repo),
+            missing,
+          );
+          const body = stripHtmlComments(issue.data.body ?? "").trim();
+          const acceptanceCriteria = extractAcceptanceCriteria(body);
+          return {
+            issue: toIssue(issue.data),
+            body,
+            comments: comments.data.map((c) => ({
+              author: c.user?.login ?? null,
+              body: stripHtmlComments(c.body ?? "").trim(),
+              createdAt: new Date(c.created_at).toISOString(),
+            })),
+            acceptanceCriteria,
+            missingAcceptanceCriteria: acceptanceCriteria.length === 0,
+          };
+        },
+        ttl,
+      );
+      return { ...value, syncedAt };
+    },
+
+    /** One installed repository (GH-G01: anything else is a 404). */
+    async repository(repoId: string): Promise<Repository> {
+      const repo = (await repositories()).value.find((r) => r.id === repoId);
+      if (!repo) throw notFound("Repository");
+      return repo;
+    },
+
+    /**
+     * The repository's pull requests (any state) created at or after `since`, newest first. Up to
+     * PRS_SINCE_PAGES × 100: a handoff's window is minutes to days, never more PRs than that. Not cached: the PR
+     * appearing is what the owner waits for.
+     */
+    async pullRequestsCreatedSince(repoId: string, since: Date): Promise<PullRequestSummary[]> {
+      const { repo, octokit } = await repository(repoId);
+      const out: PullRequestSummary[] = [];
+      for (let page = 1; page <= PRS_SINCE_PAGES; page++) {
+        const res = await github(
           () =>
-            octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}/comments", {
-              ...params,
+            octokit.request("GET /repos/{owner}/{repo}/pulls", {
+              owner: repo.owner,
+              repo: repo.name,
+              state: "all",
+              sort: "created",
+              direction: "desc",
               per_page: 100,
+              page,
             }),
           lostAccess(repo),
-          missing,
         );
-        const body = stripHtmlComments(issue.data.body ?? "").trim();
-        const acceptanceCriteria = extractAcceptanceCriteria(body);
-        return {
-          issue: toIssue(issue.data),
-          body,
-          comments: comments.data.map((c) => ({
-            author: c.user?.login ?? null,
-            body: stripHtmlComments(c.body ?? "").trim(),
-            createdAt: new Date(c.created_at).toISOString(),
-          })),
-          acceptanceCriteria,
-          missingAcceptanceCriteria: acceptanceCriteria.length === 0,
-        };
-      });
-      return { ...value, syncedAt };
+        for (const p of res.data) {
+          const createdAt = new Date(p.created_at);
+          if (createdAt < since) return out;
+          const url = httpUrl(p.html_url);
+          if (!url) continue;
+          out.push({
+            number: p.number,
+            url,
+            title: p.title,
+            branch: p.head.ref,
+            state: p.merged_at ? "MERGED" : p.state === "closed" ? "CLOSED" : "OPEN",
+            draft: p.draft === true,
+            body: p.body ?? "",
+            createdAt,
+          });
+        }
+        if (!hasNext(res.headers.link)) break;
+      }
+      return out;
     },
 
     /**

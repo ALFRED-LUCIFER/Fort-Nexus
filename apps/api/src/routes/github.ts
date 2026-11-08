@@ -21,7 +21,7 @@ import { boundRepositoryIds } from "../workspaces.ts";
 import { owner } from "./owner.ts";
 
 const RepoParams = z.object({ repoId: RepoId });
-const IssueParams = RepoParams.extend({
+export const IssueParams = RepoParams.extend({
   number: z.coerce
     .number()
     .int()

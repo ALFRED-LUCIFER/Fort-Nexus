@@ -14,6 +14,8 @@ export const ErrorCode = z.enum([
   "EMERGENCY_STOP",
   "BUDGET_EXHAUSTED",
   "INTERNAL",
+  // An upstream service (e.g. Anthropic) didn't answer clearly; the outcome there is unknown.
+  "UPSTREAM",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
 

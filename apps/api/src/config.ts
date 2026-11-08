@@ -77,6 +77,18 @@ const Env = z.object({
     .min(1)
     .transform((p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p))
     .default(join(homedir(), ".nexus", "voice.json")),
+  // Claude Code routines that take issue handoffs (docs/runbooks/claude-cloud.md); mode 0600, like ai.json.
+  // Empty (as in .env.example) means the default path.
+  NEXUS_CLAUDE_CLOUD_FILE: z
+    .string()
+    .optional()
+    .transform((p) =>
+      !p
+        ? join(homedir(), ".nexus", "claude-cloud.json")
+        : p.startsWith("~/")
+          ? join(homedir(), p.slice(2))
+          : p,
+    ),
 });
 
 export type Config = {
@@ -95,6 +107,7 @@ export type Config = {
   aiFile: string;
   searchFile: string;
   voiceFile: string;
+  claudeCloudFile: string;
   ownerTimezone: string;
 };
 
@@ -137,6 +150,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, inContainer = r
     aiFile: e.NEXUS_AI_FILE,
     searchFile: e.NEXUS_SEARCH_FILE,
     voiceFile: e.NEXUS_VOICE_FILE,
+    claudeCloudFile: e.NEXUS_CLAUDE_CLOUD_FILE,
     ownerTimezone: e.OWNER_TIMEZONE,
   };
 }

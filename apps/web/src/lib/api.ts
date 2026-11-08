@@ -27,6 +27,9 @@ import {
   AutomationClientList,
   AutomationClientSecret,
   AutomationRunList,
+  CloudHandoff,
+  CloudHandoffPreview,
+  CloudHandoffState,
   ConnectionTestResult,
   Connector,
   ConnectorList,
@@ -89,6 +92,7 @@ import {
   type ApprovalDecisionRequest,
   type ApprovalStatus,
   type CreateAutomationClientRequest,
+  type CreateCloudHandoffRequest,
   type CreateConnectorRequest,
   type CreateDeepDiveRequest,
   type CreateJobRequest,
@@ -221,6 +225,30 @@ export const api = {
   },
   issue: (repoId: string, number: number) =>
     request(`/v1/repositories/${encodeURIComponent(repoId)}/issues/${number}`, IssueDetail),
+  // The issue's routine status and newest Claude cloud handoff in this project (docs/specs/cloud-handoff.md).
+  cloudHandoff: (repoId: string, number: number, projectId: string) =>
+    request(
+      `/v1/repositories/${encodeURIComponent(repoId)}/issues/${number}/cloud-handoff?${new URLSearchParams({ projectId })}`,
+      CloudHandoffState,
+    ),
+  previewCloudHandoff: (repoId: string, number: number, projectId: string) =>
+    request(
+      `/v1/repositories/${encodeURIComponent(repoId)}/issues/${number}/cloud-handoff/preview`,
+      CloudHandoffPreview,
+      post({}, { projectId }),
+    ),
+  // Fires the routine once; answers only after Anthropic did (STARTED), or with an error (FAILED / UNKNOWN).
+  createCloudHandoff: (
+    repoId: string,
+    number: number,
+    body: CreateCloudHandoffRequest,
+    idempotencyKey: string,
+  ) =>
+    request(
+      `/v1/repositories/${encodeURIComponent(repoId)}/issues/${number}/cloud-handoff`,
+      CloudHandoff,
+      post({ [IDEMPOTENCY_HEADER]: idempotencyKey }, body),
+    ),
   // FR-GH-05: PRs, issues and CI per repository (the project's bound ones, or every installed one in All).
   repositoryHealth: (projectId?: string) =>
     request(
@@ -518,6 +546,8 @@ export const keys = {
   repositoriesOf: (projectId: string | undefined) => ["github", "repositories", projectId ?? "all"] as const,
   issues: (repoId: string, f: IssueFilters) => ["github", "issues", repoId, f] as const,
   issue: (repoId: string, number: number) => ["github", "issue", repoId, number] as const,
+  cloudHandoff: (repoId: string, number: number, projectId: string) =>
+    ["github", "cloud-handoff", repoId, number, projectId] as const,
   repositoryHealth: (projectId: string | undefined) => ["github", "health", projectId ?? "all"] as const,
   repositoryDetails: (repoId: string) => ["github", "details", repoId] as const,
   setup: (projectId: string | undefined) => ["setup", projectId ?? "all"] as const,

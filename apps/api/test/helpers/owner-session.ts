@@ -59,10 +59,13 @@ export const testGithubApp = (owner: GithubUser = githubUser({ login: "nexus-own
   ownerGithubLogin: owner.login,
 });
 
-/** Builds the API on a fresh database. `env` overrides config; `github: false` leaves sign-in unconfigured. */
+/**
+ * Builds the API on a fresh database. `env` overrides config; `github: false` leaves sign-in unconfigured;
+ * `logStream` captures the log lines (with a LOG_LEVEL other than silent in `env`).
+ */
 export async function createTestApp(
   env: Record<string, string> = {},
-  { github = true }: { github?: boolean } = {},
+  { github = true, logStream }: { github?: boolean; logStream?: { write(msg: string): void } } = {},
 ): Promise<TestApp> {
   const databaseUrl = await freshDatabaseUrl();
   const dir = mkdtempSync(join(tmpdir(), "nexus-test-"));
@@ -78,7 +81,7 @@ export async function createTestApp(
     ...env,
   });
   try {
-    const app = await buildApp(config);
+    const app = await buildApp(config, { logStream });
     await app.ready();
     return { app, config, githubApp, databaseUrl };
   } finally {

@@ -132,7 +132,7 @@ const step = (
 ): SetupStep => ({
   key,
   done,
-  optional: key === "WEB_SEARCH",
+  optional: key === "WEB_SEARCH" || key === "CLAUDE_CLOUD",
   detail,
   runbook: null,
   ...over,
@@ -148,6 +148,9 @@ const NOT_READY: SetupStatus = {
     }),
     step("RUNNER", true, "Runner test-host is online."),
     step("WEB_SEARCH", false, "Web search isn't set up.", { runbook: "docs/runbooks/web-search.md" }),
+    step("CLAUDE_CLOUD", false, "No routine in ~/.nexus/claude-cloud.json yet.", {
+      runbook: "docs/runbooks/claude-cloud.md",
+    }),
   ],
 };
 
@@ -318,8 +321,11 @@ describe("Home: setup checklist and repositories", () => {
       "To do",
       "✓ Done",
       "Optional",
+      "Optional",
     ]);
     expect(within(items[2]!).getByText("docs/runbooks/ai-provider.md")).toBeTruthy();
+    expect(within(items[5]!).getByText("Claude cloud handoff")).toBeTruthy();
+    expect(within(items[5]!).getByText("docs/runbooks/claude-cloud.md")).toBeTruthy();
     await user.click(within(items[1]!).getByRole("button", { name: "Choose repositories" }));
     expect(router.state.location.search).toMatchObject({ drawer: "repos:choose" });
   });

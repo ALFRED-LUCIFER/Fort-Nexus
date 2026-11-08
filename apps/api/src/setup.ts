@@ -1,6 +1,12 @@
 import { and, count, eq, isNull } from "drizzle-orm";
-import { GITHUB_SETUP_COMMAND, type SetupStatus, type SetupStep } from "@nexus/contracts";
+import {
+  CLOUD_HANDOFF_RUNBOOK,
+  GITHUB_SETUP_COMMAND,
+  type SetupStatus,
+  type SetupStep,
+} from "@nexus/contracts";
 import { AI_RUNBOOK, loadAi } from "./ai.ts";
+import { loadCloudRoutines } from "./cloud-handoff/routine-config.ts";
 import type { Config } from "./config.ts";
 import type { Db } from "./db/index.ts";
 import { projectRepositories, projects, workspaces } from "./db/schema.ts";
@@ -114,9 +120,21 @@ async function searchStep(file: string): Promise<SetupStep> {
   return { key: "WEB_SEARCH", ...r, optional: true, runbook: SEARCH_RUNBOOK };
 }
 
+async function claudeCloudStep(file: string): Promise<SetupStep> {
+  const r = await check(async () => {
+    const n = (await loadCloudRoutines(file)).routines.length;
+    return `Claude cloud handoff is set up for ${n} ${n === 1 ? "repository" : "repositories"}.`;
+  });
+  return { key: "CLAUDE_CLOUD", ...r, optional: true, runbook: CLOUD_HANDOFF_RUNBOOK };
+}
+
 /** What NEXUS still needs before a job can go from words to a draft PR, checked live (FR-ACC, FR-RUN-01, FR-GH-01). */
 export async function setupStatus(
-  deps: { db: Db; config: Pick<Config, "aiFile" | "searchFile">; github: GithubCatalog | null },
+  deps: {
+    db: Db;
+    config: Pick<Config, "aiFile" | "searchFile" | "claudeCloudFile">;
+    github: GithubCatalog | null;
+  },
   ownerId: string,
   projectId: string | undefined,
 ): Promise<SetupStatus> {
@@ -126,6 +144,7 @@ export async function setupStatus(
     aiStep(deps.config.aiFile),
     runnerStep(deps.db, ownerId),
     searchStep(deps.config.searchFile),
+    claudeCloudStep(deps.config.claudeCloudFile),
   ]);
   return {
     steps,

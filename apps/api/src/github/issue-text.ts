@@ -59,3 +59,10 @@ export const inertLines = (text: string) =>
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+
+/** Untrusted text inside a fence longer than any backtick run in it: no @mentions, links or closing keywords. */
+export const fenced = (text: string) => {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((r) => r.length));
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}text\n${text}\n${fence}`;
+};

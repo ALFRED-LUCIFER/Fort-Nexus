@@ -23,6 +23,7 @@ import {
 import { AuthStatus, GITHUB_SETUP_COMMAND, type ApiError, type ErrorCode } from "@nexus/contracts";
 import { agentRoutes } from "./agents/routes.ts";
 import { createAuth, type Auth } from "./auth.ts";
+import { cloudHandoffRoutes } from "./cloud-handoff/routes.ts";
 import { automationRoutes, automationTriggerRoute } from "./automations/routes.ts";
 import { businessRoutes } from "./business/routes.ts";
 import type { Config } from "./config.ts";
@@ -118,7 +119,11 @@ export const trustedProxy = (hops: number) => (address: string, hop: number) => 
   return hop < hops && family !== 0 && PROXY_PEERS.check(address, family === 6 ? "ipv6" : "ipv4");
 };
 
-export async function buildApp(config: Config) {
+/** `logStream` is a test seam: where the logger writes (stdout otherwise). */
+export async function buildApp(
+  config: Config,
+  { logStream }: { logStream?: { write(msg: string): void } } = {},
+) {
   // Missing file = not set up yet (API runs, sign-in explains how); a malformed or world-readable one fails fast.
   const github = loadGithubAppConfig(config.githubAppFile);
   const app = Fastify({
@@ -139,6 +144,7 @@ export async function buildApp(config: Config) {
               ],
               censor: "[REDACTED]",
             },
+            ...(logStream ? { stream: logStream } : {}),
             ...(config.env === "development" ? { transport: { target: "pino-pretty" } } : {}),
           },
     genReqId: () => randomUUID(),
@@ -293,6 +299,7 @@ export async function buildApp(config: Config) {
   await app.register(async (scope) =>
     ownerRoutes(scope, deps)
       .then(() => githubRoutes(scope, deps))
+      .then(() => cloudHandoffRoutes(scope, deps))
       .then(() => systemRoutes(scope, deps))
       .then(() => workspaceRoutes(scope, deps))
       .then(() => notificationRoutes(scope, deps))
