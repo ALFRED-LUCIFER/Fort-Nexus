@@ -127,6 +127,8 @@ export const Job = z.object({
   // The agent the job runs for, set by the server at create (plan steps: the step's agent; otherwise by job type:
   // DEV_ISSUE_TO_PR → DEVELOPER, RUNNER_DIAGNOSTIC → DEVOPS). Never taken from the request body.
   agent: AgentKey,
+  // The finished job this one reruns (POST /v1/jobs/:id/retry); null for every other job.
+  retryOfJobId: z.uuid().nullable(),
   // First move into PREPARING, and the move into a terminal status; null until each happens.
   startedAt: z.iso.datetime().nullable(),
   finishedAt: z.iso.datetime().nullable(),

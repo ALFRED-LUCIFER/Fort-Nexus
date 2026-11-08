@@ -40,3 +40,19 @@ export async function writeToken(file: string, token: string): Promise<void> {
   await writeFile(tmp, `${token}\n`, { mode: 0o600, flag: "wx" });
   await rename(tmp, file);
 }
+
+/**
+ * Puts every temp folder inside the data dir. Job folders are bind-mounted into containers, and the data dir is
+ * shared with Docker (worktrees live there), while the OS temp dir may not be: Colima shares only its configured
+ * mounts, never macOS's /var/folders. Anything a crashed run left is wiped; the folder is private to this user.
+ */
+export async function useDataDirForTemp(
+  dataDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+  const dir = join(dataDir, "tmp");
+  await rm(dir, { recursive: true, force: true });
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  env.TMPDIR = dir;
+  return dir;
+}

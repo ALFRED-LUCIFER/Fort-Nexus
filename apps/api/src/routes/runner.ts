@@ -65,7 +65,7 @@ export async function runnerRoutes(app: FastifyInstance, deps: Deps) {
     "/v1/runner/heartbeat",
     { schema: { body: HeartbeatRequest, response: { 200: HeartbeatResponse } } },
     async (req) => ({
-      cancelJobIds: await heartbeat(db, runnerOf(req), req.body.activeJobIds),
+      cancelJobIds: await heartbeat(db, runnerOf(req), req.body.activeJobIds, req.body.remoteAccess),
     }),
   );
 

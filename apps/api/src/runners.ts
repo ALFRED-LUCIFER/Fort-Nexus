@@ -1,8 +1,10 @@
 import { randomBytes, randomInt } from "node:crypto";
-import { and, desc, eq, gt, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, isNotNull, isNull } from "drizzle-orm";
 import {
+  REMOTE_ACCESS_STALE_AFTER_MS,
   runnerStatus,
   type PairingCodeResponse,
+  type RemoteAccessStatus,
   type Runner,
   type RunnerRegisterRequest,
   type RunnerRegisterResponse,
@@ -36,6 +38,30 @@ export async function listRunners(db: Db, ownerId: string): Promise<Runner[]> {
   const rows = await db.select().from(runners).where(eq(runners.ownerId, ownerId)).orderBy(desc(runners.id));
   const now = new Date();
   return rows.map((r) => toRunnerDto(r, now));
+}
+
+/** Settings → Remote access: the newest report from a runner the owner still trusts. */
+export async function remoteAccessStatus(
+  db: Db,
+  ownerId: string,
+  publicOrigin: string,
+  now = new Date(),
+): Promise<RemoteAccessStatus> {
+  const [row] = await db
+    .select({ name: runners.name, report: runners.remoteAccess, at: runners.remoteAccessAt })
+    .from(runners)
+    .where(and(eq(runners.ownerId, ownerId), isNull(runners.revokedAt), isNotNull(runners.remoteAccessAt)))
+    .orderBy(desc(runners.remoteAccessAt))
+    .limit(1);
+  if (!row?.at || !row.report)
+    return { publicOrigin, runnerName: null, reportedAt: null, stale: false, report: null };
+  return {
+    publicOrigin,
+    runnerName: row.name,
+    reportedAt: row.at.toISOString(),
+    stale: now.getTime() - row.at.getTime() > REMOTE_ACCESS_STALE_AFTER_MS,
+    report: row.report,
+  };
 }
 
 /** One-time pairing code (~49 bits, 10 min). Only its hash is stored. */

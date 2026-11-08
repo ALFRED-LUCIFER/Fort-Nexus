@@ -15,6 +15,7 @@ import { AgentProfilesSettings } from "./agents.tsx";
 import { AutomationsSettings } from "./AutomationsSettings.tsx";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { NotificationSettings } from "./NotificationSettings.tsx";
+import { RemoteAccessSettings } from "./RemoteAccessSettings.tsx";
 import { useScope } from "./scope.tsx";
 import { useUpdatesVoice, type UpdatesVoice } from "./updates.tsx";
 import { useVoiceStatus } from "./voice.tsx";
@@ -22,8 +23,9 @@ import { WorkspacesSettings } from "./WorkspacesSettings.tsx";
 
 const route = getRouteApi("/");
 
-// Design dSettings tabs. Security & devices, Workspaces, Automations, Agent profiles, Budgets & limits, Notifications
-// and Voice & consent are real; the rest say honestly what exists. A tab id as the hash opens on it (`#voice`, `#notif`).
+// Design dSettings tabs. Security & devices, Workspaces, Automations, Agent profiles, Remote access, Budgets & limits,
+// Notifications and Voice & consent are real; the rest say honestly what exists. A tab id as the hash opens on it
+// (`#voice`, `#notif`).
 const TABS = [
   ["conn", "Connections"],
   ["ws", "Workspaces"],
@@ -50,12 +52,10 @@ export function useOpenSettings() {
 }
 
 const LATER: Record<
-  Exclude<Tab, "sec" | "limits" | "ws" | "auto" | "profiles" | "voice" | "notif">,
+  Exclude<Tab, "sec" | "limits" | "ws" | "auto" | "profiles" | "voice" | "notif" | "remote">,
   string
 > = {
   conn: "Connections are set up on the home machine: the NEXUS GitHub App (its repositories are bound in Workspaces), ai.json, search.json and voice.json (see docs/runbooks). The Home setup checklist shows which are missing.",
-  remote:
-    "Remote access is configured on the home machine with Tailscale Serve (docs/runbooks/remote-access.md). It can't be changed from here yet.",
   backup:
     "Backups run on the home machine (docs/runbooks/backup-restore.md). They can't be viewed from here yet.",
   audit:
@@ -109,6 +109,8 @@ export function SettingsDrawer({ banner, onClose }: { banner?: ReactNode; onClos
           <VoiceConsent />
         ) : tab === "notif" ? (
           <NotificationSettings />
+        ) : tab === "remote" ? (
+          <RemoteAccessSettings />
         ) : (
           <p className="m-0 flex-none text-[14px] leading-[1.55] text-pretty text-ink2">{LATER[tab]}</p>
         )}

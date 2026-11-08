@@ -80,6 +80,7 @@ import {
   ResearchBrief,
   ResearchRun,
   ResearchRunList,
+  RemoteAccessStatus,
   RevenueSummaryResponse,
   Runner,
   RunnerList,
@@ -193,6 +194,7 @@ const metricQuery = (connectorId: string) =>
 
 export const api = {
   me: () => request("/v1/me", Me),
+  remoteAccess: () => request("/v1/remote-access", RemoteAccessStatus),
   runners: () => request("/v1/runners", RunnerList).then((r) => r.items),
   pairRunner: () => request("/v1/runners/pair", PairingCodeResponse, post()),
   revokeRunner: (id: string) => request(`/v1/runners/${encodeURIComponent(id)}/revoke`, Runner, post()),
@@ -219,6 +221,12 @@ export const api = {
   createJob: (body: CreateJobRequest, idempotencyKey: string) =>
     request("/v1/jobs", CreateJobResponse, post({ [IDEMPOTENCY_HEADER]: idempotencyKey }, body)),
   cancelJob: (id: string) => request(`/v1/jobs/${encodeURIComponent(id)}/cancel`, Job, post()),
+  retryJob: (id: string, idempotencyKey: string) =>
+    request(
+      `/v1/jobs/${encodeURIComponent(id)}/retry`,
+      CreateJobResponse,
+      post({ [IDEMPOTENCY_HEADER]: idempotencyKey }),
+    ),
   githubStatus: () => request("/v1/github/status", GithubStatus),
   // With a project: only the repositories bound to it. Without: every installed repository (binding UI).
   repositories: (projectId?: string) =>
@@ -555,6 +563,7 @@ export type ApprovalQuery = { status: ApprovalStatus; projectId?: string } | { j
 
 export const keys = {
   me: ["me"] as const,
+  remoteAccess: ["remote-access"] as const,
   runners: ["runners"] as const,
   system: ["system"] as const,
   sessions: ["sessions"] as const,

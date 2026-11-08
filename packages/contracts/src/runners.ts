@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { CreateJobRequest } from "./jobs.ts";
 import { IssueToPrTask } from "./issue-to-pr.ts";
+import { RemoteAccessReport } from "./remote-access.ts";
 
 export const RUNNER_HEARTBEAT_INTERVAL_MS = 5_000;
 export const RUNNER_STALE_AFTER_MS = 15_000;
@@ -53,7 +54,11 @@ export type RunnerRegisterRequest = z.infer<typeof RunnerRegisterRequest>;
 export const RunnerRegisterResponse = z.object({ runnerId: z.uuid(), token: z.string() });
 export type RunnerRegisterResponse = z.infer<typeof RunnerRegisterResponse>;
 
-export const HeartbeatRequest = z.strictObject({ activeJobIds: z.array(z.uuid()).max(16) });
+export const HeartbeatRequest = z.strictObject({
+  activeJobIds: z.array(z.uuid()).max(16),
+  // Sent about once a minute, not on every beat (see REMOTE_ACCESS_REPORT_INTERVAL_MS).
+  remoteAccess: RemoteAccessReport.optional(),
+});
 export type HeartbeatRequest = z.infer<typeof HeartbeatRequest>;
 
 export const HeartbeatResponse = z.object({ cancelJobIds: z.array(z.uuid()) });

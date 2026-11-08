@@ -17,14 +17,15 @@ import {
   ListJobsQuery,
   Me,
   PairingCodeResponse,
+  RemoteAccessStatus,
   Runner,
   RunnerList,
 } from "@nexus/contracts";
 import type { Deps } from "../app.ts";
 import { HttpError } from "../errors.ts";
 import { decideApproval, listApprovals, toApprovalDto } from "../issue-to-pr.ts";
-import { cancelJob, createJob, getJob, listJobs, toJobDto } from "../jobs.ts";
-import { createPairingCode, listRunners, revokeRunner } from "../runners.ts";
+import { cancelJob, createJob, getJob, listJobs, retryJob, toJobDto } from "../jobs.ts";
+import { createPairingCode, listRunners, remoteAccessStatus, revokeRunner } from "../runners.ts";
 import { streamJobEvents } from "../sse.ts";
 import { requireGithub } from "./github.ts";
 
@@ -64,6 +65,10 @@ export async function ownerRoutes(app: FastifyInstance, deps: Deps) {
   r.get("/v1/runners", { schema: { response: { 200: RunnerList } } }, async (req) => ({
     items: await listRunners(db, owner(req).id),
   }));
+
+  r.get("/v1/remote-access", { schema: { response: { 200: RemoteAccessStatus } } }, async (req) =>
+    remoteAccessStatus(db, owner(req).id, config.publicOrigin),
+  );
 
   r.post("/v1/runners/pair", { schema: { response: { 201: PairingCodeResponse } } }, async (req, reply) => {
     reply.code(201);
@@ -124,6 +129,30 @@ export async function ownerRoutes(app: FastifyInstance, deps: Deps) {
       });
       reply.code(202);
       return toJobDto(job);
+    },
+  );
+
+  r.post(
+    "/v1/jobs/:id/retry",
+    {
+      schema: {
+        params: IdParams,
+        headers: z.object({ [IDEMPOTENCY_HEADER]: IdempotencyKey }),
+        response: { 202: CreateJobResponse },
+      },
+    },
+    async (req, reply) => {
+      const job = await retryJob(db, {
+        ownerId: owner(req).id,
+        jobId: req.params.id,
+        idempotencyKey: req.headers[IDEMPOTENCY_HEADER],
+        correlationId: req.id,
+        timezone: config.ownerTimezone,
+        pinIssue: (b) =>
+          requireGithub(deps.github).issueSnapshot(b.repositoryId, b.issueNumber, b.baseBranch),
+      });
+      reply.code(202);
+      return { jobId: job.id, status: job.status, streamUrl: `/v1/jobs/${job.id}/events` };
     },
   );
 

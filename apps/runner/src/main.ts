@@ -4,8 +4,9 @@ import { parseArgs } from "node:util";
 import { z } from "zod";
 import pkg from "../package.json" with { type: "json" };
 import { createApi } from "./api.ts";
-import { loadConfig, readToken, writeToken } from "./config.ts";
+import { loadConfig, readToken, useDataDirForTemp, writeToken } from "./config.ts";
 import { errorMessage, log } from "./log.ts";
+import { apiPortOf, collectRemoteAccess } from "./remote-access.ts";
 import { startRunner } from "./runner.ts";
 import { removeLeftovers } from "./sandbox.ts";
 
@@ -53,10 +54,12 @@ async function start(): Promise<void> {
         }),
     );
   }
+  await useDataDirForTemp(config.RUNNER_DATA_DIR);
   const runner = startRunner(createApi({ baseUrl: config.NEXUS_API_URL, token }), {
     sandbox: config.RUNNER_SANDBOX,
     runnerLabel,
     dataDir: config.RUNNER_DATA_DIR,
+    collectRemoteAccess: (signal) => collectRemoteAccess(apiPortOf(config.NEXUS_API_URL), { signal }),
   });
   log("info", "runner started", {
     api: config.NEXUS_API_URL,

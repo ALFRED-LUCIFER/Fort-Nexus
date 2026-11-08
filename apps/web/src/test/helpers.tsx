@@ -214,6 +214,7 @@ export const job = (over: Partial<Job> = {}): Job => ({
   outcome: null,
   stateVersion: 1,
   lastEventSequence: 0,
+  retryOfJobId: null,
   issue: null,
   estimatedCostUsd: null,
   agent: "DEVOPS",

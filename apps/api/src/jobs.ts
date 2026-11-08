@@ -14,6 +14,7 @@ import {
   type JobList,
   type JobStatus,
   type ListJobsQuery,
+  type RemoteAccessReport,
   type RunEvent,
   type RunEventType,
   type RunStage,
@@ -74,6 +75,7 @@ export const toJobDto = (j: JobRow): Job => ({
     : null,
   estimatedCostUsd: j.estimatedCostUsd,
   agent: j.agent,
+  retryOfJobId: j.retryOfJobId,
   startedAt: j.startedAt?.toISOString() ?? null,
   finishedAt: j.finishedAt?.toISOString() ?? null,
   createdAt: j.createdAt.toISOString(),
@@ -213,9 +215,15 @@ export async function createJob(
     pinIssue: (body: Extract<CreateJobRequest, { jobType: "DEV_ISSUE_TO_PR" }>) => Promise<IssueSnapshot>;
     /** Trusted callers only (plan steps, job drafts); otherwise the job type's default agent. */
     agent?: AgentKey;
+    /** `retryJob` only: the finished job this one reruns. */
+    retryOfJobId?: string;
   },
 ): Promise<JobRow> {
-  const requestHash = sha256(canonical(input.body));
+  // A rerun is identified by the job it reruns: its body is derived again on every call, so a runner pin dropped
+  // between two calls can't turn a replay into a key conflict.
+  const requestHash = sha256(
+    canonical(input.retryOfJobId ? { retryOfJobId: input.retryOfJobId } : input.body),
+  );
   const byKey = and(eq(jobs.initiatorId, input.ownerId), eq(jobs.idempotencyKey, input.idempotencyKey));
   const replay = (existing: JobRow) => {
     if (existing.requestHash !== requestHash)
@@ -256,6 +264,7 @@ export async function createJob(
         projectId: body.projectId,
         jobType: body.jobType,
         agent: input.agent ?? defaultJobAgent(body.jobType),
+        retryOfJobId: input.retryOfJobId ?? null,
         status: "QUEUED",
         // RUNNER_DIAGNOSTIC: read-only fixed argv. DEV_ISSUE_TO_PR: sandboxed edits; the push is a separate R2 approval.
         riskTier: snapshot ? "R1" : "R0",
@@ -282,6 +291,7 @@ export async function createJob(
         payload: {
           jobType: job.jobType,
           request: job.request,
+          ...(input.retryOfJobId ? { retryOfJobId: input.retryOfJobId } : {}),
           // FR-DEV-01: missing acceptance criteria are recorded, not blocking.
           ...(snapshot
             ? { issue: snapshot, missingAcceptanceCriteria: snapshot.acceptanceCriteria.length === 0 }
@@ -293,7 +303,7 @@ export async function createJob(
     ]);
     await audit(tx, {
       actor,
-      action: "job.create",
+      action: input.retryOfJobId ? "job.retry" : "job.create",
       resourceType: "job",
       resourceId: job.id,
       correlationId: input.correlationId,
@@ -301,6 +311,7 @@ export async function createJob(
         jobType: job.jobType,
         projectId: job.projectId,
         targetRunnerId: target ?? null,
+        ...(input.retryOfJobId ? { retryOfJobId: input.retryOfJobId } : {}),
         ...(body.jobType === "RUNNER_DIAGNOSTIC"
           ? { preset: body.preset }
           : {
@@ -312,6 +323,48 @@ export async function createJob(
       },
     });
     return job;
+  });
+}
+
+/**
+ * FR-RUN-06: a finished job starts again as a new job linked by retryOfJobId; the original is never changed. It goes
+ * through createJob, so every check applies and an issue run pins the issue as it is now. RECOVERY_REQUIRED isn't
+ * terminal, so it stays refused until reconciled.
+ */
+export async function retryJob(
+  db: Db,
+  input: {
+    ownerId: string;
+    jobId: string;
+    idempotencyKey: string;
+    correlationId: string;
+    timezone: string;
+    pinIssue: Parameters<typeof createJob>[1]["pinIssue"];
+  },
+): Promise<JobRow> {
+  const { jobId, ...create } = input;
+  const original = await getJob(db, input.ownerId, jobId);
+  const { status } = original;
+  if (status === "RECOVERY_REQUIRED")
+    throw new HttpError(409, "CONFLICT", "This job must be recovered before it can run again", { status });
+  if (!isTerminal(status))
+    throw new HttpError(409, "CONFLICT", `Only a finished job can run again; this one is ${status}`, {
+      status,
+    });
+
+  const pin = original.request.runnerId;
+  const [pinned] = pin
+    ? await db
+        .select({ id: runners.id })
+        .from(runners)
+        .where(and(eq(runners.id, pin), eq(runners.ownerId, input.ownerId), isNull(runners.revokedAt)))
+    : [];
+  return createJob(db, {
+    ...create,
+    // A runner revoked since is dropped rather than failing the rerun; any runner may lease it.
+    body: pin && !pinned ? { ...original.request, runnerId: undefined } : original.request,
+    agent: original.agent,
+    retryOfJobId: original.id,
   });
 }
 
@@ -469,10 +522,19 @@ export async function tryLease(db: Db, runner: RunnerRow): Promise<JobRow | null
   });
 }
 
-export async function heartbeat(db: Db, runner: RunnerRow, activeJobIds: string[]): Promise<string[]> {
+export async function heartbeat(
+  db: Db,
+  runner: RunnerRow,
+  activeJobIds: string[],
+  remoteAccess?: RemoteAccessReport,
+): Promise<string[]> {
   const now = new Date();
   const mine = and(eq(jobs.runnerId, runner.id), inArray(jobs.status, LEASED));
-  await db.update(runners).set({ lastHeartbeatAt: now }).where(eq(runners.id, runner.id));
+  await db
+    .update(runners)
+    // Most beats carry no report; the last one stays until the next arrives.
+    .set({ lastHeartbeatAt: now, ...(remoteAccess ? { remoteAccess, remoteAccessAt: now } : {}) })
+    .where(eq(runners.id, runner.id));
   if (activeJobIds.length > 0)
     // Only live leases are extended; an expired one belongs to the reaper.
     await db

@@ -22,6 +22,7 @@ import {
 } from "../lib/queries.ts";
 import { field, ghostBtn, primaryBtn } from "./deepDive.tsx";
 import { Drawer, DrawerHeader } from "./Drawer.tsx";
+import { RunAgain } from "./RunAgain.tsx";
 import { useScope } from "./scope.tsx";
 import { AGENT_LABEL } from "./agentLabels.ts";
 
@@ -325,6 +326,7 @@ function AllJobs() {
                     item={item}
                     project={scope.project ? undefined : projectName(item.job.projectId)}
                     onOpen={() => open(`run:${item.job.id}`)}
+                    scopeNoteId={blockedId}
                   />
                 ))}
               </ul>
@@ -364,11 +366,14 @@ function JobRow({
   item,
   project,
   onOpen,
+  scopeNoteId,
 }: {
   item: JobHistoryItem;
   /** Its project's name, shown in All. */
   project: string | undefined;
   onOpen: () => void;
+  /** The list's one line saying why nothing can start here. */
+  scopeNoteId: string;
 }) {
   const { job, pullRequest } = item;
   const tone = jobTone(job.status);
@@ -423,6 +428,7 @@ function JobRow({
         </Fact>
         <Fact term="Outcome">{job.outcome ? OUTCOME[job.outcome] : "—"}</Fact>
       </dl>
+      <RunAgain job={job} context={title} scopeNoteId={scopeNoteId} />
     </li>
   );
 }

@@ -12,6 +12,7 @@ import {
   timestamp,
   uniqueIndex,
   uuid,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import type {
   AgentKey,
@@ -25,6 +26,7 @@ import type {
   JobType,
   NotificationCategory,
   NotificationStatus,
+  RemoteAccessReport,
   RiskTier,
   RunEventType,
   PushDraftPrAction,
@@ -121,6 +123,9 @@ export const runners = pgTable(
     tokenHash: text("token_hash").notNull().unique(), // sha-256 hex; the token itself is never stored
     revokedAt: ts("revoked_at"),
     lastHeartbeatAt: ts("last_heartbeat_at"),
+    // What Tailscale said on this runner's machine, and when (Settings → Remote access).
+    remoteAccess: jsonb("remote_access").$type<RemoteAccessReport>(),
+    remoteAccessAt: ts("remote_access_at"),
     createdAt: ts("created_at").notNull().defaultNow(),
   },
   (t) => [index("runners_owner_idx").on(t.ownerId)],
@@ -214,6 +219,8 @@ export const jobs = pgTable(
     estimatedCostUsd: numeric("estimated_cost_usd", { precision: 12, scale: 6, mode: "number" }),
     // Set by the server at create; never from the request body.
     agent: text("agent").$type<AgentKey>().notNull(),
+    // The finished job this one reruns; the original keeps its own history.
+    retryOfJobId: uuid("retry_of_job_id").references((): AnyPgColumn => jobs.id),
     startedAt: ts("started_at"),
     finishedAt: ts("finished_at"),
     stateVersion: integer("state_version").notNull().default(0),

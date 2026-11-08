@@ -1,10 +1,21 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { RUNNER_HEARTBEAT_INTERVAL_MS, RUNNER_LEASE_TTL_MS } from "@nexus/contracts";
+import {
+  REMOTE_ACCESS_REPORT_INTERVAL_MS,
+  RUNNER_HEARTBEAT_INTERVAL_MS,
+  RUNNER_LEASE_TTL_MS,
+  type RemoteAccessReport,
+} from "@nexus/contracts";
 import { isAuthError, type Lease, type RunnerApi } from "./api.ts";
 import { errorMessage, log as defaultLog } from "./log.ts";
 import { startJob, type JobHandle, type JobOptions } from "./run.ts";
 
-export type RunnerOptions = JobOptions & { heartbeatMs?: number; leaseTtlMs?: number };
+export type RunnerOptions = JobOptions & {
+  heartbeatMs?: number;
+  leaseTtlMs?: number;
+  /** Omitted: this runner reports nothing about remote access. */
+  collectRemoteAccess?: (signal: AbortSignal) => Promise<RemoteAccessReport>;
+  remoteAccessMs?: number;
+};
 
 const AUTH_REJECTED = "runner token rejected (revoked?); pair this runner again";
 
@@ -14,6 +25,8 @@ export function startRunner(api: RunnerApi, opts: RunnerOptions = {}) {
   const {
     heartbeatMs = RUNNER_HEARTBEAT_INTERVAL_MS,
     leaseTtlMs = RUNNER_LEASE_TTL_MS,
+    remoteAccessMs = REMOTE_ACCESS_REPORT_INTERVAL_MS,
+    collectRemoteAccess,
     log = defaultLog,
   } = opts;
   const stopping = new AbortController(); // stops leasing
@@ -21,6 +34,7 @@ export function startRunner(api: RunnerApi, opts: RunnerOptions = {}) {
   let job: JobHandle | undefined;
   let lastBeat = Date.now();
   let fatal: Error | undefined;
+  let remoteAccess: RemoteAccessReport | undefined; // collected, not yet sent
 
   const halt = (err?: Error) => {
     fatal ??= err;
@@ -29,8 +43,15 @@ export function startRunner(api: RunnerApi, opts: RunnerOptions = {}) {
   };
 
   const beat = async () => {
+    // Taken whether or not this beat lands: a report is never retried, so it can't keep failing the beats that hold
+    // job leases. The next collection replaces a lost one, well inside REMOTE_ACCESS_STALE_AFTER_MS.
+    const report = remoteAccess;
+    remoteAccess = undefined;
     try {
-      const { cancelJobIds } = await api.heartbeat({ activeJobIds: job ? [job.jobId] : [] }, idle.signal);
+      const { cancelJobIds } = await api.heartbeat(
+        { activeJobIds: job ? [job.jobId] : [], ...(report ? { remoteAccess: report } : {}) },
+        idle.signal,
+      );
       lastBeat = Date.now();
       if (job && cancelJobIds.includes(job.jobId)) job.cancel();
     } catch (err) {
@@ -52,6 +73,16 @@ export function startRunner(api: RunnerApi, opts: RunnerOptions = {}) {
     while (!idle.signal.aborted) {
       await beat();
       await sleep(heartbeatMs, undefined, { signal: idle.signal }).catch(() => {});
+    }
+  })();
+
+  // Its own loop, so a slow Tailscale can never hold up a heartbeat. The beat just picks up whatever is ready.
+  const reporting = (async () => {
+    while (collectRemoteAccess && !stopping.signal.aborted) {
+      const report = await collectRemoteAccess(stopping.signal).catch(() => undefined);
+      // A collection cut short by shutdown says nothing about Tailscale.
+      if (report && !stopping.signal.aborted) remoteAccess = report;
+      await sleep(remoteAccessMs, undefined, { signal: stopping.signal }).catch(() => {});
     }
   })();
 
@@ -88,6 +119,7 @@ export function startRunner(api: RunnerApi, opts: RunnerOptions = {}) {
     await leasing;
     idle.abort();
     await heartbeats;
+    await reporting;
     clearInterval(watchdog);
     if (fatal) throw fatal;
   })();

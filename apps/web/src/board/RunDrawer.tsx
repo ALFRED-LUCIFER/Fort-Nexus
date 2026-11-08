@@ -16,6 +16,7 @@ import {
 import { ApprovalGate } from "./approval.tsx";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { RerunOf, RunAgain } from "./RunAgain.tsx";
 import {
   agentFacts,
   explain,
@@ -161,6 +162,7 @@ function RunBody({ jobId }: { jobId: string }) {
         />
       )}
       <div className="nx-stagger flex min-h-0 flex-1 flex-col gap-[18px] overflow-auto px-6 pt-5 pb-6">
+        {j.retryOfJobId && <RerunOf jobId={j.retryOfJobId} />}
         {issueReq ? (
           <Stages stages={issueStages(status, j.outcome, events, a)} />
         ) : (
@@ -277,6 +279,7 @@ function RunBody({ jobId }: { jobId: string }) {
             )}
           </div>
         )}
+        <RunAgain job={j} />
       </div>
     </>
   );

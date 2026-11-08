@@ -404,6 +404,43 @@ describe("create DEV_ISSUE_TO_PR", () => {
     expect(again.json().jobId).toBe(jobId);
     expect(gh.calls.length).toBe(before); // a replay never asks GitHub again
   });
+
+  it("run again pins the issue as GitHub has it now, not the original's snapshot, and keeps the agent", async () => {
+    const created = await createIssueJob({ issueNumber: 42 });
+    const id = created.json().jobId as string;
+    await owner("POST", `/v1/jobs/${id}/cancel`);
+    await sql.query(
+      `update jobs set agent = 'DEVOPS', issue_snapshot = issue_snapshot || '{"title": "Old title", "body": "Old text"}' where id = $1`,
+      [id],
+    );
+    const before = await job(id);
+    expect(before.issue?.title).toBe("Old title");
+
+    const key = randomUUID();
+    const res = await owner("POST", `/v1/jobs/${id}/retry`, { headers: { "idempotency-key": key } });
+    expect(res.statusCode, res.body).toBe(202);
+    const newId = res.json().jobId as string;
+    expect(newId).not.toBe(id);
+    expect(await job(newId)).toMatchObject({
+      status: "QUEUED",
+      retryOfJobId: id,
+      agent: "DEVOPS",
+      request: before.request,
+      issue: {
+        title: "Fix cart totals 42",
+        workBranch: `nexus/issue-42-${newId.replaceAll("-", "").slice(-8)}`,
+      },
+    });
+    const pin = await sql.query(`select issue_snapshot from jobs where id = $1`, [newId]);
+    expect(pin.rows[0].issue_snapshot.body).toContain("Totals are wrong.");
+    expect((await job(id)).issue?.title).toBe("Old title");
+
+    const calls = gh.calls.length;
+    const again = await owner("POST", `/v1/jobs/${id}/retry`, { headers: { "idempotency-key": key } });
+    expect(again.json().jobId).toBe(newId);
+    expect(gh.calls.length).toBe(calls); // a replay never asks GitHub again
+    await owner("POST", `/v1/jobs/${newId}/cancel`);
+  });
 });
 
 describe("lease", () => {

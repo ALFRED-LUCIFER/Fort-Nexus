@@ -45,6 +45,12 @@ With an `https` origin the API sends HSTS and secure cookies. Sign in **at the U
 
 The runner talks to `http://127.0.0.1:8787` on the same host and needs no change.
 
+## See it in NEXUS
+
+Settings → Remote access shows what Tailscale says on the home machine: the address, whether Serve and Funnel are on, and your devices. The runner reads `tailscale status --json` and `tailscale serve status --json` about once a minute and sends names and online state only, never addresses or keys, so it needs a paired, running runner. No report for three minutes shows as out of date.
+
+The page is read-only on purpose: a mistake from a phone could cut off the connection in use. Make changes on the home machine; the page shows the command when something needs fixing.
+
 ## 5. Phone push
 
 With the tailnet URL working, install NEXUS on the phone (iPhone: Safari → Share → Add to Home Screen) and turn push on in Settings → Notifications: `docs/runbooks/push.md`.

@@ -2,6 +2,15 @@
 
 Read this first in a new session, then `CLAUDE.md`, `docs/mvp-tracker.md` and `docs/p1-tracker.md`.
 
+## Latest (2026-11-09)
+
+- **Settings → Remote access is live and read-only:** the runner reports Tailscale's state about once a minute (`apps/runner/src/remote-access.ts`); the API can't ask, it runs in a container. Changes stay in the home machine's terminal.
+- **Run again** on finished jobs: spec `docs/specs/run-again.md`. A new job linked by `retryOfJobId`, same agent. `job.agent` is only an attribution label today (the runner never sees it), so there is deliberately no agent picker.
+- **A fresh visit reopens the last project** (`beforeLoad` in `router.tsx`, on `enter` only).
+- **Migration `0016`** (`runners.remote_access*`, `jobs.retry_of_job_id`). Restart the API before the runner: an older API refuses the new heartbeat field.
+- **This machine:** secrets are in `/Volumes/Development/.nexus` (`NEXUS_HOME` in `.env`). The runner still reads `~/.nexus/ai.json` and `~/.nexus/runner-token`, so keep both. Runner `Alfreds-MacBook-Pro.local` runs as a LaunchAgent.
+- **Docker is Colima and shares only `/Volumes/Development`.** The runner now keeps temp folders in `<data dir>/tmp` for this reason. Real-Docker runner tests need `TMPDIR` under that path; API tests need `DOCKER_HOST=unix:///Users/alfredpaul/.colima/default/docker.sock TESTCONTAINERS_RYUK_DISABLED=true`.
+
 ## This session (2026-11-08 evening)
 
 **Shipped (pushed to `origin/main`):**
