@@ -13,6 +13,11 @@ Read this first in a new session, then `CLAUDE.md`, `docs/mvp-tracker.md` and `d
 - **Sandbox shell fix**: the Alpine sandbox had no bash, so the agent's Bash tool always failed. Now `nexus-sandbox:3` (bash + `SHELL`). Rebuild with `pnpm --filter @nexus/runner sandbox:build`.
 - Robustness: stale Talk/plan claims recover; stranded APPROVED approvals reconcile on the reaper; reaper re-entrancy guard; Postgres ≥18 check; Octokit 20 s timeouts; `callTool` no retries + timeout; SSE stops on session expiry; PEM/JWT/key redaction in run output; compose mounts `~/.nexus` read-only; `/v1/auth/status` no longer exposes the owner login; issue text keeps code spans; Markdown rendered safely (no HTML) in issue bodies and agent reports; Home refreshes after every decision.
 
+**Gap closing (branch, not yet merged):**
+- A plan with only gaps waits on you as "<goal> · N not covered — start them as new jobs" (Today) and "Plan: … from the plan" (Talk), not "Plan to approve"; it still counts as a decision and opens the plan drawer.
+- An approved push GitHub doesn't answer (5xx, 429/secondary rate limit, timeout, dropped connection) stays APPROVED with `retry` (attempts, next attempt, reason) on the approval and an `external_action.retrying` event; the reaper's reconcile retries at 1, 2, 4, 8 min (never before a rate limit's reset) and fails honestly after 5 attempts. Refusals (other 4xx, a branch NEXUS didn't create) still fail at once. Migration `0014_push_retry`. Runners can no longer send `external_action.*` events.
+- `ownerLogin` removed from `AuthStatus`.
+
 **Live end-to-end test (real GitHub, real Anthropic, Sonnet 5.5):**
 - Runner **AEDU-MAC-DEV10 paired**; project Home bound to **`ALFRED-LUCIFER/tts-test`** (safe test repo).
 - tts-test #1 → **draft PR #2**; tts-test #3 → **draft PR #4** (both open drafts, not merged; ~$0.04 each). A runner diagnostic also completed.
@@ -26,8 +31,7 @@ Read this first in a new session, then `CLAUDE.md`, `docs/mvp-tracker.md` and `d
 4. Review/close the test PRs #2 and #4 on tts-test.
 
 **Still pending (known, not done):**
-- A plan with only gaps is listed in Waiting on you / Talk as "Plan to approve" though it can't be approved (wording).
-- A transient GitHub 5xx during an approved push still fails the job (audit item 4); the owner must re-run.
+- While an approved push waits for a GitHub retry, its job stays AWAITING_APPROVAL, so Home's Execution row and the Jobs page still group it under "needs you" (the run drawer says it's retrying).
 - Issues with a closed/merged NEXUS PR stay "taken" for the planner (uses NEXUS's own records only).
 - Cloud handoffs don't count as "in progress" for the planner.
 - The tests-in-sandbox step runs `npm ci` + `npm test`; repos whose test script needs a missing dev dependency (tts-test: jest) fail honestly with exit 127.

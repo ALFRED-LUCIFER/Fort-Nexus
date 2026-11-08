@@ -18,7 +18,7 @@ import {
   runner,
 } from "../test/helpers.tsx";
 import { keys } from "../lib/api.ts";
-import { issueStages } from "./runEvents.ts";
+import { issueStages, toLine } from "./runEvents.ts";
 
 const T0 = "2026-10-28T10:00:00.000Z";
 const HASH = `7f3a91c2${"0".repeat(52)}4c91`;
@@ -100,6 +100,7 @@ const approval = (over: Partial<Approval> = {}): Approval => ({
   decidedAt: null,
   result: null,
   error: null,
+  retry: null,
   ...over,
 });
 
@@ -448,6 +449,53 @@ describe("issue run", () => {
     );
     const card = await screen.findByRole("region", { name: "Tests couldn't run" });
     expect(within(card).getByText(`Why: ${reason}`)).toBeTruthy();
+  });
+
+  it("an approved push GitHub didn't answer says NEXUS retries, and never that a PR opened", async () => {
+    const retry = {
+      attempts: 2,
+      maxAttempts: 5,
+      nextAttemptAt: new Date(Date.now() + 150_000).toISOString(),
+      reason: "GitHub is unavailable right now (HTTP 503).",
+    };
+    const retrying = approval({ status: "APPROVED", decidedAt: T0, retry });
+    open(issueJob(), { "GET /v1/approvals": () => json({ items: [retrying] }) });
+    const gate = await screen.findByRole("region", {
+      name: "Approved. GitHub didn't answer; NEXUS will retry.",
+    });
+    expect(gate.textContent).toContain("Approved · GitHub didn't answer");
+    expect(gate.textContent).toContain(
+      "GitHub is unavailable right now (HTTP 503). Nothing is open on GitHub yet. Attempt 3 of 5 in 2m; after 5 tries NEXUS stops and says so here.",
+    );
+    expect(gate.textContent).not.toMatch(/opened/);
+    expect(within(gate).queryByRole("button", { name: /Approve|Deny/ })).toBeNull();
+    expect(
+      await screen.findByText(
+        "You approved the push, but GitHub didn't answer (2 of 5 attempts so far). NEXUS will retry; no draft PR is open yet.",
+      ),
+    ).toBeTruthy();
+
+    const events = [
+      event(1, "approval.requested"),
+      event(2, "approval.decided", { decision: "approve" }),
+      event(3, "external_action.retrying", {
+        attempts: 2,
+        maxAttempts: 5,
+        nextAttemptAt: T0,
+        reason: retry.reason,
+      }),
+    ];
+    expect(issueStages("AWAITING_APPROVAL", null, events, retrying).at(-1)).toEqual({
+      label: "Draft PR",
+      state: "active",
+      note: "GitHub retry",
+    });
+    expect(toLine(events[2]!)).toMatchObject({
+      k: "github",
+      m: expect.stringMatching(
+        /^didn't answer \(2 of 5\) · GitHub is unavailable right now \(HTTP 503\)\. · NEXUS retries after /,
+      ),
+    });
   });
 
   it("keeps Draft PR open until external_action.completed, even when the approval says EXECUTED", () => {

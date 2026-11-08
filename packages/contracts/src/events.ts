@@ -18,6 +18,7 @@ export const RunEventType = z.enum([
   "test.completed",
   "artifact.created",
   "external_action.completed",
+  "external_action.retrying",
   "job.completed",
   "job.failed",
   "job.cancelled",

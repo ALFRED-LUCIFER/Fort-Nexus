@@ -76,7 +76,7 @@ function RunBody({ jobId }: { jobId: string }) {
   const repos = useRepositories(!!issueReq && github.data?.configured === true);
   // Gate events mean the approval changed: fetch it now instead of waiting for the next poll.
   const gateEvents = events.filter(
-    (e) => e.type.startsWith("approval.") || e.type === "external_action.completed",
+    (e) => e.type.startsWith("approval.") || e.type.startsWith("external_action."),
   ).length;
   useEffect(() => {
     if (!gateEvents) return;

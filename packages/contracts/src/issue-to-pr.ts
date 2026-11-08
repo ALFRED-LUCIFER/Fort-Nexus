@@ -157,9 +157,23 @@ export const Approval = z.object({
   result: z
     .object({ pullRequestNumber: z.int().positive(), pullRequestUrl: z.url(), headSha: z.string() })
     .nullable(),
+  // FAILED only: why GitHub didn't take the push.
   error: z.string().nullable(),
+  // APPROVED only, after GitHub didn't answer (5xx, rate limit, timeout): NEXUS tries again at `nextAttemptAt`, at
+  // most PUSH_MAX_ATTEMPTS times in all. Nothing is claimed as pushed until GitHub confirms it.
+  retry: z
+    .object({
+      attempts: z.int().positive(),
+      maxAttempts: z.int().positive(),
+      nextAttemptAt: z.iso.datetime(),
+      reason: z.string(),
+    })
+    .nullable(),
 });
 export type Approval = z.infer<typeof Approval>;
+
+/** Attempts, the first included, at an approved push GitHub doesn't answer before it fails for good. */
+export const PUSH_MAX_ATTEMPTS = 5;
 
 export const ApprovalList = z.object({ items: z.array(Approval) });
 export type ApprovalList = z.infer<typeof ApprovalList>;

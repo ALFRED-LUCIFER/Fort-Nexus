@@ -1,8 +1,9 @@
-import { and, desc, eq, lt } from "drizzle-orm";
+import { and, desc, eq, isNull, lt, lte, or } from "drizzle-orm";
 import type { FastifyBaseLogger } from "fastify";
 import {
   APPROVAL_TTL_MS,
   CHANGESET_MAX_BYTES,
+  PUSH_MAX_ATTEMPTS,
   WORK_BRANCH_PREFIX,
   type Approval,
   type ApprovalDecisionRequest,
@@ -59,8 +60,37 @@ export const toApprovalDto = (a: ApprovalRow): Approval => ({
   expiresAt: a.expiresAt.toISOString(),
   decidedAt: a.decidedAt?.toISOString() ?? null,
   result: a.result,
-  error: a.error,
+  // While APPROVED, `error` is the transient reason of a scheduled retry, shown as such.
+  error: a.status === "APPROVED" ? null : a.error,
+  retry:
+    a.status === "APPROVED" && a.retryAt
+      ? {
+          attempts: a.pushAttempts,
+          maxAttempts: PUSH_MAX_ATTEMPTS,
+          nextAttemptAt: a.retryAt.toISOString(),
+          reason: a.error ?? "GitHub didn't answer.",
+        }
+      : null,
 });
+
+/**
+ * GitHub didn't answer (5xx, rate limit, timeout or network: the catalog maps all of them to 502 or 429), so the
+ * same idempotent push may be tried again. Anything else (lost access, a branch NEXUS didn't create, a rejected
+ * request) fails at once.
+ */
+const isTransient = (err: unknown): err is HttpError =>
+  err instanceof HttpError && (err.statusCode === 429 || err.statusCode >= 500);
+// The catalog's words are for a person who can retry; here NEXUS retries, so that advice is dropped.
+const outageReason = (err: HttpError) => err.message.replace(/\s*Try again shortly\.$/, "");
+
+const RETRY_BASE_MS = 60_000; // the reaper reconciles at most once a minute
+/** When attempt `attempts + 1` is due: 1, 2, 4, 8 min; never before a rate limit's reset. */
+function nextAttemptAt(attempts: number, err: HttpError, now = Date.now()): Date {
+  const backoff = now + RETRY_BASE_MS * 2 ** (attempts - 1);
+  const reset = (err.details as { resetAt?: unknown } | undefined)?.resetAt;
+  const resetAt = typeof reset === "string" ? Date.parse(reset) : Number.NaN;
+  return new Date(Number.isFinite(resetAt) ? Math.max(backoff, resetAt) : backoff);
+}
 
 const SYMBOL = { added: "A", modified: "M", deleted: "D" } as const;
 
@@ -407,8 +437,9 @@ export async function decideApproval(
 /**
  * Runs approved push actions. One in-flight execution per approval per process; finishing writes are
  * conditional on the approval still being APPROVED, so a second executor can't overwrite the first.
- * `reconcile` picks up approvals left APPROVED by a crash (startup) or by an execution whose final write failed
- * (the reaper, periodically).
+ * `reconcile` picks up approvals left APPROVED by a crash (startup), by an execution whose final write failed, or by
+ * a GitHub outage once its backoff is due (the reaper, periodically). Permanent GitHub errors fail at once; an outage
+ * fails after PUSH_MAX_ATTEMPTS attempts.
  */
 export function createExecutor(db: Db, github: GithubCatalog | null, log: FastifyBaseLogger) {
   const inFlight = new Map<string, Promise<Approval>>();
@@ -443,7 +474,7 @@ export function createExecutor(db: Db, github: GithubCatalog | null, log: Fastif
           .where(ledger);
         [done] = await tx
           .update(approvals)
-          .set({ status: "EXECUTED", result: prResult })
+          .set({ status: "EXECUTED", result: prResult, error: null, retryAt: null })
           .where(eq(approvals.id, a.id))
           .returning();
         await moveJob(
@@ -474,7 +505,7 @@ export function createExecutor(db: Db, github: GithubCatalog | null, log: Fastif
           .where(ledger);
         [done] = await tx
           .update(approvals)
-          .set({ status: "FAILED", error: result.error })
+          .set({ status: "FAILED", error: result.error, retryAt: null })
           .where(eq(approvals.id, a.id))
           .returning();
         await moveJob(tx, job, "FAILED", EXECUTOR, [
@@ -497,6 +528,59 @@ export function createExecutor(db: Db, github: GithubCatalog | null, log: Fastif
           : { jobId: job.id, actionHash: a.actionHash, error: result.error },
       });
       return toApprovalDto(done!);
+    });
+  }
+
+  /**
+   * GitHub didn't answer this attempt: the approval stays APPROVED with the reason and when the reconcile retries
+   * it, shown on the run. Skipped when the approval moved on or another executor already recorded this attempt.
+   */
+  async function deferRetry(seen: ApprovalRow, err: HttpError): Promise<Approval> {
+    return db.transaction(async (tx) => {
+      const [row] = await tx
+        .select()
+        .from(approvals)
+        .innerJoin(jobs, eq(jobs.id, approvals.jobId))
+        .where(eq(approvals.id, seen.id))
+        .for("update");
+      const { approvals: a, jobs: job } = row!;
+      if (a.status !== "APPROVED" || a.pushAttempts !== seen.pushAttempts) return toApprovalDto(a);
+      const attempts = a.pushAttempts + 1;
+      const retryAt = nextAttemptAt(attempts, err);
+      const reason = outageReason(err);
+      const [next] = await tx
+        .update(approvals)
+        .set({ pushAttempts: attempts, retryAt, error: reason })
+        .where(eq(approvals.id, a.id))
+        .returning();
+      await tx
+        .update(externalActions)
+        .set({ error: reason, updatedAt: new Date() })
+        .where(eq(externalActions.idempotencyKey, pushIdempotencyKey(job.id)));
+      const retry = { attempts, maxAttempts: PUSH_MAX_ATTEMPTS, nextAttemptAt: retryAt.toISOString() };
+      await appendEvents(tx, job, EXECUTOR, [
+        {
+          type: "external_action.retrying",
+          stage: "publish",
+          payload: {
+            approvalId: a.id,
+            provider: "github",
+            operation: "push_draft_pr",
+            ...retry,
+            reason,
+          },
+        },
+      ]);
+      await audit(tx, {
+        actor: EXECUTOR,
+        action: "approval.execute_retry",
+        resourceType: "approval",
+        resourceId: a.id,
+        correlationId: job.id,
+        outcome: "FAILED",
+        metadata: { jobId: job.id, actionHash: a.actionHash, ...retry, error: reason },
+      });
+      return toApprovalDto(next!);
     });
   }
 
@@ -526,6 +610,14 @@ export function createExecutor(db: Db, github: GithubCatalog | null, log: Fastif
       // HttpError messages are written for the owner and carry no secrets; anything else stays in the log.
       if (!(err instanceof HttpError)) log.error({ err, approvalId }, "push draft PR failed");
       const error = err instanceof HttpError ? err.message : "Unexpected error while pushing to GitHub.";
+      // The push is idempotent (it adopts its own commit, ref and PR), so a GitHub outage is retried, up to a cap.
+      if (isTransient(err)) {
+        if (a.pushAttempts + 1 < PUSH_MAX_ATTEMPTS) return deferRetry(a, err);
+        return finish(a.id, {
+          ok: false,
+          error: `GitHub didn't answer after ${PUSH_MAX_ATTEMPTS} attempts, so NEXUS stopped trying. Last answer: ${outageReason(err)}`,
+        });
+      }
       return finish(a.id, { ok: false, error });
     }
   }
@@ -543,8 +635,9 @@ export function createExecutor(db: Db, github: GithubCatalog | null, log: Fastif
     execute,
     /**
      * Finishes approvals left APPROVED (DEV-G08: the push adopts what already exists), skipping any executing in this
-     * process and, with `decidedBefore`, any decided since (its own request is still executing it). One failing
-     * approval doesn't hold up the others: it is logged and stays APPROVED for the next pass.
+     * process, any whose retry after a GitHub outage isn't due yet and, with `decidedBefore`, any decided since (its
+     * own request is still executing it). One failing approval doesn't hold up the others: it is logged and stays
+     * APPROVED for the next pass.
      */
     async reconcile(opts: { decidedBefore?: Date } = {}): Promise<number> {
       const open = await db
@@ -553,6 +646,7 @@ export function createExecutor(db: Db, github: GithubCatalog | null, log: Fastif
         .where(
           and(
             eq(approvals.status, "APPROVED"),
+            or(isNull(approvals.retryAt), lte(approvals.retryAt, new Date())),
             opts.decidedBefore ? lt(approvals.decidedAt, opts.decidedBefore) : undefined,
           ),
         );

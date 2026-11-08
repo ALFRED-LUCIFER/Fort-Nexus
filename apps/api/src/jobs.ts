@@ -34,6 +34,9 @@ const SERVER_ONLY_EVENTS = new Set<RunEventType>([
   "job.created",
   "job.state.changed",
   "job.recovery_required",
+  // Only the API talks to GitHub for a push: a runner can't claim a PR was opened, or is being retried.
+  "external_action.completed",
+  "external_action.retrying",
 ]);
 
 export type JobRow = typeof jobs.$inferSelect;

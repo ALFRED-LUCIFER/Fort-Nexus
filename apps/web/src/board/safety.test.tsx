@@ -140,6 +140,7 @@ describe("emergency stop", () => {
       decidedAt: null,
       result: null,
       error: null,
+      retry: null,
     };
     const message =
       "Emergency stop is engaged: nothing new can start and approvals can't execute until you release it.";
@@ -191,7 +192,7 @@ describe("settings", () => {
           return new Response(null, { status: 204 });
         },
         "DELETE /v1/sessions/s-current": () => new Response(null, { status: 204 }),
-        "GET /v1/auth/status": () => json({ github: { configured: true, ownerLogin: "owner" } }),
+        "GET /v1/auth/status": () => json({ github: { configured: true } }),
       },
     });
     const user = userEvent.setup();

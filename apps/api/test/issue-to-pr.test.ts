@@ -42,7 +42,19 @@ function fakeGithub() {
   const tokenInstallation = new Map<string, number>();
   const refs = new Map<string, string>();
   const pulls: { number: number; html_url: string; head: { ref: string; sha: string }; base: string }[] = [];
-  const state = { failRestrictedMint: false, hang: null as string | null, release: () => {} };
+  const state = {
+    failRestrictedMint: false,
+    hang: null as string | null,
+    release: () => {},
+    // The next `left` calls to `key` get `status` (an outage, a rate limit or a refusal).
+    outage: null as {
+      key: string;
+      status: number;
+      left: number;
+      headers?: Record<string, string>;
+      thrown?: Error;
+    } | null,
+  };
 
   const json = (data: unknown, status = 200) => Response.json(data, { status });
   const notFound = () => json({ message: "Not Found" }, 404);
@@ -171,6 +183,12 @@ function fakeGithub() {
       return new Promise<Response>((resolve) => {
         state.release = () => resolve(json({ message: "Bad Gateway" }, 502));
       });
+    const out = state.outage;
+    if (out && out.key === `${c.method} ${c.path}` && out.left > 0) {
+      out.left--;
+      if (out.status === 0) throw out.thrown; // no HTTP answer at all
+      return Response.json({ message: "GitHub says no" }, { status: out.status, headers: out.headers });
+    }
     return route(c) ?? notFound();
   });
   const writes = () => calls.filter((c) => c.method !== "GET" && c.path.startsWith("/repos/"));
@@ -856,5 +874,174 @@ describe("execution", () => {
     expect(gh.writes()).toEqual([]);
     expect(await job(l.jobId)).toMatchObject({ status: "FAILED" });
     expect(gh.refs.get(l.task!.workBranch)).toBe("d".repeat(40));
+  });
+});
+
+describe("GitHub outages during an approved push", () => {
+  const row = async (approvalId: string) =>
+    (
+      await sql.query<{ status: string; push_attempts: number; retry_at: Date | null; error: string | null }>(
+        `select status, push_attempts, retry_at, error from approvals where id = $1`,
+        [approvalId],
+      )
+    ).rows[0]!;
+  /** Time passes: the scheduled retry is due now. */
+  const due = (approvalId: string) =>
+    sql.query(`update approvals set retry_at = now() - interval '1 second' where id = $1`, [approvalId]);
+  // A fresh executor per pass (its own catalog, so a rate limit it hit doesn't block the next one); the future
+  // cutoff keeps the app's own reaper, which leaves just-decided approvals alone, out of the test.
+  const reconcile = () =>
+    createExecutor(db, createGithubCatalog(t.githubApp!, app.log), app.log).reconcile({
+      decidedBefore: new Date(Date.now() + 1_000),
+    });
+  const eventsOf = async (jobId: string, type: string) =>
+    (
+      await sql.query<{ payload: Record<string, unknown> }>(
+        `select payload from run_events where job_id = $1 and type = $2 order by sequence`,
+        [jobId, type],
+      )
+    ).rows.map((r) => r.payload);
+
+  it("a 5xx and a rate limit leave the approval APPROVED and retrying; the retry opens exactly one PR", async () => {
+    const { l, approvalId, actionHash } = await pendingApproval();
+    const branch = l.task!.workBranch;
+    // GitHub fails after the ref exists: the retry must adopt it, not push again.
+    gh.state.outage = { key: "POST /repos/acme/web/pulls", status: 503, left: 1 };
+    const before = Date.now();
+    const res = await decide(approvalId, "approve", actionHash);
+    expect(res.statusCode, res.body).toBe(200);
+    const a = res.json() as Approval;
+    expect(a).toMatchObject({
+      status: "APPROVED",
+      result: null,
+      error: null,
+      retry: { attempts: 1, maxAttempts: 5, reason: "GitHub is unavailable right now (HTTP 503)." },
+    });
+    const wait = Date.parse(a.retry!.nextAttemptAt) - before;
+    expect(wait).toBeGreaterThanOrEqual(60_000);
+    expect(wait).toBeLessThan(70_000);
+    // Never claimed: the job isn't done, no completion event, and a second approve can't force it.
+    expect(await job(l.jobId)).toMatchObject({ status: "AWAITING_APPROVAL", outcome: null });
+    expect(await eventsOf(l.jobId, "external_action.completed")).toEqual([]);
+    expect(await eventsOf(l.jobId, "external_action.retrying")).toEqual([
+      expect.objectContaining({ attempts: 1, maxAttempts: 5, nextAttemptAt: a.retry!.nextAttemptAt }),
+    ]);
+    expect((await decide(approvalId, "approve", actionHash)).statusCode).toBe(409);
+    const listed = (await owner("GET", `/v1/approvals?jobId=${l.jobId}`)).json().items as Approval[];
+    expect(listed[0]!.retry).toEqual(a.retry);
+
+    // Not due yet: the reconcile leaves it alone.
+    expect(await reconcile()).toBe(0);
+
+    // Due, and GitHub's secondary rate limit answers: the next try waits for its reset, not just the backoff.
+    gh.state.outage = {
+      key: "GET /repos/acme/web/pulls",
+      status: 429,
+      left: 1,
+      headers: { "retry-after": "600" },
+    };
+    await due(approvalId);
+    const rateLimitedAt = Date.now();
+    expect(await reconcile()).toBe(1);
+    const limited = await row(approvalId);
+    expect(limited).toMatchObject({ status: "APPROVED", push_attempts: 2 });
+    expect(limited.retry_at!.getTime() - rateLimitedAt).toBeGreaterThanOrEqual(599_000);
+    expect(limited.error).toMatch(/rate limit/);
+
+    await due(approvalId);
+    expect(await reconcile()).toBe(1);
+    const done = await row(approvalId);
+    expect(done).toMatchObject({ status: "EXECUTED", error: null, retry_at: null });
+    expect(await job(l.jobId)).toMatchObject({ status: "COMPLETED", outcome: "PR_CREATED" });
+    expect(gh.calls.filter((c) => c.method === "POST" && c.path === "/repos/acme/web/git/refs")).toHaveLength(
+      1,
+    );
+    expect(gh.pulls.filter((p) => p.head.ref === branch)).toHaveLength(1);
+    expect(await eventsOf(l.jobId, "external_action.completed")).toEqual([
+      expect.objectContaining({ adopted: true, pullRequestNumber: gh.pulls.at(-1)!.number }),
+    ]);
+    const executed = (await owner("GET", `/v1/approvals?jobId=${l.jobId}`)).json().items as Approval[];
+    expect(executed[0]).toMatchObject({ status: "EXECUTED", error: null, retry: null });
+    const audits = await sql.query(
+      `select action, outcome from audit_records where resource_id = $1 order by occurred_at`,
+      [approvalId],
+    );
+    expect(audits.rows).toEqual([
+      { action: "approval.approve", outcome: "SUCCEEDED" },
+      { action: "approval.execute_retry", outcome: "FAILED" },
+      { action: "approval.execute_retry", outcome: "FAILED" },
+      { action: "approval.execute", outcome: "SUCCEEDED" },
+    ]);
+  });
+
+  it.each([
+    [
+      "the 20 s deadline",
+      new DOMException("The operation timed out.", "TimeoutError"),
+      "GitHub didn't answer in time.",
+    ],
+    ["a dropped connection", new TypeError("fetch failed"), "GitHub is unavailable right now (HTTP 500)."],
+  ])("%s is retried, not failed", async (_, thrown, reason) => {
+    const { l, approvalId, actionHash } = await pendingApproval();
+    gh.state.outage = { key: "POST /repos/acme/web/git/trees", status: 0, left: 1, thrown };
+    const res = await decide(approvalId, "approve", actionHash);
+    expect(res.json()).toMatchObject({ status: "APPROVED", retry: { attempts: 1, reason } });
+    expect(await job(l.jobId)).toMatchObject({ status: "AWAITING_APPROVAL" });
+  });
+
+  it("a refusal (4xx other than 429) fails at once, without a retry", async () => {
+    const { l, approvalId, actionHash } = await pendingApproval();
+    // 422 (a 403 would also clear the shared catalog's caches, which later tests' fresh fakes can't refill).
+    gh.state.outage = { key: "POST /repos/acme/web/git/blobs", status: 422, left: 1 };
+    const res = await decide(approvalId, "approve", actionHash);
+    expect(res.json()).toMatchObject({ status: "FAILED", retry: null, error: expect.any(String) });
+    expect(await row(approvalId)).toMatchObject({ push_attempts: 0, retry_at: null });
+    expect(await job(l.jobId)).toMatchObject({ status: "FAILED" });
+    expect(await eventsOf(l.jobId, "external_action.retrying")).toEqual([]);
+  });
+
+  it("stops after 5 attempts and fails honestly with the reason", async () => {
+    const { l, approvalId, actionHash } = await pendingApproval();
+    gh.state.outage = { key: "POST /repos/acme/web/git/blobs", status: 502, left: Infinity };
+    const res = await decide(approvalId, "approve", actionHash);
+    expect(res.json()).toMatchObject({ status: "APPROVED", retry: { attempts: 1 } });
+    const backoff: number[] = [];
+    for (let attempt = 2; attempt <= 4; attempt++) {
+      await due(approvalId);
+      const at = Date.now();
+      expect(await reconcile()).toBe(1);
+      const r = await row(approvalId);
+      expect(r).toMatchObject({ status: "APPROVED", push_attempts: attempt });
+      backoff.push(Math.round((r.retry_at!.getTime() - at) / 60_000));
+    }
+    expect(backoff).toEqual([2, 4, 8]); // minutes
+
+    await due(approvalId);
+    expect(await reconcile()).toBe(1);
+    const failed = await row(approvalId);
+    expect(failed).toMatchObject({ status: "FAILED", retry_at: null });
+    expect(failed.error).toBe(
+      "GitHub didn't answer after 5 attempts, so NEXUS stopped trying. Last answer: GitHub is unavailable right now (HTTP 502).",
+    );
+    expect(await job(l.jobId)).toMatchObject({ status: "FAILED" });
+    expect(await eventsOf(l.jobId, "external_action.retrying")).toHaveLength(4);
+    expect(await eventsOf(l.jobId, "job.failed")).toEqual([
+      expect.objectContaining({ reason: "GITHUB_PUSH_FAILED", message: failed.error }),
+    ]);
+    expect(gh.pulls.filter((p) => p.head.ref === l.task!.workBranch)).toHaveLength(0);
+    // Nothing else retries it: it is no longer APPROVED.
+    expect(await reconcile()).toBe(0);
+  });
+
+  it("a runner can't claim a PR was opened or is being retried", async () => {
+    const { token, l } = await runningJob();
+    for (const type of ["external_action.completed", "external_action.retrying"]) {
+      const res = await runner(token, `/v1/runner/jobs/${l.jobId}/events`, {
+        batchId: randomUUID(),
+        fencingToken: l.fencingToken,
+        events: [{ occurredAt: new Date().toISOString(), type, payload: {} }],
+      });
+      expect(res.statusCode, type).toBe(400);
+    }
   });
 });

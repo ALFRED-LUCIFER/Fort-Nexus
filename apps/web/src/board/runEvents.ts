@@ -371,7 +371,9 @@ export function issueStages(
       ? { label: "Draft PR", state: "failed", note: "failed" }
       : noChanges
         ? { label: "Draft PR", state: "skipped", note: "nothing to push" }
-        : stage("Draft PR", approvedAt, published),
+        : approval?.retry
+          ? { label: "Draft PR", state: "active", note: "GitHub retry" }
+          : stage("Draft PR", approvedAt, published),
   ];
 }
 
@@ -388,10 +390,12 @@ export function explainIssue(
   const n = (k: number | undefined) => (k === undefined ? "Some" : String(k));
   if (approval?.status === "EXECUTED" && approval.result)
     return `You approved the push. Draft PR #${approval.result.pullRequestNumber} is open on GitHub for your review. NEXUS never merges.`;
+  if (approval?.retry)
+    return `You approved the push, but GitHub didn't answer (${approval.retry.attempts} of ${approval.retry.maxAttempts} attempts so far). NEXUS will retry; no draft PR is open yet.`;
   if (approval?.status === "APPROVED")
     return "You approved the push. The API is pushing the branch and opening the draft PR now.";
   if (approval?.status === "FAILED")
-    return `You approved the push, but GitHub refused it: ${approval.error ?? "no reason given"}. Nothing was merged.`;
+    return `You approved the push, but it didn't go through: ${approval.error?.replace(/\.$/, "") ?? "no reason given"}. Nothing was merged.`;
   switch (status) {
     case "QUEUED":
       return runnerOnline
@@ -531,6 +535,20 @@ export function toLine(e: RunEvent): TermLine {
         `draft PR ${num(p.pullRequestNumber) ? `#${num(p.pullRequestNumber)} ` : ""}opened`,
         GREEN,
       );
+    case "external_action.retrying": {
+      const at = str(p.nextAttemptAt);
+      return line(
+        "github",
+        [
+          `didn't answer (${num(p.attempts) ?? "?"} of ${num(p.maxAttempts) ?? "?"})`,
+          str(p.reason),
+          at ? `NEXUS retries after ${clock(at)}` : "NEXUS retries",
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        AMBER,
+      );
+    }
     case "process.output":
       return line(str(p.stream) ?? "out", str(p.text) ?? "", p.stream === "stderr" ? CORAL : "#d9d4ca");
     case "tool.completed":

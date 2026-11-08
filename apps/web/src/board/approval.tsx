@@ -163,10 +163,19 @@ const GATE: Record<Approval["status"], { kicker: string; tone: string; bg: strin
   FAILED: { kicker: "Push failed", tone: "var(--coral)", bg: "oklch(0.62 0.15 32 / .12)" },
 };
 
+const RETRYING = { kicker: "Approved · GitHub didn't answer", tone: "var(--amber)", bg: GATE.APPROVED.bg };
+
+/** "attempt 3 of 5 in 2m": a due retry runs at the API's next check, so a passed time reads "shortly". */
+const nextAttempt = (r: NonNullable<Approval["retry"]>, now: number) => {
+  const left = until(r.nextAttemptAt, now);
+  return `Attempt ${r.attempts + 1} of ${r.maxAttempts} ${left === "passed" ? "shortly" : left}`;
+};
+
 /** The push approval card of an issue run (design: dRun gate), showing exactly what the owner decides on. */
 export function ApprovalGate({ approval: a, jobCancelled }: { approval: Approval; jobCancelled: boolean }) {
   const now = useNow(30_000);
-  const g = GATE[a.status];
+  // GitHub didn't answer an approved push and NEXUS retries it: never "opened" until GitHub confirms.
+  const g = a.retry ? RETRYING : GATE[a.status];
   const { action } = a;
   const facts: [string, ReactNode][] = [
     ["repository", action.repositoryFullName],
@@ -213,7 +222,9 @@ export function ApprovalGate({ approval: a, jobCancelled }: { approval: Approval
         ) : (
           {
             PENDING: pushTitle(a),
-            APPROVED: "Approved. Pushing the branch and opening the draft PR…",
+            APPROVED: a.retry
+              ? "Approved. GitHub didn't answer; NEXUS will retry."
+              : "Approved. Pushing the branch and opening the draft PR…",
             EXECUTED: "Approved. Waiting for GitHub's answer…",
             // Cancelling a run that awaits approval withdraws the approval as DENIED.
             DENIED: jobCancelled
@@ -240,6 +251,12 @@ export function ApprovalGate({ approval: a, jobCancelled }: { approval: Approval
       {a.status === "EXPIRED" && (
         <p className="m-0 text-[12.5px] leading-[1.45] text-ink2">
           Approvals lapse after 24 hours so a stale change is never pushed. Start a new run to try again.
+        </p>
+      )}
+      {a.retry && (
+        <p className="m-0 text-[12.5px] leading-[1.45] text-ink2">
+          {a.retry.reason} Nothing is open on GitHub yet. {nextAttempt(a.retry, now)}; after{" "}
+          {a.retry.maxAttempts} tries NEXUS stops and says so here.
         </p>
       )}
       {a.status === "FAILED" && (

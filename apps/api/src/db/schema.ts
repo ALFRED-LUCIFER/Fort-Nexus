@@ -323,7 +323,11 @@ export const approvals = pgTable(
     decidedAt: ts("decided_at"),
     decidedBy: text("decided_by"),
     result: jsonb("result").$type<NonNullable<Approval["result"]>>(),
+    // FAILED: why. APPROVED with retryAt: the transient GitHub error the next attempt retries.
     error: text("error"),
+    // Attempts at the approved push that GitHub didn't answer; the next one is due at retryAt (issue-to-pr.ts).
+    pushAttempts: integer("push_attempts").notNull().default(0),
+    retryAt: ts("retry_at"),
   },
   (t) => [
     index("approvals_job_idx").on(t.jobId),

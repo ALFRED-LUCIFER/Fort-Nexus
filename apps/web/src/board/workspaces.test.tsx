@@ -84,6 +84,7 @@ const APPROVAL: Approval = {
   decidedAt: null,
   result: null,
   error: null,
+  retry: null,
 };
 
 function board(extra: Parameters<typeof mockFetch>[0] = {}) {
