@@ -32,6 +32,8 @@ pnpm --filter @nexus/api github:setup   # GitHub App → ~/.nexus/github-app.jso
 
 Set `PUBLIC_ORIGIN` to the URL you will open NEXUS at (step 7 changes it to the tailnet URL). The backup key is created by the first backup in step 6.
 
+**Moving from another machine (the GitHub App already exists):** skip `github:setup`. Copy `~/.nexus/github-app.json` and `~/.nexus/ai.json` over a private channel (e.g. `scp`, never chat or email), then `chmod 700 ~/.nexus && chmod 600 ~/.nexus/*.json`. On GitHub → the NEXUS app → General, **add** this machine's callback URL (`<PUBLIC_ORIGIN>/api/auth/callback/github`, keep the old one until you retire it) and check Permissions has **Issues: Read & write** (accept it on the installation). Do **not** copy `runner-token`, `repos/` or `work/`: pair a new runner here (step 5) and revoke the old one in Settings → Security & devices. The database starts empty; to carry history over, restore a backup instead ([backup-restore.md](backup-restore.md) §3, same backup key).
+
 ## 5. Start NEXUS
 
 ```sh
