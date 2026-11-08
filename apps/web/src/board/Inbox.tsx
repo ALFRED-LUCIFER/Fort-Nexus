@@ -4,6 +4,7 @@ import type { Notification } from "@nexus/contracts";
 import { clock, until, useNow, usePendingApprovals } from "../lib/queries.ts";
 import { DecisionButtons } from "./approval.tsx";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
+import { NotifyPolicy } from "./NotificationSettings.tsx";
 import { CATEGORY, useOpenNotification, useScopeNotifications } from "./notifications.tsx";
 import { useScope } from "./scope.tsx";
 
@@ -143,6 +144,7 @@ function InboxBody() {
             ))}
           </ul>
         )}
+        <NotifyPolicy />
       </div>
     </>
   );

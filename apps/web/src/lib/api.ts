@@ -4,6 +4,11 @@ import {
   AgentList,
   AgentPerformance,
   HomeSummary,
+  NotificationPreferences,
+  PushDevice,
+  PushDeviceList,
+  TestPushResponse,
+  type SubscribePushRequest,
   Transcript,
   VoiceStatus,
   type SpeakRequest,
@@ -497,6 +502,20 @@ export const api = {
     }),
   // audio/mpeg of the reply, spoken by the owner's configured voice.
   speak: (body: SpeakRequest) => requestBlob("/v1/voice/speak", post({}, body)),
+  // Phone push (Settings → Notifications).
+  devices: () => request("/v1/devices", PushDeviceList),
+  subscribeDevice: (body: SubscribePushRequest) => request("/v1/devices", PushDevice, post({}, body)),
+  revokeDevice: (id: string) =>
+    request(`/v1/devices/${encodeURIComponent(id)}`, PushDevice, post({}, undefined, "DELETE")),
+  testPush: (id: string, idempotencyKey: string) =>
+    request(
+      `/v1/devices/${encodeURIComponent(id)}/test`,
+      TestPushResponse,
+      post({ [IDEMPOTENCY_HEADER]: idempotencyKey }),
+    ),
+  notificationPreferences: () => request("/v1/notification-preferences", NotificationPreferences),
+  updateNotificationPreferences: (body: NotificationPreferences) =>
+    request("/v1/notification-preferences", NotificationPreferences, post({}, body, "PUT")),
 };
 
 /** Like `request`, for endpoints that answer a binary body (audio); errors are the same ApiRequestError. */
@@ -603,4 +622,6 @@ export const keys = {
   homeAll: ["home"] as const,
   home: (projectId: string | undefined) => ["home", projectId ?? "all"] as const,
   voice: ["voice"] as const,
+  devices: ["push", "devices"] as const,
+  notificationPreferences: ["push", "preferences"] as const,
 };

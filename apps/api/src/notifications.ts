@@ -1,4 +1,4 @@
-import { and, count, desc, eq, isNull, or } from "drizzle-orm";
+import { and, count, desc, eq, isNull, notInArray, or } from "drizzle-orm";
 import type {
   Approval,
   JobOutcome,
@@ -15,6 +15,7 @@ import type { Db, Tx } from "./db/index.ts";
 import { approvals, jobs, notifications } from "./db/schema.ts";
 import { notFound } from "./errors.ts";
 import { ownerActor, type NewEvent } from "./jobs.ts";
+import { hiddenInApp } from "./push/service.ts";
 
 // FR-NTF-01/02/04/05/06: verified events → one deduplicated notification each, written in the event's own
 // transaction. Text is built from recorded facts only (PRD §15.3), never from agent narration.
@@ -379,7 +380,13 @@ export async function listNotifications(
   ownerId: string,
   q: ListNotificationsQuery,
 ): Promise<NotificationList> {
-  const mine = and(eq(notifications.ownerId, ownerId), inProject(q.projectId));
+  // Categories the owner switched off for the Inbox (Settings → Notifications) are left out of the list and count.
+  const hidden = await hiddenInApp(db, ownerId);
+  const mine = and(
+    eq(notifications.ownerId, ownerId),
+    inProject(q.projectId),
+    hidden.length > 0 ? notInArray(notifications.category, hidden) : undefined,
+  );
   const rows = await db
     .select()
     .from(notifications)

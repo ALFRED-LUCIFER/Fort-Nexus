@@ -30,7 +30,9 @@ export type AuditEntry = {
     | "plan"
     | "job_draft"
     | "voice"
-    | "cloud_handoff";
+    | "cloud_handoff"
+    | "push_device"
+    | "notification_preferences";
   resourceId: string;
   correlationId: string;
   outcome?: "SUCCEEDED" | "DENIED" | "FAILED";

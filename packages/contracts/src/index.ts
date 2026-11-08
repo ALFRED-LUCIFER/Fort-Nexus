@@ -22,3 +22,4 @@ export * from "./home.ts";
 export * from "./voice.ts";
 export * from "./setup.ts";
 export * from "./cloud-handoff.ts";
+export * from "./push.ts";

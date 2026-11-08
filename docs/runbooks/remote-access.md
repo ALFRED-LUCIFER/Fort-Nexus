@@ -45,6 +45,10 @@ With an `https` origin the API sends HSTS and secure cookies. Sign in **at the U
 
 The runner talks to `http://127.0.0.1:8787` on the same host and needs no change.
 
+## 5. Phone push
+
+With the tailnet URL working, install NEXUS on the phone (iPhone: Safari → Share → Add to Home Screen) and turn push on in Settings → Notifications: `docs/runbooks/push.md`.
+
 ## Fallback: Cloudflare Tunnel + Access
 
 Only if Tailscale isn't possible. **Create the Access application first**, so the hostname is never public without it:

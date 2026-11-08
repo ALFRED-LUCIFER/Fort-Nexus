@@ -77,6 +77,12 @@ const Env = z.object({
     .min(1)
     .transform((p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p))
     .default(join(homedir(), ".nexus", "voice.json")),
+  // VAPID keys for phone push (docs/runbooks/push.md): created on first start, mode 0600, like ai.json.
+  NEXUS_PUSH_FILE: z
+    .string()
+    .min(1)
+    .transform((p) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p))
+    .default(join(homedir(), ".nexus", "push.json")),
   // Claude Code routines that take issue handoffs (docs/runbooks/claude-cloud.md); mode 0600, like ai.json.
   // Empty (as in .env.example) means the default path.
   NEXUS_CLAUDE_CLOUD_FILE: z
@@ -108,6 +114,7 @@ export type Config = {
   searchFile: string;
   voiceFile: string;
   claudeCloudFile: string;
+  pushFile: string;
   ownerTimezone: string;
 };
 
@@ -151,6 +158,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, inContainer = r
     searchFile: e.NEXUS_SEARCH_FILE,
     voiceFile: e.NEXUS_VOICE_FILE,
     claudeCloudFile: e.NEXUS_CLAUDE_CLOUD_FILE,
+    pushFile: e.NEXUS_PUSH_FILE,
     ownerTimezone: e.OWNER_TIMEZONE,
   };
 }

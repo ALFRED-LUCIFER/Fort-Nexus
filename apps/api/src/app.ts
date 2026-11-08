@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { BlockList, isIP } from "node:net";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import Fastify, {
   type FastifyError,
@@ -38,6 +38,10 @@ import { reapExpiredLeases } from "./jobs.ts";
 import { monitoringRoutes } from "./monitoring/routes.ts";
 import { createMonitoring, type Monitoring } from "./monitoring/service.ts";
 import { createHub, type Hub } from "./notify.ts";
+import { createPushDispatcher, type PushDispatcher } from "./push/dispatcher.ts";
+import { loadOrCreatePushKeys } from "./push/keys.ts";
+import { pushRoutes } from "./push/routes.ts";
+import { createWebPushSender, type PushSender } from "./push/sender.ts";
 import { deepDiveOps, type DeepDives } from "./plans/deep-dives.ts";
 import { createPlanExecutor } from "./plans/executor.ts";
 import { planRoutes } from "./plans/routes.ts";
@@ -74,6 +78,8 @@ export type Deps = {
   monitoring: Monitoring;
   /** The researcher's deep dives, as Talk proposals and plan steps run them. */
   deepDives: DeepDives;
+  /** Phone push: the VAPID public key browsers subscribe with (null = unavailable, `problem` says why). */
+  push: { publicKey: string | null; problem: string | null; dispatcher: PushDispatcher };
 };
 
 const REAPER_INTERVAL_MS = 5_000;
@@ -122,13 +128,15 @@ export const trustedProxy = (hops: number) => (address: string, hop: number) => 
   return hop < hops && family !== 0 && PROXY_PEERS.check(address, family === 6 ? "ipv6" : "ipv4");
 };
 
-/** `logStream` is a test seam: where the logger writes (stdout otherwise). */
+/** Test seams: `logStream` is where the logger writes (stdout otherwise); `pushSender` replaces web-push. */
 export async function buildApp(
   config: Config,
-  { logStream }: { logStream?: { write(msg: string): void } } = {},
+  { logStream, pushSender }: { logStream?: { write(msg: string): void }; pushSender?: PushSender } = {},
 ) {
   // Missing file = not set up yet (API runs, sign-in explains how); a malformed or world-readable one fails fast.
   const github = loadGithubAppConfig(config.githubAppFile);
+  // Created on first start; a malformed or world-readable one fails fast too.
+  const pushKeys = loadOrCreatePushKeys(config.pushFile, config.publicOrigin);
   const app = Fastify({
     logger:
       config.logLevel === "silent"
@@ -175,6 +183,13 @@ export async function buildApp(
   const research = createResearch(db, app.log, shutdown.signal);
   const diver = createDeepDiver(db, engineDeps(config), app.log, shutdown.signal);
   const monitoring = createMonitoring(db, app.log, shutdown.signal);
+  if (pushKeys.problem) app.log.warn(pushKeys.problem);
+  const pushDispatcher = createPushDispatcher({
+    db,
+    sender: pushKeys.keys ? (pushSender ?? createWebPushSender(pushKeys.keys)) : null,
+    log: app.log,
+    timezone: config.ownerTimezone,
+  });
   const deps: Deps = {
     config,
     db,
@@ -187,6 +202,11 @@ export async function buildApp(
     diver,
     monitoring,
     deepDives: deepDiveOps({ db, config, diver }),
+    push: {
+      publicKey: pushKeys.keys?.publicKey ?? null,
+      problem: pushKeys.problem,
+      dispatcher: pushDispatcher,
+    },
   };
 
   const planExecutor = createPlanExecutor(deps, app.log);
@@ -307,6 +327,7 @@ export async function buildApp(
       .then(() => systemRoutes(scope, deps))
       .then(() => workspaceRoutes(scope, deps))
       .then(() => notificationRoutes(scope, deps))
+      .then(() => pushRoutes(scope, deps))
       .then(() => businessRoutes(scope, deps))
       .then(() => conversationRoutes(scope, deps))
       .then(() => researchRoutes(scope, deps))
@@ -329,7 +350,17 @@ export async function buildApp(
   await app.register(async (scope) => runnerRoutes(scope, deps));
 
   const hasWeb = existsSync(join(WEB_DIST, "index.html"));
-  if (hasWeb) await app.register(fastifyStatic, { root: WEB_DIST });
+  if (hasWeb)
+    await app.register(fastifyStatic, {
+      root: WEB_DIST,
+      setHeaders: (res, file) => {
+        // The service worker and manifest must never be served stale: browsers check them for updates.
+        if (file.endsWith(`${sep}sw.js`)) {
+          res.header("cache-control", "no-cache");
+          res.header("service-worker-allowed", "/");
+        } else if (file.endsWith(".webmanifest")) res.header("cache-control", "no-cache");
+      },
+    });
   app.setNotFoundHandler((request, reply) => {
     const path = request.url.split("?", 1)[0]!;
     const isApi = path === "/v1" || path.startsWith("/v1/") || path.startsWith("/api/");
@@ -361,6 +392,8 @@ export async function buildApp(
   let reaper: NodeJS.Timeout | undefined;
   let reaping = false; // a slow tick never overlaps the next one
   const reap = async () => {
+    // Its own coalescing pass: a slow push service never holds up lease expiry.
+    pushDispatcher.kick();
     if (reaping) return;
     reaping = true;
     try {
@@ -399,6 +432,7 @@ export async function buildApp(
     await research.close(); // in-flight runs record their outcome before the pool closes
     await diver.close();
     await monitoring.drain();
+    await pushDispatcher.close();
     await hub.close();
     await pool.end();
   });

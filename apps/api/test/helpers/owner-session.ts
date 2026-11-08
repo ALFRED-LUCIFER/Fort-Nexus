@@ -12,6 +12,7 @@ import { expect, inject, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type { WorkspaceList } from "@nexus/contracts";
 import { buildApp } from "../../src/app.ts";
+import type { PushSender } from "../../src/push/sender.ts";
 import { loadConfig, type Config } from "../../src/config.ts";
 import type { GithubAppConfig } from "../../src/github/app-config.ts";
 
@@ -65,10 +66,16 @@ export const testGithubApp = (owner: GithubUser = githubUser({ login: "nexus-own
  */
 export async function createTestApp(
   env: Record<string, string> = {},
-  { github = true, logStream }: { github?: boolean; logStream?: { write(msg: string): void } } = {},
+  {
+    github = true,
+    logStream,
+    pushSender,
+  }: { github?: boolean; logStream?: { write(msg: string): void }; pushSender?: PushSender } = {},
 ): Promise<TestApp> {
   const databaseUrl = await freshDatabaseUrl();
   const dir = mkdtempSync(join(tmpdir(), "nexus-test-"));
+  // Push keys are generated into their own temp dir on first start and kept, so a rebuilt app (same config) reuses them.
+  const pushDir = mkdtempSync(join(tmpdir(), "nexus-test-push-"));
   const githubApp = github ? testGithubApp() : null;
   const file = join(dir, "github-app.json");
   if (githubApp) writeFileSync(file, JSON.stringify(githubApp), { mode: 0o600 });
@@ -78,10 +85,11 @@ export async function createTestApp(
     NODE_ENV: "test",
     LOG_LEVEL: "silent",
     GITHUB_APP_FILE: file,
+    NEXUS_PUSH_FILE: join(pushDir, "push.json"),
     ...env,
   });
   try {
-    const app = await buildApp(config, { logStream });
+    const app = await buildApp(config, { logStream, pushSender });
     await app.ready();
     return { app, config, githubApp, databaseUrl };
   } finally {

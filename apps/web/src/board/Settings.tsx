@@ -14,6 +14,7 @@ import { RUNNER_TONE, ago, until, useNow, useRunners, useSystem } from "../lib/q
 import { AgentProfilesSettings } from "./agents.tsx";
 import { AutomationsSettings } from "./AutomationsSettings.tsx";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
+import { NotificationSettings } from "./NotificationSettings.tsx";
 import { useScope } from "./scope.tsx";
 import { useUpdatesVoice, type UpdatesVoice } from "./updates.tsx";
 import { useVoiceStatus } from "./voice.tsx";
@@ -21,8 +22,8 @@ import { WorkspacesSettings } from "./WorkspacesSettings.tsx";
 
 const route = getRouteApi("/");
 
-// Design dSettings tabs. Security & devices, Workspaces, Automations, Agent profiles, Budgets & limits and Voice &
-// consent are real; the rest say honestly what exists. A tab id as the hash opens on it (`#voice`, `#ws`, `#auto`).
+// Design dSettings tabs. Security & devices, Workspaces, Automations, Agent profiles, Budgets & limits, Notifications
+// and Voice & consent are real; the rest say honestly what exists. A tab id as the hash opens on it (`#voice`, `#notif`).
 const TABS = [
   ["conn", "Connections"],
   ["ws", "Workspaces"],
@@ -48,13 +49,15 @@ export function useOpenSettings() {
   return (tab: SettingsTab) => void navigate({ search: { ...keep, drawer: "settings" }, hash: tab });
 }
 
-const LATER: Record<Exclude<Tab, "sec" | "limits" | "ws" | "auto" | "profiles" | "voice">, string> = {
+const LATER: Record<
+  Exclude<Tab, "sec" | "limits" | "ws" | "auto" | "profiles" | "voice" | "notif">,
+  string
+> = {
   conn: "Connections are set up on the home machine: the NEXUS GitHub App (its repositories are bound in Workspaces), ai.json, search.json and voice.json (see docs/runbooks). The Home setup checklist shows which are missing.",
   remote:
     "Remote access is configured on the home machine with Tailscale Serve (docs/runbooks/remote-access.md). It can't be changed from here yet.",
   backup:
     "Backups run on the home machine (docs/runbooks/backup-restore.md). They can't be viewed from here yet.",
-  notif: "Notifications can't be tuned yet. Approvals and alerts show in the Inbox.",
   audit:
     "Every action is recorded in the append-only audit log on the home machine. It can't be browsed from here yet.",
   privacy:
@@ -65,7 +68,7 @@ const LATER: Record<Exclude<Tab, "sec" | "limits" | "ws" | "auto" | "profiles" |
 
 const seg = (on: boolean) =>
   `rounded-[10px] px-3 py-[9px] text-[12px] font-medium leading-none whitespace-nowrap ${on ? "bg-glass2 text-ink shadow-[0_1px_3px_rgba(0,0,0,.12)]" : "text-ink3"}`;
-const rowBtn =
+export const rowBtn =
   "rounded-[11px] border border-hair px-[11px] py-2 text-[12px] font-medium whitespace-nowrap text-ink disabled:opacity-60";
 
 export function SettingsDrawer({ banner, onClose }: { banner?: ReactNode; onClose: () => void }) {
@@ -104,6 +107,8 @@ export function SettingsDrawer({ banner, onClose }: { banner?: ReactNode; onClos
           <AgentProfilesSettings />
         ) : tab === "voice" ? (
           <VoiceConsent />
+        ) : tab === "notif" ? (
+          <NotificationSettings />
         ) : (
           <p className="m-0 flex-none text-[14px] leading-[1.55] text-pretty text-ink2">{LATER[tab]}</p>
         )}
@@ -112,7 +117,7 @@ export function SettingsDrawer({ banner, onClose }: { banner?: ReactNode; onClos
   );
 }
 
-function Rows({ label, children }: { label: string; children: ReactNode }) {
+export function Rows({ label, children }: { label: string; children: ReactNode }) {
   return (
     <section aria-label={label} className="flex flex-none flex-col gap-2">
       <h3 className="kicker m-0">{label}</h3>
@@ -121,7 +126,7 @@ function Rows({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function Row({
+export function Row({
   title,
   meta,
   badge,
@@ -144,7 +149,7 @@ function Row({
   );
 }
 
-const Badge = ({ tone, children }: { tone: string; children: ReactNode }) => (
+export const Badge = ({ tone, children }: { tone: string; children: ReactNode }) => (
   <span
     className="rounded-full px-2 py-[5px] font-mono text-[10px] leading-none whitespace-nowrap"
     style={{ color: tone, background: "var(--hair)" }}
@@ -438,7 +443,7 @@ const LANGUAGES: [string, string][] = [
   ["ja-JP", "Japanese"],
 ];
 
-function Switch({
+export function Switch({
   label,
   on,
   disabled,

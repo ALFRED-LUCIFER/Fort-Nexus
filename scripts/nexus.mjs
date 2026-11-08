@@ -1,7 +1,8 @@
 // Home deployment in one command (FR-OPS-01): node scripts/nexus.mjs up | down | status | logs [service]
 // Starts postgres + api (serving the web app) with Compose on 127.0.0.1; the runner is a host service (runner-service.mjs).
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { generateKeyPairSync } from "node:crypto";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ENV_FILE, NEXUS_HOME, compose, fail, isPrivate } from "./nexus-common.mjs";
 
@@ -57,7 +58,31 @@ function preflight() {
     );
   else need(isPrivate(ai), `${ai} is group/world-readable`, `chmod 600 ${ai}`);
 
+  // Phone push keys (docs/runbooks/push.md): the API container mounts ~/.nexus read-only, so they are made here.
+  const push = join(NEXUS_HOME, "push.json");
+  if (!existsSync(push) && problems.length === 0) {
+    createPushKeys(push);
+    console.log(`→ created ${push} (phone push keys, mode 0600)`);
+  } else if (existsSync(push)) need(isPrivate(push), `${push} is group/world-readable`, `chmod 600 ${push}`);
+
   if (problems.length > 0) fail(`Not ready to start NEXUS:\n  - ${problems.join("\n  - ")}`);
+}
+
+/** A VAPID key pair (P-256) in web-push's format: base64url public point (65 bytes) and private scalar (32 bytes). */
+function createPushKeys(file) {
+  const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const pub = publicKey.export({ format: "jwk" });
+  const priv = privateKey.export({ format: "jwk" });
+  const point = Buffer.concat([
+    Buffer.from([4]),
+    Buffer.from(pub.x, "base64url"),
+    Buffer.from(pub.y, "base64url"),
+  ]);
+  mkdirSync(NEXUS_HOME, { recursive: true, mode: 0o700 });
+  writeFileSync(file, `${JSON.stringify({ publicKey: point.toString("base64url"), privateKey: priv.d })}\n`, {
+    mode: 0o600,
+    flag: "wx",
+  });
 }
 
 async function health() {
