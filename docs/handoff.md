@@ -18,6 +18,14 @@ Read this first in a new session, then `CLAUDE.md`, `docs/mvp-tracker.md` and `d
 - An approved push GitHub doesn't answer (5xx, 429/secondary rate limit, timeout, dropped connection) stays APPROVED with `retry` (attempts, next attempt, reason) on the approval and an `external_action.retrying` event; the reaper's reconcile retries at 1, 2, 4, 8 min (never before a rate limit's reset) and fails honestly after 5 attempts. Refusals (other 4xx, a branch NEXUS didn't create) still fail at once. Migration `0014_push_retry`. Runners can no longer send `external_action.*` events.
 - `ownerLogin` removed from `AuthStatus`.
 
+**Later the same evening (also pushed):**
+- **NEXUS tells you about changes.** In the app: the Cofounder panel whispers "NEXUS · noticed just now" (Tell me / Open / Later); Settings → Voice & consent → "Read new updates aloud" (Off / Only things that need me / Everything, per device); in Talk mode updates become a spoken, sourced line. Verified live (whisper + browser voice). On the phone/watch: **web push** (P1 wave 4 S0 + A, `docs/runbooks/push.md`): Settings → Notifications (devices, test push, per-category toggles, quiet hours + digest), PWA manifest + `sw.js`; VAPID keys in `~/.nexus/push.json` (0600, created on first start). Migration `0015_push`. Needs the Tailscale HTTPS URL; iPhone needs the app added to the Home Screen.
+- **Approved pushes retry** GitHub 5xx/429/timeouts (1/2/4/8 min, 5 attempts) instead of failing the job. Migration `0014_push_retry`.
+- Gaps-only plans read "N not covered — start them as new jobs"; `ownerLogin` removed from AuthStatus.
+- Production stack verified on a disposable compose project (fresh DB, all migrations, CSP, config mount) plus encrypted backup + restore drill PASS (1.7 s). `docs/runbooks/bootstrap.md` has "Moving from another machine".
+- Voice input and the Azure voice still need the owner's `~/.nexus/voice.json` (`docs/runbooks/voice.md`); without it updates are spoken with the browser voice.
+- Pending from these waves: a push waiting for a GitHub retry still lists as "waiting for your approval" on Today/Jobs (run drawer is truthful); `pushsubscriptionchange` not handled; wave 4 slices B (passkey step-up), C (watch rules), D not built.
+
 **Live end-to-end test (real GitHub, real Anthropic, Sonnet 5.5):**
 - Runner **AEDU-MAC-DEV10 paired**; project Home bound to **`ALFRED-LUCIFER/tts-test`** (safe test repo).
 - tts-test #1 → **draft PR #2**; tts-test #3 → **draft PR #4** (both open drafts, not merged; ~$0.04 each). A runner diagnostic also completed.
