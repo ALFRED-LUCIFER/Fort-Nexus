@@ -137,7 +137,7 @@ function board(status: GithubStatus, extra: Parameters<typeof mockFetch>[0] = {}
   });
 }
 
-const codeZone = async () => screen.findByRole("region", { name: "Code" });
+const codeZone = async () => screen.findByRole("main", { name: "Code" });
 
 beforeEach(() => {
   runners = [runner()];
@@ -145,10 +145,10 @@ beforeEach(() => {
   vi.stubGlobal("EventSource", FakeEventSource);
 });
 
-describe("Code zone", () => {
+describe("Code area", () => {
   it("shows the setup command when GitHub isn't set up, and asks for no repositories", async () => {
     const calls = board({ configured: false });
-    renderApp("/");
+    renderApp("/?area=code");
     const zone = await codeZone();
     expect((await within(zone).findByText(GITHUB_SETUP_COMMAND)).tagName).toBe("CODE");
     expect(calls.some((c) => c.path === "/v1/repositories")).toBe(false);
@@ -156,7 +156,7 @@ describe("Code zone", () => {
 
   it("links to the app's install page when there is no installation", async () => {
     board({ ...installed, installations: [] });
-    renderApp("/");
+    renderApp("/?area=code");
     const link = await within(await codeZone()).findByRole("link", { name: /Install it on GitHub/ });
     expect(link.getAttribute("href")).toBe(INSTALL_URL);
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
@@ -167,7 +167,7 @@ describe("Code zone", () => {
       "GET /v1/repositories/102/issues": () => json({ items: [], page: 1, nextPage: null, syncedAt: SYNCED }),
     });
     const user = userEvent.setup();
-    const { router } = renderApp("/");
+    const { router } = renderApp("/?area=code");
     const zone = await codeZone();
     await user.click(await within(zone).findByRole("button", { name: /acme\/api/ }));
 

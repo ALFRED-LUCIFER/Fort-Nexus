@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { getRouteApi } from "@tanstack/react-router";
 import type { Approval, Project } from "@nexus/contracts";
 import { useShownWorkspaces, useWorkspaces, type ShownWorkspaces } from "../lib/queries.ts";
-import type { Workspace } from "../router.tsx";
+import type { Area, Workspace } from "../router.tsx";
 
 const route = getRouteApi("/");
 const MODE = { dev: "DEV", business: "BUSINESS" } as const;
@@ -17,8 +17,8 @@ export interface Scope {
   ready: boolean;
   /** Why nothing can be started or decided here; null when the project can run things. */
   blocked: string | null;
-  /** Search params that keep this scope when navigating. */
-  keep: { ws?: Workspace; project?: string; view?: "home" | "board" };
+  /** Search params that keep this scope (and the page in the middle column) when navigating. */
+  keep: { ws?: Workspace; project?: string; area?: Area };
   /** The workspace a URL without `ws` shows (see `fallbackWorkspace`). */
   fallback: Workspace;
   shown: ShownWorkspaces;
@@ -57,7 +57,7 @@ export function useScope(): Scope {
     // The workspaces decide the scope ("Dev only" picks Dev): nothing loads for a scope until they have arrived.
     ready: !workspaces.isPending,
     blocked,
-    keep: { ws: ws === fallback ? undefined : ws, project: projectId, view: search.view },
+    keep: { ws: ws === fallback ? undefined : ws, project: projectId, area: search.area },
     fallback,
     shown,
   };
@@ -123,15 +123,20 @@ export function ScopeNav() {
     setOpen(false);
     buttonRef.current?.focus();
   };
-  // Switching scope closes any drawer: it showed the other project's data.
+  // Switching scope closes any drawer (it showed the other project's data) and keeps the page.
+  const area = scope.keep.area;
+  const wsParam = (w: Workspace) => (w === scope.fallback ? undefined : w);
   const select = (p: Project | null) => {
-    const view = scope.keep.view;
-    const ws = (w: Workspace) => (w === scope.fallback ? undefined : w);
     void navigate({
       search: p
-        ? { ws: ws(p.mode === "DEV" ? "dev" : "business"), project: p.id, view }
-        : { ws: ws("all"), view },
+        ? { ws: wsParam(p.mode === "DEV" ? "dev" : "business"), project: p.id, area }
+        : { ws: wsParam("all"), area },
     });
+    close();
+  };
+  // A whole workspace without a project: its read-only aggregate (or its only project, picked above).
+  const selectWorkspace = (w: Workspace) => {
+    void navigate({ search: { ws: wsParam(w), area } });
     close();
   };
 
@@ -179,18 +184,14 @@ export function ScopeNav() {
     );
   };
 
+  const both = scope.shown.dev && scope.shown.business;
   return (
-    <nav
-      ref={navRef}
-      aria-label="Scope"
-      className="glass relative hidden h-10 items-center gap-[7px] rounded-[14px] pr-1.5 pl-3 font-mono text-[11.5px] whitespace-nowrap text-ink2 md:flex"
-    >
-      <span className="text-[10px] font-medium tracking-[.08em] text-ink3">SCOPE</span>
-      <span className="font-medium text-teal">
-        {scope.ws === "all" ? allLabel(scope.shown) : LABEL[scope.ws]}
-      </span>
-      <span aria-hidden="true" className="text-ink3">
-        ›
+    <nav ref={navRef} aria-label="Scope" className="relative flex flex-col gap-1.5 font-mono text-ink2">
+      <span className="flex items-baseline gap-1.5 px-1 text-[11px]">
+        <span className="font-medium tracking-[.08em] text-ink3">SCOPE</span>
+        <span className="font-medium text-teal">
+          {scope.ws === "all" ? allLabel(scope.shown) : LABEL[scope.ws]}
+        </span>
       </span>
       <button
         ref={buttonRef}
@@ -199,19 +200,34 @@ export function ScopeNav() {
         aria-controls={open ? menuId : undefined}
         aria-label={`Project: ${scope.project?.name ?? NO_PROJECT[scope.ws]}. Switch project`}
         onClick={() => setOpen(!open)}
-        className="rounded-[9px] bg-hair px-2.5 py-2 font-mono text-[11.5px] font-medium text-ink"
+        className="flex w-full items-center justify-between gap-2 rounded-xl bg-hair px-3 py-2.5 text-left font-sans text-[14px] font-medium text-ink"
       >
-        {scope.project?.name ?? NO_PROJECT[scope.ws]} ▾
+        <span className="truncate">{scope.project?.name ?? NO_PROJECT[scope.ws]}</span>
+        <span aria-hidden="true" className="text-ink3">
+          ▾
+        </span>
       </button>
-      <span aria-hidden="true" className="text-ink3">
-        ›
-      </span>
-      <span className="pr-1.5">{scope.blocked ? "read-only" : "home runner"}</span>
+      <span className="px-1 text-[11px]">{scope.blocked ? "read-only" : "home runner"}</span>
       {open && (
         <div
           id={menuId}
-          className="glass2 absolute bottom-12 left-0 z-[8] flex w-[320px] flex-col gap-0.5 rounded-[18px] p-2 whitespace-normal"
+          className="glass2 absolute top-full left-0 z-[8] mt-2 flex max-h-[min(560px,calc(100dvh-180px))] w-[min(320px,calc(100vw-32px))] flex-col gap-0.5 overflow-y-auto rounded-[18px] p-2"
         >
+          {both && (
+            <div role="group" aria-label="Workspace" className="flex rounded-xl bg-hair p-[3px]">
+              {(["all", "dev", "business"] as const).map((w) => (
+                <button
+                  key={w}
+                  type="button"
+                  aria-pressed={scope.ws === w}
+                  onClick={() => selectWorkspace(w)}
+                  className={`flex-1 rounded-[9px] px-2 py-2 font-sans text-[12px] leading-none font-medium ${scope.ws === w ? "bg-glass2 text-ink shadow-[0_1px_3px_rgba(0,0,0,.12)]" : "text-ink2"}`}
+                >
+                  {w === "all" ? "All" : LABEL[w]}
+                </button>
+              ))}
+            </div>
+          )}
           {workspaces.error ? (
             <p role="alert" className="m-0 px-2.5 py-2 font-sans text-[12.5px] text-coral">
               {workspaces.error.message}

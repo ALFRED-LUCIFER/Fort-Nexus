@@ -9,18 +9,8 @@ import { useScope } from "./scope.tsx";
 
 const route = getRouteApi("/");
 
-export interface ZoneProps {
-  id: string;
-  label: string;
-  sub: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  tint: string;
-  dim: boolean;
-  children: ReactNode;
-}
+/** The cards of an area page: as many 220px+ columns as fit, so nothing scrolls sideways. */
+export const nodeGrid = "m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-4 p-0";
 
 export function EmptyZone({ children }: { children: ReactNode }) {
   return <p className="m-0 max-w-[460px] text-[15px] leading-relaxed text-ink3">{children}</p>;
@@ -49,7 +39,7 @@ export function Node(props: {
       type="button"
       onClick={props.onClick}
       aria-expanded={props.expanded}
-      className="flex w-[220px] flex-col gap-2 rounded-[20px] border border-line bg-card px-4 py-3.5 text-left shadow-nx transition-shadow hover:shadow-[0_0_0_2px_var(--teal),var(--shadow)]"
+      className="flex h-full w-full flex-col gap-2 rounded-[20px] border border-line bg-card px-4 py-3.5 text-left shadow-nx transition-shadow hover:shadow-[0_0_0_2px_var(--teal),var(--shadow)]"
     >
       <span className="flex w-full items-center gap-2">
         <span
@@ -77,12 +67,7 @@ export function Node(props: {
   );
 }
 
-const nodeGrid = "m-0 flex list-none flex-wrap content-start gap-[30px] p-0";
-
 const LIFECYCLE = ["QUEUED", "PREPARING", "RUNNING", "VERIFYING"];
-
-// shortcut: the zone shows the first 3 repositories; the repo drawer lists all of them.
-const ZONE_REPOS = 3;
 
 export function CodeZone({
   github,
@@ -135,7 +120,7 @@ export function CodeZone({
             />
           ) : (
             <ul className={nodeGrid}>
-              {items.slice(0, ZONE_REPOS).map((r) => (
+              {items.map((r) => (
                 <li key={r.id}>
                   <Node
                     dot="var(--green)"
@@ -146,17 +131,6 @@ export function CodeZone({
                   />
                 </li>
               ))}
-              {items.length > ZONE_REPOS && (
-                <li>
-                  <button
-                    type="button"
-                    onClick={() => void navigate({ search: { ...keep, drawer: "repos" } })}
-                    className="rounded-[20px] border border-line bg-card px-4 py-3.5 text-[13px] font-medium text-teal shadow-nx"
-                  >
-                    All {items.length} repositories →
-                  </button>
-                </li>
-              )}
             </ul>
           ))}
       </section>

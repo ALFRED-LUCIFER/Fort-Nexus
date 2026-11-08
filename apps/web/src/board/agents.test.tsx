@@ -99,39 +99,33 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(600);
 });
 
-describe("Agents on the board (FR-AGT-07)", () => {
-  it("shows the project's agents and switches to one swim-lane per agent", async () => {
+describe("Agents area (FR-AGT-07)", () => {
+  it("shows the project's agents and, by agent, each one's autonomy and tools", async () => {
     const calls = base();
     const user = userEvent.setup();
-    renderApp(IN_PROJECT);
+    renderApp(`${IN_PROJECT}&area=agents`);
     const zone = within(await screen.findByRole("list", { name: "Agents" }));
     expect(zone.getByRole("button", { name: /^Autonomous\s*QA\s*1 tool · v3 · this project$/ })).toBeTruthy();
     expect(calls.find((c) => c.path === "/v1/agents")!.query.get("projectId")).toBe(PROJECT_ID);
 
-    const grouping = screen.getByRole("group", { name: "Board grouping" });
-    await user.click(within(grouping).getByRole("button", { name: "Agents" }));
-    expect(within(grouping).getByRole("button", { name: "Agents" }).getAttribute("aria-pressed")).toBe(
-      "true",
+    const show = screen.getByRole("group", { name: "Show agents" });
+    await user.click(within(show).getByRole("button", { name: "By agent" }));
+    expect(within(show).getByRole("button", { name: "By agent" }).getAttribute("aria-pressed")).toBe("true");
+    const byAgent = within(screen.getByRole("list", { name: "Agents by agent" }));
+    const product = within(
+      byAgent.getAllByRole("listitem").find((li) => li.textContent?.includes("Product"))!,
     );
-    const lane = within(await screen.findByRole("region", { name: "Product" }));
     // Effective autonomy as text, not only the dot colour.
-    expect(lane.getAllByRole("definition")[0]!.textContent).toBe("Draft");
-    expect(lane.getByText("github.read · R0")).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "Code" })).toBeNull();
-    await user.click(within(screen.getByRole("region", { name: "QA" })).getByRole("button", { name: /QA/ }));
+    expect(product.getAllByRole("definition")[0]!.textContent).toBe("Draft");
+    expect(product.getByText("github.read · R0")).toBeTruthy();
+    await user.click(byAgent.getByRole("button", { name: /QA/ }));
     expect(await screen.findByRole("dialog", { name: "QA" })).toBeTruthy();
-    await user.keyboard("{Escape}");
-
-    await user.click(await within(grouping).findByRole("button", { name: "Domains" }));
-    expect(await screen.findByRole("region", { name: "Code" })).toBeTruthy();
   });
 
   it("in All asks for a project instead of resolving profiles", async () => {
     const calls = base();
-    renderApp("/");
-    expect(
-      await screen.findByText(/Pick a project in the scope menu \(bottom left\) to see its agents/),
-    ).toBeTruthy();
+    renderApp("/?area=agents");
+    expect(await screen.findByText(/Pick a project in the scope menu to see its agents/)).toBeTruthy();
     expect(calls.some((c) => c.path === "/v1/agents")).toBe(false);
   });
 });

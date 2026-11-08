@@ -11,20 +11,16 @@ import {
   project,
   renderApp,
   runner,
+  setViewport,
   workspaces,
 } from "../test/helpers.tsx";
 import { installVoiceFakes, removeVoiceFakes, voiceStatus } from "../test/voiceFakes.ts";
 
-// The Home view (builder C) docks the panel; here the home is just the panel, so these tests don't depend on it.
-vi.mock("./home.tsx", async () => {
-  const { CofounderPanel } = await import("./cofounder.tsx");
-  const { useScope } = await import("./scope.tsx");
-  return {
-    HomeView: function HomeView() {
-      return <CofounderPanel projectId={useScope().project?.id} />;
-    },
-  };
-});
+// The shell docks the panel beside every page; Today is left empty here so these tests don't depend on it.
+vi.mock("./home.tsx", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./home.tsx")>()),
+  TodayView: () => null,
+}));
 
 const T0 = "2026-11-04T10:00:00.000Z";
 const OLD = "55555555-5555-4555-8555-000000000001";
@@ -111,6 +107,8 @@ const panel = async () => {
 };
 
 beforeEach(() => {
+  // Wide enough for the docked panel.
+  setViewport(1440);
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(600);
 });
@@ -119,7 +117,7 @@ afterEach(removeVoiceFakes);
 describe("Cofounder panel", () => {
   it("in All asks for a project and offers no input", async () => {
     mockFetch(base);
-    renderApp("/", { view: "home" });
+    renderApp("/");
     const p = await panel();
     expect(p.getByText("Pick a project to talk with your cofounder.")).toBeTruthy();
     expect(p.queryByRole("textbox")).toBeNull();
@@ -132,7 +130,7 @@ describe("Cofounder panel", () => {
         json({ items: [thread(OLD, "2026-11-03T10:00:00.000Z"), thread(LATEST, T0)], nextCursor: null }),
       [`GET /v1/conversations/${LATEST}`]: () => json(detail()),
     });
-    const { router } = renderApp(IN_PROJECT, { view: "home" });
+    const { router } = renderApp(IN_PROJECT);
     const p = await panel();
     const log = await p.findByRole("log", { name: "Conversation" });
     expect(within(log).getByText("Run 22222222 is waiting for your approval.")).toBeTruthy();
@@ -175,7 +173,7 @@ describe("Cofounder panel", () => {
           }),
         ),
     });
-    renderApp(IN_PROJECT, { view: "home" });
+    renderApp(IN_PROJECT);
     const p = await panel();
     expect(await p.findByText(/^Ask about Home:/)).toBeTruthy();
     const user = userEvent.setup();
@@ -210,7 +208,7 @@ describe("Cofounder panel", () => {
           409,
         ),
     });
-    renderApp(IN_PROJECT, { view: "home" });
+    renderApp(IN_PROJECT);
     const p = await panel();
     const user = userEvent.setup();
     await user.type(await p.findByRole("textbox", { name: "Message your cofounder" }), "What failed?{Enter}");
@@ -232,7 +230,7 @@ describe("Cofounder panel", () => {
       "POST /v1/voice/speak": () =>
         new Response(new Blob(["mp3"]), { status: 200, headers: { "content-type": "audio/mpeg" } }),
     });
-    renderApp(IN_PROJECT, { view: "home" });
+    renderApp(IN_PROJECT);
     const p = await panel();
     const user = userEvent.setup();
     const mode = await p.findByRole("button", { name: "Talk with your cofounder", pressed: false });
@@ -275,7 +273,7 @@ describe("Cofounder panel", () => {
       "POST /v1/voice/transcribe": () =>
         json({ text: "What failed?", durationMs: 900, provider: "AZURE_OPENAI", deployment: "d" }),
     });
-    renderApp(IN_PROJECT, { view: "home" });
+    renderApp(IN_PROJECT);
     const p = await panel();
     const user = userEvent.setup();
     const bar = screen.getByRole("banner");
@@ -303,7 +301,7 @@ describe("Cofounder panel", () => {
       "GET /v1/conversations": () => json({ items: [thread(LATEST, T0)], nextCursor: null }),
       [`GET /v1/conversations/${LATEST}`]: () => json(detail()),
     });
-    renderApp(IN_PROJECT, { view: "home" });
+    renderApp(IN_PROJECT);
     const p = await panel();
     expect(await p.findByText(/^Home is archived: its conversations are read-only/)).toBeTruthy();
     expect(await p.findByRole("log", { name: "Conversation" })).toBeTruthy();

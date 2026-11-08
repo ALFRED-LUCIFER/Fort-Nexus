@@ -17,16 +17,15 @@ import { api, keys } from "../lib/api.ts";
 import { ago, clock, statusLabel, until, useNow, useSetup } from "../lib/queries.ts";
 import { AGENT_LABEL, BUSINESS_AGENTS } from "./agentLabels.ts";
 import { BusinessZone } from "./business.tsx";
-import { CofounderPanel } from "./cofounder.tsx";
 import { KpiCards } from "./home/kpis.tsx";
-import { NoticedZone } from "./opportunities.tsx";
+import { NoticedZone, useOpportunities } from "./opportunities.tsx";
 import { RepoAttention } from "./repos.tsx";
 import { SetupSteps, setupMeta } from "./setup.tsx";
 import { useScope } from "./scope.tsx";
 
-// The Cofounder home (PRD §D.4): the landing view, one read of the owner's day from GET /v1/home. Every number and
-// sentence comes from NEXUS's own records (assembled by the server, not a model); costs are estimates. Rows open the
-// same drawers as the board; nothing here writes except what the reused opportunity cards already do.
+// Today (PRD §D.4, the Cofounder home): the landing page, one read of the owner's day from GET /v1/home. Every number
+// and sentence comes from NEXUS's own records (assembled by the server, not a model); costs are estimates. Rows open
+// drawers; nothing here writes except what the reused opportunity cards already do, and approvals stay in drawers.
 
 const route = getRouteApi("/");
 const POLL_MS = 30_000;
@@ -96,18 +95,25 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 const dateLine = (s: HomeSummary) =>
   `${new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }).format(new Date(`${s.date}T00:00:00Z`))} · ${s.time} · your cofounder’s read`;
 
-export function HomeView() {
+/** GET /v1/home for the current scope; the sidebar's Today count reads the same cached query. */
+export function useHome() {
   const scope = useScope();
   const projectId = scope.project?.id;
-  const navigate = route.useNavigate();
-  const reduced = useReducedMotion();
-  const now = useNow(30_000);
-  const home = useQuery({
+  return useQuery({
     queryKey: keys.home(projectId),
     queryFn: () => api.home(projectId),
     enabled: scope.ready,
     refetchInterval: POLL_MS,
   });
+}
+
+export function TodayView() {
+  const scope = useScope();
+  const navigate = route.useNavigate();
+  const reduced = useReducedMotion();
+  const now = useNow(30_000);
+  const home = useHome();
+  const noticed = useOpportunities();
   const open = (drawer: string) => void navigate({ search: { ...scope.keep, drawer } });
   const openRef = (ref: HomeRef) => open(drawerOf(ref));
   const s = home.data;
@@ -120,139 +126,145 @@ export function HomeView() {
   const where = scope.project?.name ?? "all projects";
 
   return (
-    <div className="absolute inset-x-0 top-[76px] bottom-[64px] overflow-y-auto">
-      <div className="mx-auto flex max-w-[1560px] flex-col gap-5 px-4 pt-3 pb-6 lg:flex-row lg:items-start lg:px-6">
-        <main aria-label="Home" className="min-w-0 flex-1">
-          <m.div
-            variants={STAGGER}
-            initial={reduced ? false : "hidden"}
-            animate="show"
-            className="flex flex-col gap-7"
-          >
-            <m.section variants={RISE} aria-labelledby="home-brief" className="flex flex-col gap-3 pt-1">
-              {s ? (
-                <>
-                  <p className="kicker m-0 tracking-[.1em] text-ink2">{dateLine(s)}</p>
-                  <h2
-                    id="home-brief"
-                    className="m-0 max-w-[880px] font-serif text-[clamp(28px,3.4vw,44px)] leading-[1.12] font-normal tracking-[-.01em] text-pretty"
-                  >
-                    {s.headline.segments.map((seg, i) =>
-                      seg.emphasis ? (
-                        <em key={i} className="text-teal">
-                          {seg.text}
-                        </em>
-                      ) : (
-                        <span key={i}>{seg.text}</span>
-                      ),
-                    )}
-                  </h2>
-                  <p className="m-0 font-mono text-[12px] leading-snug text-ink2">
-                    prepared {s.time} · {plural(s.headline.sources, "source")} ·{" "}
-                    {plural(s.headline.decisionsWaiting, "decision")} waiting on you
-                    {readOnly && ` · ${where} · read-only`}
-                  </p>
-                </>
-              ) : (
-                <h2 id="home-brief" className="sr-only">
-                  Your cofounder’s read
-                </h2>
-              )}
-              <ReadState q={home} />
-            </m.section>
+    <m.div
+      variants={STAGGER}
+      initial={reduced ? false : "hidden"}
+      animate="show"
+      className="flex flex-col gap-7 pb-6"
+    >
+      {setup.data && !setup.data.ready && (
+        <Section id="home-setup" title="Before NEXUS can work" meta={setupMeta(setup.data)}>
+          <SetupSteps status={setup.data} />
+        </Section>
+      )}
 
-            {setup.data && !setup.data.ready && (
-              <Section id="home-setup" title="Before NEXUS can work" meta={setupMeta(setup.data)}>
-                <SetupSteps status={setup.data} />
-              </Section>
-            )}
-
-            {(business || s) && (
-              <Section
-                id="home-kpis"
-                title={`Live · ${where}`}
-                meta={business ? "read-only business sources" : "7-day window · NEXUS’s own records"}
-              >
-                {business ? (
-                  <BusinessZone onOpen={() => open("business")} />
-                ) : (
-                  s && <KpiCards kpis={s.kpis} />
-                )}
-              </Section>
-            )}
-
-            {s && (
-              <Section id="home-waiting" title="Waiting on you" meta={decisionsMeta(s.decisions)}>
-                <Waiting top={s.decisions.top} now={now} onOpen={openRef} />
-              </Section>
-            )}
-
-            {!business && (
-              <Section
-                id="home-repos"
-                title={
-                  scope.project ? `Your repositories · ${scope.project.name}` : "Repositories · all installed"
-                }
-                meta="failing CI and pull requests to review first · GitHub"
-              >
-                <RepoAttention onOpenAll={() => open("repos")} />
-              </Section>
-            )}
-
-            <Section
-              id="home-noticed"
-              title="Your cofounder noticed"
-              meta="ranked by confidence, then verified evidence · impact is est."
+      <m.section variants={RISE} aria-labelledby="home-brief" className="flex flex-col gap-2.5 pt-1">
+        {s ? (
+          <>
+            <p className="kicker m-0 tracking-[.1em] text-ink2">{dateLine(s)}</p>
+            <h2
+              id="home-brief"
+              className="m-0 max-w-[820px] font-serif text-[clamp(22px,2.4vw,30px)] leading-[1.18] font-normal tracking-[-.005em] text-pretty"
             >
-              {/* The board's cards at their fixed width: the row scrolls sideways rather than squeezing them. */}
-              <div className="overflow-x-auto pb-1">
-                <NoticedZone onOpen={(id, focus) => open(`opp:${id}${focus ? `:${focus}` : ""}`)} />
-              </div>
-            </Section>
+              {s.headline.segments.map((seg, i) =>
+                seg.emphasis ? (
+                  <em key={i} className="text-teal">
+                    {seg.text}
+                  </em>
+                ) : (
+                  <span key={i}>{seg.text}</span>
+                ),
+              )}
+            </h2>
+            <p className="m-0 font-mono text-[12px] leading-snug text-ink2">
+              prepared {s.time} · {plural(s.headline.sources, "source")} ·{" "}
+              {plural(s.headline.decisionsWaiting, "decision")} waiting on you
+              {readOnly && ` · ${where} · read-only`}
+            </p>
+          </>
+        ) : (
+          <h2 id="home-brief" className="sr-only">
+            Your cofounder’s read
+          </h2>
+        )}
+        <ReadState q={home} />
+      </m.section>
 
-            {s && (
-              <div className="grid grid-cols-[repeat(auto-fit,minmax(290px,1fr))] gap-3">
-                <Section id="home-agents" title="Agent activity" meta={agentsMeta(agents)} className={card}>
-                  <Agents agents={agents} onOpen={open} onOpenRef={openRef} />
-                </Section>
-                <Section id="home-execution" title="Execution" meta="on your home machine" className={card}>
-                  <Execution runs={s.execution} now={now} onOpen={(id) => open(`run:${id}`)} />
-                </Section>
-                <Section
-                  id="home-results"
-                  title="Results · this week"
-                  meta="last 7 days · from the source"
-                  className={card}
-                >
-                  <Results results={s.results} />
-                </Section>
-              </div>
-            )}
-          </m.div>
-        </main>
-        <div className="flex h-[560px] flex-col lg:sticky lg:top-3 lg:h-[calc(100dvh-164px)] lg:w-[380px] lg:flex-none">
-          <CofounderPanel projectId={projectId} />
+      {s && (
+        <Section
+          id="home-waiting"
+          title="Waiting on you"
+          meta={decisionsMeta(s.decisions)}
+          empty={s.decisions.top.length ? undefined : "nothing right now"}
+        >
+          <Waiting top={s.decisions.top} now={now} onOpen={openRef} />
+        </Section>
+      )}
+
+      {s && <RunningNow runs={s.execution} agents={agents} now={now} onOpen={open} onOpenRef={openRef} />}
+
+      {!business && (
+        <Section
+          id="home-repos"
+          title={scope.project ? `Your repositories · ${scope.project.name}` : "Repositories · all installed"}
+          meta="failing CI and pull requests to review first · GitHub"
+        >
+          <RepoAttention onOpenAll={() => open("repos")} />
+        </Section>
+      )}
+
+      <Section
+        id="home-noticed"
+        title="Noticed for you"
+        meta="ranked by confidence, then verified evidence · impact is est."
+        empty={
+          noticed.data?.length === 0
+            ? "nothing yet: a deep dive turns what it verifies into cards here"
+            : undefined
+        }
+      >
+        {/* The cards keep their width: the row scrolls sideways inside itself rather than squeezing them. */}
+        <div className="overflow-x-auto pb-1">
+          <NoticedZone onOpen={(id, focus) => open(`opp:${id}${focus ? `:${focus}` : ""}`)} />
         </div>
-      </div>
-    </div>
+      </Section>
+
+      {(business || s) && (
+        <Section
+          id="home-kpis"
+          title={`Live · ${where}`}
+          meta={business ? "read-only business sources" : "7-day window · NEXUS’s own records"}
+        >
+          {business ? <BusinessZone onOpen={() => open("business")} /> : s && <KpiCards kpis={s.kpis} />}
+        </Section>
+      )}
+
+      {s && (
+        <Section
+          id="home-results"
+          title="Results this week"
+          meta="last 7 days · from the source"
+          empty={s.results.some((r) => r.value > 0) ? undefined : "nothing confirmed yet"}
+        >
+          <Results results={s.results} />
+        </Section>
+      )}
+    </m.div>
   );
 }
 
+/** A headed section; with `empty` it shrinks to one line ("Waiting on you · nothing right now"). */
 function Section({
   id,
   title,
   meta,
-  className = "",
+  empty,
   children,
 }: {
   id: string;
   title: string;
   meta: string;
-  className?: string;
+  empty?: string;
   children: ReactNode;
 }) {
+  if (empty !== undefined)
+    return (
+      <m.section
+        variants={RISE}
+        aria-labelledby={id}
+        className="flex flex-wrap items-baseline gap-x-2 gap-y-1"
+      >
+        <h2 id={id} className="kicker m-0 tracking-[.12em] text-ink2">
+          {title}
+        </h2>
+        <p className="m-0 text-[13px] text-ink3">
+          <span aria-hidden="true">· </span>
+          {empty}
+        </p>
+      </m.section>
+    );
   return (
-    <m.section variants={RISE} aria-labelledby={id} className={`flex min-w-0 flex-col gap-3.5 ${className}`}>
+    <m.section variants={RISE} aria-labelledby={id} className="flex min-w-0 flex-col gap-3.5">
       <div className="flex flex-wrap items-baseline justify-between gap-x-2.5 gap-y-1">
         <h2 id={id} className="kicker m-0 tracking-[.12em] text-ink2">
           {title}
@@ -297,6 +309,7 @@ function ReadState({ q }: { q: UseQueryResult<HomeSummary> }) {
 
 function decisionsMeta(d: HomeDecisions): string {
   const parts = [
+    d.incidents && plural(d.incidents, "open incident"),
     d.approvals && plural(d.approvals, "approval"),
     d.plans && plural(d.plans, "plan"),
     d.jobDrafts && plural(d.jobDrafts, "job draft"),
@@ -314,7 +327,6 @@ function Waiting({
   now: number;
   onOpen: (ref: HomeRef) => void;
 }) {
-  if (!top.length) return <p className="m-0 text-[14px] text-ink3">Nothing waits on you right now.</p>;
   return (
     <ul className="m-0 flex list-none flex-col gap-2 p-0">
       {top.map((t) => {
@@ -328,7 +340,10 @@ function Waiting({
               className={`${rowBtn} flex w-full flex-wrap items-center gap-x-3 gap-y-1 border border-line bg-card px-4 py-3 shadow-nx`}
             >
               <span className="kicker flex items-center gap-1.5 text-ink2">
-                <span aria-hidden="true" className="size-1.5 rounded-full bg-amber" />
+                <span
+                  aria-hidden="true"
+                  className={`size-1.5 rounded-full ${t.ref.kind === "INCIDENT" ? "nx-pulse bg-coral" : "bg-amber"}`}
+                />
                 {WAITING_KIND[t.ref.kind]}
               </span>
               <span className="min-w-0 flex-1 truncate text-[14px] font-medium">{t.title}</span>
@@ -348,7 +363,46 @@ function Waiting({
 function agentsMeta(agents: readonly HomeAgentActivity[]): string {
   const working = agents.filter((a) => a.state === "WORKING").length;
   const waiting = agents.filter((a) => a.state === "WAITING_ON_YOU").length;
-  return `${working} working · ${waiting} waiting on you`;
+  return `on your home machine · ${working} working · ${waiting} waiting on you`;
+}
+
+/**
+ * The runs in flight with their stage bars, then the agents busy with something that isn't one of those runs; idle
+ * agents fold into one line.
+ */
+function RunningNow({
+  runs,
+  agents,
+  now,
+  onOpen,
+  onOpenRef,
+}: {
+  runs: readonly HomeExecution[];
+  agents: readonly HomeAgentActivity[];
+  now: number;
+  onOpen: (drawer: string) => void;
+  onOpenRef: (ref: HomeRef) => void;
+}) {
+  const runIds = new Set(runs.map((r) => r.jobId));
+  const busy = agents.filter((a) => a.state !== "IDLE" && !(a.ref?.kind === "JOB" && runIds.has(a.ref.id)));
+  const idle = agents.length - agents.filter((a) => a.state !== "IDLE").length;
+  const idleLine = idle ? plural(idle, "agent") + " idle" : "";
+  return (
+    <Section
+      id="home-running"
+      title="Running now"
+      meta={agentsMeta(agents)}
+      empty={
+        runs.length || busy.length ? undefined : ["nothing running", idleLine].filter(Boolean).join(" · ")
+      }
+    >
+      <div className={`${card} flex flex-col gap-4`}>
+        {runs.length > 0 && <Execution runs={runs} now={now} onOpen={(id) => onOpen(`run:${id}`)} />}
+        {busy.length > 0 && <Agents agents={busy} onOpen={onOpen} onOpenRef={onOpenRef} />}
+        {idleLine && <p className="m-0 font-mono text-[11.5px] text-ink3">{idleLine}</p>}
+      </div>
+    </Section>
+  );
 }
 
 function Agents({
@@ -361,7 +415,7 @@ function Agents({
   onOpenRef: (ref: HomeRef) => void;
 }) {
   return (
-    <ul className="m-0 flex list-none flex-col gap-3 p-0">
+    <ul aria-label="Agents at work" className="m-0 flex list-none flex-col gap-3 p-0">
       {agents.map((a) => {
         const st = AGENT_STATE[a.state];
         const ref = a.ref;
@@ -397,7 +451,7 @@ function Agents({
                 </span>
               )}
             </span>
-            <span className="flex flex-col items-end gap-1 font-mono text-[10.5px]">
+            <span className="flex flex-col items-end gap-1 font-mono text-[11px]">
               <span
                 className={`flex items-center gap-1.5 ${a.state === "WAITING_ON_YOU" ? "font-medium text-ink" : "text-ink2"}`}
               >
@@ -426,9 +480,8 @@ function Execution({
   now: number;
   onOpen: (jobId: string) => void;
 }) {
-  if (!runs.length) return <p className="m-0 text-[14px] text-ink3">Nothing running.</p>;
   return (
-    <ul className="m-0 flex list-none flex-col gap-3 p-0">
+    <ul aria-label="Runs" className="m-0 flex list-none flex-col gap-3 p-0">
       {runs.map((r) => {
         const at = r.stage ? STAGES.indexOf(r.stage) : -1;
         const seg = (i: number) =>
@@ -474,7 +527,9 @@ function Results({ results }: { results: readonly HomeResult[] }) {
   const order = HomeResultKind.options;
   const sorted = results.toSorted((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
   return (
-    <ul className="m-0 grid list-none grid-cols-2 gap-x-3.5 gap-y-4 p-0">
+    <ul
+      className={`${card} m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-3.5 gap-y-4`}
+    >
       {sorted.map((r) => (
         <li key={r.kind} className="flex min-w-0 flex-col gap-1">
           <span className="font-serif text-[30px] leading-none">
@@ -488,7 +543,7 @@ function Results({ results }: { results: readonly HomeResult[] }) {
             )}
           </span>
           <span className="text-[12px] leading-snug font-medium text-ink2">{r.label}</span>
-          <span className="font-mono text-[10.5px] leading-snug text-green">
+          <span className="font-mono text-[11px] leading-snug text-green">
             <span aria-hidden="true">✓ </span>
             <span className="sr-only">source: </span>
             {r.source}

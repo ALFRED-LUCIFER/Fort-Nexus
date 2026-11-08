@@ -101,7 +101,7 @@ beforeEach(() => {
 
 const drawer = () => screen.findByRole("dialog");
 
-describe("Plans & queue zone", () => {
+describe("Plans area", () => {
   it("lists the project's plans with status in text and drafts a plan from a goal with one Idempotency-Key per goal", async () => {
     let attempts = 0;
     const calls = board({
@@ -111,8 +111,8 @@ describe("Plans & queue zone", () => {
           : json(current, 201),
     });
     const user = userEvent.setup();
-    renderApp(IN_PROJECT);
-    const zone = await screen.findByRole("region", { name: "Plans & queue" });
+    renderApp(`${IN_PROJECT}&area=plans`);
+    const zone = await screen.findByRole("main", { name: "Plans" });
     const node = await within(zone).findByRole("button", {
       name: /Check the runner, then work on issue #42/,
     });
@@ -135,8 +135,8 @@ describe("Plans & queue zone", () => {
 
   it("the All view is read-only: drafting needs a project", async () => {
     board();
-    renderApp("/");
-    const zone = await screen.findByRole("region", { name: "Plans & queue" });
+    renderApp("/?area=plans");
+    const zone = await screen.findByRole("main", { name: "Plans" });
     expect(within(zone).getByText(/choose a project to draft a plan/)).toBeTruthy();
     expect(within(zone).queryByRole("button", { name: "Draft a plan" })).toBeNull();
   });
@@ -145,8 +145,8 @@ describe("Plans & queue zone", () => {
     board({
       "GET /v1/workspaces": () => json(workspaces([project({ archivedAt: T0 })])),
     });
-    renderApp(IN_PROJECT);
-    const zone = await screen.findByRole("region", { name: "Plans & queue" });
+    renderApp(`${IN_PROJECT}&area=plans`);
+    const zone = await screen.findByRole("main", { name: "Plans" });
     const btn = await within(zone).findByRole("button", { name: "Draft a plan" });
     expect(btn.hasAttribute("disabled")).toBe(true);
     expect(document.getElementById(btn.getAttribute("aria-describedby")!)!.textContent).toBe(

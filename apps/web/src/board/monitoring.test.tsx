@@ -100,11 +100,11 @@ beforeEach(() => {
 
 const drawer = () => screen.findByRole("dialog");
 
-describe("Systems zone", () => {
+describe("Systems area", () => {
   it("lists apps of the project with health in text, never colour alone; UNKNOWN says the home host can't see it", async () => {
     const calls = board();
-    renderApp(IN_PROJECT);
-    const zone = await screen.findByRole("region", { name: "Systems" });
+    renderApp(`${IN_PROJECT}&area=systems`);
+    const zone = await screen.findByRole("main", { name: "Systems" });
     const nodes = await within(zone).findAllByRole("button", { name: /PROD|STAGING/ });
     expect(nodes.map((b) => b.textContent)).toEqual([
       expect.stringMatching(/^Healthy · PRODstorefront-webchecked/),
@@ -119,8 +119,8 @@ describe("Systems zone", () => {
   it("a failing app opens its incident; the drawer shows status, timeline, evidence and acknowledges then resolves", async () => {
     const calls = board();
     const user = userEvent.setup();
-    const { router } = renderApp(IN_PROJECT);
-    const zone = await screen.findByRole("region", { name: "Systems" });
+    const { router } = renderApp(`${IN_PROJECT}&area=systems`);
+    const zone = await screen.findByRole("main", { name: "Systems" });
     await user.click(await within(zone).findByRole("button", { name: /checkout-api/ }));
     expect(router.state.location.search).toMatchObject({ project: PROJECT_ID, drawer: `incident:${INC}` });
 
@@ -276,8 +276,8 @@ describe("Systems drawer", () => {
       },
     });
     const user = userEvent.setup();
-    renderApp(IN_PROJECT);
-    const zone = await screen.findByRole("region", { name: "Systems" });
+    renderApp(`${IN_PROJECT}&area=systems`);
+    const zone = await screen.findByRole("main", { name: "Systems" });
     await user.click(await within(zone).findByRole("button", { name: "Manage apps" }));
     const d = await drawer();
     const rows = await within(d).findByRole("list", { name: "Monitored apps" });

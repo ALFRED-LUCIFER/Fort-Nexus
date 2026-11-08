@@ -2,7 +2,7 @@ import { render } from "@testing-library/react";
 import { vi } from "vitest";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
-import type { Job, Project, RunEvent, Runner, WorkspaceList } from "@nexus/contracts";
+import type { HomeSummary, Job, Project, RunEvent, Runner, WorkspaceList } from "@nexus/contracts";
 import { createApp } from "../router.tsx";
 
 export const json = (body: unknown, status = 200) =>
@@ -20,12 +20,39 @@ export interface Call {
 }
 type Handler = (call: Call) => Response | Promise<Response>;
 
+/** A quiet day for Today (`GET /v1/home`): nothing waits, nothing runs, no data yet. */
+export const quietHome = (): HomeSummary => ({
+  date: "2026-11-04",
+  time: "14:32",
+  timezone: "UTC",
+  headline: { segments: [{ text: "A quiet day.", emphasis: false }], sources: 0, decisionsWaiting: 0 },
+  decisions: { approvals: 0, plans: 0, jobDrafts: 0, opportunities: 0, incidents: 0, top: [] },
+  kpis: (["REVIEW_READY_MEDIAN", "TESTS_PASS_RATE", "RUNS_TODAY", "WAITING_ON_YOU"] as const).map((key) => ({
+    key,
+    label: key,
+    value: null,
+    unit: "count" as const,
+    previous: null,
+    better: "UP" as const,
+    series: [null, null, null, null, null, null, null],
+    source: "jobs · 7 days",
+  })),
+  agents: [],
+  execution: [],
+  results: [],
+  asOf: "2026-11-04T10:32:00.000Z",
+});
+
 /**
- * Stubs global fetch with `"METHOD /path"` handlers; unknown routes answer 404, except `GET /v1/workspaces`, which
- * answers WORKSPACES unless overridden. Returns the call log.
+ * Stubs global fetch with `"METHOD /path"` handlers; unknown routes answer 404, except `GET /v1/workspaces` (answers
+ * WORKSPACES) and `GET /v1/home` (a quiet day for Today) unless overridden. Returns the call log.
  */
 export function mockFetch(handlers: Record<string, Handler>) {
-  handlers = { "GET /v1/workspaces": () => json(WORKSPACES), ...handlers };
+  handlers = {
+    "GET /v1/workspaces": () => json(WORKSPACES),
+    "GET /v1/home": () => json(quietHome()),
+    ...handlers,
+  };
   const calls: Call[] = [];
   vi.stubGlobal(
     "fetch",
@@ -87,9 +114,28 @@ export class FakeEventSource {
   }
 }
 
-/** `view`: what `/` shows without `view=` — the zone board unless a test is about the Cofounder home. */
-export function renderApp(path: string, { view = "board" }: { view?: "home" | "board" } = {}) {
-  const { router, queryClient } = createApp(createMemoryHistory({ initialEntries: [path] }), view);
+/**
+ * A screen `width` px wide for `useMedia`: answers `(min-width: Nrem)` queries (16px rem). Without it, jsdom has no
+ * matchMedia and the app lays out as a desktop without the docked Cofounder panel.
+ */
+export function setViewport(width: number) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => {
+      const rem = /min-width:\s*([\d.]+)rem/.exec(query)?.[1];
+      return {
+        matches: rem !== undefined && width >= Number(rem) * 16,
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      };
+    }),
+  );
+}
+
+/** The app at `path` (`/` is Today; `area=` picks another page), with a memory history and no query retries. */
+export function renderApp(path: string) {
+  const { router, queryClient } = createApp(createMemoryHistory({ initialEntries: [path] }));
   queryClient.setDefaultOptions({ queries: { retry: false } });
   render(
     <QueryClientProvider client={queryClient}>

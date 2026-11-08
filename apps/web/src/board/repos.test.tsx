@@ -310,7 +310,7 @@ describe("Home: setup checklist and repositories", () => {
   it("lists what NEXUS still needs, in words, with the way to do it", async () => {
     const calls = home();
     const user = userEvent.setup();
-    const { router } = renderApp(IN_PROJECT, { view: "home" });
+    const { router } = renderApp(IN_PROJECT);
     const setup = await screen.findByRole("region", { name: "Before NEXUS can work" });
     expect(calls.find((c) => c.path === "/v1/setup")!.query.get("projectId")).toBe(PROJECT_ID);
     expect(within(setup).getByText("2 of 4 done · checked live")).toBeTruthy();
@@ -332,7 +332,7 @@ describe("Home: setup checklist and repositories", () => {
 
   it("goes away once NEXUS is ready", async () => {
     home({ "GET /v1/setup": () => json({ ...NOT_READY, ready: true }) });
-    renderApp(IN_PROJECT, { view: "home" });
+    renderApp(IN_PROJECT);
     await screen.findByRole("region", { name: "Your repositories · Home" });
     expect(screen.queryByRole("region", { name: "Before NEXUS can work" })).toBeNull();
   });
@@ -340,7 +340,7 @@ describe("Home: setup checklist and repositories", () => {
   it("in a project, shows every chosen repository, the ones that need the owner first", async () => {
     home();
     const user = userEvent.setup();
-    const { router } = renderApp(IN_PROJECT, { view: "home" });
+    const { router } = renderApp(IN_PROJECT);
     const section = await screen.findByRole("region", { name: "Your repositories · Home" });
     const rows = within(await within(section).findByRole("list", { name: "Your repositories" })).getAllByRole(
       "listitem",
@@ -358,7 +358,7 @@ describe("Home: setup checklist and repositories", () => {
   it("in All, shows only what needs the owner and opens the full list", async () => {
     home();
     const user = userEvent.setup();
-    const { router } = renderApp("/", { view: "home" });
+    const { router } = renderApp("/");
     const section = await screen.findByRole("region", { name: "Repositories · all installed" });
     const rows = within(
       await within(section).findByRole("list", { name: "Repositories needing attention" }),
@@ -373,7 +373,7 @@ describe("Home: setup checklist and repositories", () => {
 
   it("in All, says when every repository is quiet", async () => {
     home({ "GET /v1/repositories/health": () => json({ items: [health(QUIET)] }) });
-    renderApp("/", { view: "home" });
+    renderApp("/");
     const section = await screen.findByRole("region", { name: "Repositories · all installed" });
     expect(await within(section).findByText(/All 1 repository are quiet/)).toBeTruthy();
   });
@@ -382,27 +382,31 @@ describe("Home: setup checklist and repositories", () => {
 describe("Dev only (Settings → Workspaces)", () => {
   const devOnly = workspaces([project()], [], false);
 
-  it("hides the Business switch, zone and agents, and opens on Dev without ws in the URL", async () => {
+  it("hides the Business area and the workspace choice, and opens on Dev without ws in the URL", async () => {
     app({
       "GET /v1/workspaces": () => json(devOnly),
       "GET /v1/agents": () => json({ items: [] }),
     });
+    const user = userEvent.setup();
     const { router } = renderApp("/");
-    await screen.findByRole("region", { name: "Code" });
-    await waitFor(() => expect(screen.queryByRole("group", { name: "Workspace" })).toBeNull());
-    expect(screen.queryByRole("region", { name: "Business" })).toBeNull();
+    const areas = await screen.findByRole("navigation", { name: "Areas" });
+    await within(areas).findByRole("link", { name: /^Code/ });
+    expect(within(areas).queryByRole("link", { name: /^Business/ })).toBeNull();
     const scope = screen.getByRole("navigation", { name: "Scope" });
     expect(within(scope).getByText("Dev")).toBeTruthy();
-    // One Dev project: the board opens on it, so it can act.
+    // One Dev project: the page opens on it, so it can act.
     await waitFor(() => expect(router.state.location.search).toMatchObject({ project: PROJECT_ID }));
     expect(router.state.location.search.ws).toBeUndefined();
+    await user.click(within(scope).getByRole("button", { name: /Switch project/ }));
+    expect(within(scope).queryByRole("group", { name: "Workspace" })).toBeNull();
   });
 
-  it("a hidden workspace in the URL shows Dev instead", async () => {
+  it("a hidden workspace in the URL shows Dev instead, and its area falls back to Today", async () => {
     app({ "GET /v1/workspaces": () => json(devOnly), "GET /v1/agents": () => json({ items: [] }) });
-    renderApp("/?ws=business");
-    await screen.findByRole("region", { name: "Code" });
-    expect(await within(screen.getByRole("navigation", { name: "Scope" })).findByText("Dev")).toBeTruthy();
+    renderApp("/?ws=business&area=business");
+    const scope = await screen.findByRole("navigation", { name: "Scope" });
+    expect(await within(scope).findByText("Dev")).toBeTruthy();
+    expect(await screen.findByRole("main", { name: "Today" })).toBeTruthy();
   });
 
   it("the switch hides Business (audited by the API) and can't hide the last shown workspace", async () => {

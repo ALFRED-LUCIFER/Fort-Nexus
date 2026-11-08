@@ -128,13 +128,17 @@ const zone = () => screen.findByRole("region", { name: "Noticed for you" });
 const card = async () => within(await zone()).findByRole("article", { name: opportunity().title });
 const why = (el: HTMLElement) => document.getElementById(el.getAttribute("aria-describedby")!)?.textContent;
 
-describe("Noticed zone", () => {
+describe("Noticed for you on Today", () => {
   it("says what to do when nothing was noticed yet", async () => {
     items = [];
     board();
     renderApp(IN_PROJECT);
-    expect(await within(await zone()).findByText(/Nothing noticed yet: run a deep dive/)).toBeTruthy();
-    expect(within(await zone()).getByText("nothing yet")).toBeTruthy();
+    // Nothing noticed: Today shrinks the section to one line.
+    expect(
+      await within(await zone()).findByText(
+        /nothing yet: a deep dive turns what it verifies into cards here/,
+      ),
+    ).toBeTruthy();
   });
 
   it("shows the API's error, and the offline message when the API can't be reached", async () => {
@@ -312,7 +316,7 @@ describe("opp drawer", () => {
     renderApp(`${IN_PROJECT}&drawer=opp:${OPP}`);
     const d = await screen.findByRole("dialog");
     await user.click(await within(d).findByRole("button", { name: "Dismiss" }));
-    expect(await within(d).findByText(/Dismissed\. It no longer shows on the board\./)).toBeTruthy();
+    expect(await within(d).findByText(/Dismissed\. It no longer shows on Today\./)).toBeTruthy();
     expect(dismiss).toHaveBeenCalledTimes(1);
   });
 });

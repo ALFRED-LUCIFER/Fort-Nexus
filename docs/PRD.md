@@ -114,7 +114,7 @@ The sources contradicted each other in places. These are the binding resolutions
 | C-03 | Two different folder structures (v1.0 §16.3 `apps/api` + many packages; CR-001 §12.3 `services/core-api/modules/*`) | One unified layout in §19 — modules inside `apps/api`, packages only for code shared by ≥2 apps. |
 | C-04 | Three autonomy vocabularies: v1.0 risk tiers **R0–R3**; CR-001 autonomy **Read / Plan / Prepare Draft / Execute Low Risk / Approval Required** and risk label `WRITE_EXTERNAL`; design dial **Suggest / Draft / Act with approval / Autonomous** | **Risk tier (R0–R3) classifies the action; autonomy level is the per-agent/workspace cap.** UI uses the design labels: Suggest = Read/Plan, Draft = Prepare Draft, Act with approval = Approval Required, Autonomous = Execute Low Risk (**R0/R1 only, never R2/R3**). `WRITE_EXTERNAL` ≡ R2. |
 | C-05 | Command modes **Ask / Plan / Execute** (v1.0) vs workspace modes **Dev / Business** (CR-001) vs design **All / Dev / Business** | Both axes exist: workspace switch (top-left) and command mode (in command bar), as the design shows. **“All” is a read-only aggregate board** (FR-WKS-09 behaviour pulled forward for viewing only): no tool scope; any action forces an explicit project pick. |
-| C-06 | Navigation: v1.0 lists 12 left-nav sections; CR-001 defines Dev/Business sidebars; design v2 has **no sidebar** — a spatial board of zones + drawers | **Design v2 wins for layout.** Every PRD nav destination maps to a board zone or drawer (Part D.3). Mobile keeps CR-001 bottom nav `Home, Inbox, Talk, Workspaces, Settings` (matches the design phone mock). |
+| C-06 | Navigation: v1.0 lists 12 left-nav sections; CR-001 defines Dev/Business sidebars; design v2 has **no sidebar** — a spatial board of zones + drawers | **Revised 2026-11-08 (owner):** the zoomable board is dropped (its overview was unreadable: text rendered at ~5px). One page: header, a left **sidebar of areas** (Today, Code, Systems, Business, Research, Agents, Plans) with a live status line each, the active area as a page in the middle, the Cofounder panel docked right; drawers unchanged. Every PRD nav destination maps to an area or a drawer (Part D.3). Mobile keeps CR-001 bottom nav `Home, Inbox, Talk, Workspaces, Settings` (matches the design phone mock). Spec: `docs/specs/today-and-areas.md`. |
 | C-07 | CR-001 §4.4 visual direction “near-black / blue-black” vs design v2 warm paper light theme + warm dark theme | **Design v2 tokens win** (Part D.1); CR-001's rules still apply: color always paired with text/icon, no incessant blinking, monospace only for CLI/IDs/times. |
 | C-08 | Event names differ: v1.0 `job.completed`, CR-001 `development.job.completed`, `pull_request.created`, `ci.passed` | One canonical namespace `<domain>.<object>.<verb>` (e.g. `dev.job.completed`, `dev.pull_request.created`, `dev.ci.passed`, `biz.payment.failed`). Run-stream event types in §13 stay as the job-local subset. Semantic contract of CR-001 (never collapse to “done”) is normative. |
 | C-09 | Approval state names: v1.0 job `AWAITING_APPROVAL`; CR-001 proposal `AWAITING_OWNER_APPROVAL` | Job state stays `AWAITING_APPROVAL`; `action_proposals.status` uses `PROPOSED → AWAITING_APPROVAL → APPROVED/DENIED/EXPIRED/INVALIDATED → EXECUTED/FAILED/UNKNOWN`. |
@@ -150,14 +150,16 @@ Typography: **Onest** 300–600 (UI), **Instrument Serif** regular/italic (displ
 
 ### D.2 Shell (always visible)
 
-- **Top-left pill:** conic-gradient logo, `nexus` wordmark, home-host status dot (online/stale/offline — FR-ACC-02), workspace switch **All | Dev | Business** (FR-WKS-01, C-05).
+- **Top-left pill:** conic-gradient logo, `nexus` wordmark, home-host status dot (online/stale/offline — FR-ACC-02).
 - **Top-center command bar:** input (“Ask NEXUS or say a command”), mic button with live level bars (FR-CWV-02), **Ask | Plan | Execute** (FR-CMD-02), submit. Focus shows **command history** (rerun gets new run ID + today's permissions — FR-CMD-06). Execute shows an **action preview card** (“Queue on home-studio” / “Adjust”) before anything runs (FR-CMD-05).
-- **Top-right pill:** board grouping **Domains | Agents**, **Brief** (daily briefing modal — FR-INB-07/FR-AWA-06), **Inbox** with count (FR-INB-01), light/dark toggle.
-- **Bottom-left:** zoom − / % / + / Fit, and the **SCOPE breadcrumb** `Mode › Project ▾ › Environment › Source` with project switcher menu (“switching re-binds connectors and agent profile · the other project's data leaves this session” — FR-WKS-06/08).
-- **Bottom-right:** Talk, Knowledge, Settings, Phone (mobile approvals preview), **STOP** emergency kill switch (C-14).
+- **Top-right pill:** **Inbox** with count (FR-INB-01), light/dark toggle, Sign out. (The design's Domains | Agents grouping moved into the Agents area as "By agent"; the daily brief is Today.)
+- **Left sidebar (implementation, C-06 revised):** the **SCOPE** control (workspace **All | Dev | Business** — FR-WKS-01, C-05 — and the project switcher menu, “switching re-binds connectors and agent profile · the other project's data leaves this session” — FR-WKS-06/08), the areas with one live status line each, then Talk, Settings and **STOP** emergency kill switch (C-14), always visible. Phone: Stop sits in the header.
+- **Right:** the Cofounder panel docked on wide screens (§D.4), collapsible.
 - **Overlays:** toasts (category, Later / Open / Talk — FR-NTF-08), voice HUD (state, captions, mic status, provider disclosure, End — §8 voice states, FR-CSP-02), talk orb + “NEXUS · noticed just now” whisper (FR-NTF-12), status banners (emergency stop engaged / home host offline “jobs held, not lost” / back online “run needs recovery review” — FR-ACC-06, FR-RUN-10), node **inspector** popover (facts, Approve/Deny, quick action, “Open focus →”).
 
 ### D.3 Board zones and drawers → requirements
+
+**Implemented as areas (C-06 revised 2026-11-08):** each design zone is an **area**, a page in the middle column (`/?area=code|systems|business|research|agents|plans`; Today when absent). The sidebar, listing every area with a live status line, is the overview the canvas used to be. "Noticed for you" lives on Today; Automations is Settings → Automations; "Plans & queue" is the Plans area. The table below stays the design's content-to-requirement map.
 
 | Board zone (Domains view) | Contents in design | Drawer(s) it opens | Requirements |
 |---|---|---|---|
@@ -172,15 +174,15 @@ Typography: **Onest** 300–600 (UI), **Instrument Serif** regular/italic (displ
 
 Conversation drawers (`conv-*`): scope breadcrumbs + pinned profile version, bound subject, **truth ladder** (Dev: Announced → Ready for review → Tests passed → PR opened → CI green → Merged → Deployed; Business email: Reported → Investigated → Draft ready → Approved → Sent · confirmed) with the note “each step needs its own source event”, turns with source chips, **action proposal card** (Not now / Confirm & open PR), **mail card** with content hash (Edit / Approve & send v2), suggestion chips, text input + Talk + Send. Requirements: FR-CWV-*, FR-CXR-*, FR-EML-04/05, FR-NTF-04, §13 semantic contract.
 
-Other drawers: **Inbox** (tabs All, Approvals, Failures, Blocked, Business, Security, Connections, Done & notices; approve/deny inline; notify-policy footer — FR-INB-*, FR-NTF-09/10) and **Settings** (tabs Connections, Workspaces, Agent profiles, Security & devices, Remote access, Budgets & limits (monthly AI spend meter), Backups, Notifications, Voice & consent, Audit log, Data & privacy, System health — FR-SEC-*, FR-OPS-*, FR-CSP-*). **Agents view** (grouping = Agents) lays the same nodes out in one swim-lane per agent.
+Other drawers: **Inbox** (tabs All, Approvals, Failures, Blocked, Business, Security, Connections, Done & notices; approve/deny inline; notify-policy footer — FR-INB-*, FR-NTF-09/10) and **Settings** (tabs Connections, Workspaces, Agent profiles, Security & devices, Remote access, Budgets & limits (monthly AI spend meter), Backups, Notifications, Voice & consent, Audit log, Data & privacy, System health — FR-SEC-*, FR-OPS-*, FR-CSP-*). **Agents view** (grouping = Agents) lays the same nodes out in one swim-lane per agent; implemented as the Agents area's **By agent** list.
 
 **Phone mock:** redacted push (“Details after Face ID”), approval cards with risk tier, agent and expiry, Approve/Deny, bottom nav Home / Inbox / Talk / Workspaces / Settings — FR-VOICE-03, FR-CSP-03, FR-CHN-09.
 
-**Implementation notes:** the board must also have a non-canvas, keyboard- and screen-reader-friendly path (list view per zone) to satisfy WCAG 2.2 AA; at phone width the board collapses to the mobile layout in §8 instead of a scaled canvas.
+**Implementation notes:** there is no canvas. Areas are ordinary pages (headings, lists, buttons, responsive grids), which meets the WCAG 2.2 AA non-canvas, keyboard- and screen-reader-friendly path (the "list view per zone" requirement); the sidebar is a `nav` landmark with `aria-current` on the active area. At phone width the sidebar gives way to the §8 bottom nav; its Workspaces screen lists the areas and the scope.
 
 ### D.4 Cofounder home (adopted 2026-11-03)
 
-**Source:** `docs/design/NEXUS-Cofounder.dc.html`, imported from the same Claude Design project. The owner adopted it as the target **Home**. The v2 board, its zones and its drawers (§D.3) remain the detail views.
+**Source:** `docs/design/NEXUS-Cofounder.dc.html`, imported from the same Claude Design project. The owner adopted it as the target **Home**, implemented as **Today** (the page without `area`). The areas and their drawers (§D.3) are the detail views.
 
 - **Tokens:** the Cofounder file uses its own dark navy palette and Geist fonts. Implement it with the NEXUS v2 tokens and typography (§D.1), not its literal colors, so the product has one design system.
 - **Demo data:** all data in it is demo data, as in v2.
@@ -515,7 +517,7 @@ This table is the binding **no-feature-left-behind** inventory. “Covered” me
 
 ## 8. Information architecture and UX requirements
 
-> **Layout source of truth:** NEXUS v2 spatial board (Part D). The navigation lists below define *what* must be reachable; Part D.3 maps each destination to a board zone or drawer (C-06).
+> **Layout source of truth:** Part D: one page of areas (sidebar) + drawers, with Today as the landing page (C-06, revised 2026-11-08). The navigation lists below define *what* must be reachable; Part D.3 maps each destination to an area or drawer.
 
 
 ### 8.1 Global navigation
@@ -559,7 +561,7 @@ This table is the binding **no-feature-left-behind** inventory. “Covered” me
 
 ### 8.4 Global shell and modes (CR-001)
 
-**Desktop layout follows the NEXUS v2 board (Part D, C-06); the lists below define the destinations each mode must expose.** **Persistent top bar:** NEXUS logo, `Dev | Business` workspace switcher, current project selector (sticky and visible), global command input (“Ask NEXUS or say a command”), microphone button with permission state, home-host/runner indicator, notification bell, unread count, Do Not Disturb, profile/settings.
+**Desktop layout follows Part D (areas sidebar + drawers, C-06); the lists below define the destinations each mode must expose.** **Persistent top bar:** NEXUS logo, `Dev | Business` workspace switcher, current project selector (sticky and visible), global command input (“Ask NEXUS or say a command”), microphone button with permission state, home-host/runner indicator, notification bell, unread count, Do Not Disturb, profile/settings.
 
 **Dev sidebar:** Home, Repositories, Issues, Runs/CLI, Agents, Pull Requests, CI/Incidents, Research, Knowledge, Approvals, Settings.
 

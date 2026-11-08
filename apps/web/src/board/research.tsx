@@ -33,11 +33,10 @@ import {
 import { Drawer, DrawerHeader } from "./Drawer.tsx";
 import { ResearchSources } from "./researchSources.tsx";
 import { PICK_PROJECT, useScope, type Scope } from "./scope.tsx";
-import { EmptyZone } from "./zones.tsx";
+import { EmptyZone, nodeGrid } from "./zones.tsx";
 
 const POLL_MS = 30_000;
 const RUN_POLL_MS = 2_000;
-const ZONE_FINDINGS = 4;
 const PAGE = 20;
 const MAX_SEED = 10; // CreateDeepDiveRequest.findingIds
 
@@ -163,7 +162,7 @@ export function ResearchZone({
         </button>
       </div>
     );
-  const top = (findings.data?.items ?? []).toSorted((a, b) => b.score - a.score).slice(0, ZONE_FINDINGS);
+  const top = (findings.data?.items ?? []).toSorted((a, b) => b.score - a.score);
   return (
     <div className="flex flex-col gap-3">
       <h3 className="kicker m-0">Top recent findings · score is a triage aid</h3>
@@ -175,13 +174,13 @@ export function ResearchZone({
             : (findings.error?.message ?? "No findings yet. Open Research and run a watchlist now.")}
         </EmptyZone>
       ) : (
-        <ul className="m-0 flex list-none flex-wrap content-start gap-[30px] p-0">
+        <ul className={nodeGrid}>
           {top.map((f) => (
             <li key={f.id}>
               <button
                 type="button"
                 onClick={onOpen}
-                className="flex w-[220px] flex-col gap-2 rounded-[20px] border border-line bg-card px-4 py-3.5 text-left shadow-nx transition-shadow hover:shadow-[0_0_0_2px_var(--teal),var(--shadow)]"
+                className="flex h-full w-full flex-col gap-2 rounded-[20px] border border-line bg-card px-4 py-3.5 text-left shadow-nx transition-shadow hover:shadow-[0_0_0_2px_var(--teal),var(--shadow)]"
               >
                 <LabelChip label={f.label} />
                 <span className="line-clamp-3 text-[14px] leading-[1.3] font-medium text-pretty">

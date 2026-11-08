@@ -16,14 +16,12 @@ import { AiError, AiLabel } from "./aiInference.tsx";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { P1Button } from "./P1Button.tsx";
 import { PICK_PROJECT, useScope, type Scope } from "./scope.tsx";
-import { EmptyZone, Node } from "./zones.tsx";
+import { EmptyZone, Node, nodeGrid } from "./zones.tsx";
 
-// EPIC MON: app health on the board, the Systems drawer (register / check / pause) and the incident drawer.
+// EPIC MON: app health in the Systems area, the Systems drawer (register / check / pause) and the incident drawer.
 
 const POLL_MS = 30_000;
 const INCIDENT_POLL_MS = 15_000;
-// shortcut: the zone shows the first 3 apps; the Systems drawer lists all of them.
-const ZONE_APPS = 3;
 
 const field =
   "min-w-0 rounded-xl border border-hair bg-card px-3 py-2 text-[13px] text-ink placeholder:text-ink3";
@@ -125,8 +123,8 @@ export function AppNodes({
           NEXUS checks it on a schedule.
         </EmptyZone>
       ) : (
-        <ul className="m-0 flex list-none flex-wrap content-start gap-[30px] p-0">
-          {items.slice(0, ZONE_APPS).map((a) => (
+        <ul className={nodeGrid}>
+          {items.map((a) => (
             <li key={a.id}>
               <Node
                 dot={HEALTH[a.health].tone}
@@ -142,11 +140,7 @@ export function AppNodes({
       )}
       <p className="m-0 max-w-[460px] text-[12.5px] leading-normal text-ink3">{HOME_HOST}</p>
       <button type="button" onClick={onOpenSystems} className={`${ghostBtn} self-start`}>
-        {items.length > ZONE_APPS
-          ? `All ${items.length} apps →`
-          : items.length
-            ? "Manage apps"
-            : "Register an app"}
+        {items.length ? "Manage apps" : "Register an app"}
       </button>
     </section>
   );

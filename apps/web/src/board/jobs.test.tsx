@@ -428,12 +428,12 @@ describe("Jobs page: agent performance", () => {
   });
 });
 
-describe("Code zone", () => {
+describe("Code area", () => {
   it("All jobs beside Recent runs opens the Jobs page; the empty text points to New job", async () => {
     board();
     const user = userEvent.setup();
-    const { router } = renderApp(IN_PROJECT);
-    const zone = await screen.findByRole("region", { name: "Code" });
+    const { router } = renderApp(`${IN_PROJECT}&area=code`);
+    const zone = await screen.findByRole("main", { name: "Code" });
     expect(
       await within(zone).findByText(/^No runs yet\. Describe one in plain words with New job/),
     ).toBeTruthy();

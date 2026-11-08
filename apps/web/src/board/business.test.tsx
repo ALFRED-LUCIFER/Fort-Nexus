@@ -148,8 +148,8 @@ function business(
 describe("business zone", () => {
   it("shows today's KPIs labelled partial, and says no data (never 0) for an unavailable metric", async () => {
     const calls = business([connector()]);
-    renderApp(IN_SHOP);
-    const zone = await screen.findByRole("region", { name: "Business" });
+    renderApp(`${IN_SHOP}&area=business`);
+    const zone = await screen.findByRole("main", { name: "Business" });
     const orders = await within(zone).findByRole("button", { name: /Paid orders today: 2, partial/ });
     // Only this project's connectors are ever asked for.
     const lists = calls.filter((c) => c.path === "/v1/business/connectors");
@@ -169,8 +169,8 @@ describe("business zone", () => {
   it("in All, invites the owner to pick a project; registering is disabled until then", async () => {
     const calls = business([]);
     const user = userEvent.setup();
-    renderApp("/");
-    const zone = await screen.findByRole("region", { name: "Business" });
+    renderApp("/?area=business");
+    const zone = await screen.findByRole("main", { name: "Business" });
     expect(
       await within(zone).findByText(/No business sources connected. Pick a Business project/),
     ).toBeTruthy();
@@ -187,10 +187,10 @@ describe("business zone", () => {
 
   it("in a Dev project, says business sources live in Business projects and asks for none", async () => {
     const calls = business([connector()]);
-    renderApp(`${IN_PROJECT}&drawer=business`);
+    renderApp(`${IN_PROJECT}&area=business&drawer=business`);
     const drawer = await screen.findByRole("dialog");
-    // The open drawer hides the board from the accessibility tree.
-    const zone = screen.getByRole("region", { name: "Business", hidden: true });
+    // The open drawer hides the page from the accessibility tree.
+    const zone = screen.getByRole("main", { name: "Business", hidden: true });
     expect(within(zone).getByText(/^Business sources live in Business projects/)).toBeTruthy();
     expect(within(drawer).getByText(/^Business sources live in Business projects/)).toBeTruthy();
     expect(calls.some((c) => c.path.startsWith("/v1/business/"))).toBe(false);

@@ -157,13 +157,13 @@ const drawer = () => screen.findByRole("dialog");
 const IN_DRAWER = `${IN_PROJECT}&drawer=research`;
 const why = (el: HTMLElement) => document.getElementById(el.getAttribute("aria-describedby")!)?.textContent;
 
-describe("Research zone", () => {
+describe("Research area", () => {
   it("invites the owner to create a watchlist when there is none", async () => {
     lists = [];
     board();
     const user = userEvent.setup();
-    const { router } = renderApp("/");
-    const zone = await screen.findByRole("region", { name: "Research" });
+    const { router } = renderApp("/?area=research");
+    const zone = await screen.findByRole("main", { name: "Research" });
     expect(await within(zone).findByText("no watchlists")).toBeTruthy();
     await user.click(await within(zone).findByRole("button", { name: "Create a watchlist" }));
     expect(router.state.location.search).toMatchObject({ drawer: "research" });
@@ -172,8 +172,8 @@ describe("Research zone", () => {
 
   it("shows top findings with label chips and the next brief; unverified ones as claims", async () => {
     board();
-    renderApp("/");
-    const zone = await screen.findByRole("region", { name: "Research" });
+    renderApp("/?area=research");
+    const zone = await screen.findByRole("main", { name: "Research" });
     expect(await within(zone).findByText(/1 watchlist · next brief/)).toBeTruthy();
     const cards = await within(zone).findAllByRole("button", { name: /score/ });
     expect(cards.map((c) => c.textContent)).toEqual([
@@ -184,12 +184,12 @@ describe("Research zone", () => {
     ]);
   });
 
-  it("the Brief button opens the research drawer", async () => {
+  it("Open research on the Research page opens the research drawer over it", async () => {
     board();
     const user = userEvent.setup();
-    const { router } = renderApp("/");
-    await user.click(await screen.findByRole("button", { name: "Brief" }));
-    expect(router.state.location.search).toMatchObject({ drawer: "research" });
+    const { router } = renderApp("/?area=research");
+    await user.click(await screen.findByRole("button", { name: "Open research" }));
+    expect(router.state.location.search).toEqual({ area: "research", drawer: "research" });
   });
 });
 

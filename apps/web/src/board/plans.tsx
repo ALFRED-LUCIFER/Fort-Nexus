@@ -7,15 +7,14 @@ import { ago, clock, useNow } from "../lib/queries.ts";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { useWatchlists } from "./research.tsx";
 import { PICK_PROJECT, useScope, type Scope } from "./scope.tsx";
-import { EmptyZone, Node } from "./zones.tsx";
+import { EmptyZone, Node, nodeGrid } from "./zones.tsx";
 import { AGENT_LABEL } from "./agentLabels.ts";
 
-// EPIC AGT FR-AGT-01/09: the Plans & queue zone and the plan:<uuid> drawer. The model only drafts; the owner approves
+// EPIC AGT FR-AGT-01/09: the Plans area and the plan:<uuid> drawer. The model only drafts; the owner approves
 // the exact hash; each step succeeds only on its source record, which the drawer cites.
 
 const route = getRouteApi("/");
 const POLL_MS = 5_000;
-const ZONE_PLANS = 4;
 
 const ghostBtn =
   "rounded-xl border border-hair px-3.5 py-2.5 text-[12.5px] font-medium text-ink disabled:opacity-45";
@@ -187,8 +186,8 @@ export function PlansZone({ onOpen }: { onOpen: (id: string) => void }) {
             drafts typed steps for you to approve.
           </EmptyZone>
         ) : (
-          <ul className="m-0 flex list-none flex-wrap content-start gap-[30px] p-0">
-            {items.slice(0, ZONE_PLANS).map((p) => (
+          <ul className={nodeGrid}>
+            {items.map((p) => (
               <li key={p.id}>
                 <Node
                   dot={PLAN[p.status].tone}

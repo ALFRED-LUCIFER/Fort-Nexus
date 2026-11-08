@@ -12,10 +12,14 @@ import {
 } from "@tanstack/react-router";
 import { ApiRequestError, api, keys } from "./lib/api.ts";
 import { Login } from "./Login.tsx";
-import { Board } from "./board/Board.tsx";
+import { Shell } from "./board/Shell.tsx";
 
 export const Workspace = z.enum(["all", "dev", "business"]);
 export type Workspace = z.infer<typeof Workspace>;
+
+// The middle column's page (absent = Today); `list` is the phone's Workspaces screen, the sidebar as a page.
+export const Area = z.enum(["code", "systems", "business", "research", "agents", "plans", "list"]);
+export type Area = z.infer<typeof Area>;
 
 // The router JSON-parses search values, so a hand-typed `q=123` arrives as a number.
 const text = (max: number) =>
@@ -24,13 +28,13 @@ const text = (max: number) =>
     .optional()
     .catch(undefined);
 
-// Deep-linkable board state: `/?ws=dev&project=<uuid>&drawer=run:<uuid>`, `drawer=repo:<repoId>` (with issue filters),
+// Deep-linkable state: `/?ws=dev&project=<uuid>&area=code&drawer=run:<uuid>`, `drawer=repo:<repoId>` (with issue filters),
 // `drawer=issue:<repoId>:<number>`, `drawer=inbox`, `drawer=settings`, `drawer=business`, `drawer=research` / `drawer=research:<uuid>` (one deep dive), `drawer=talk` (threads) / `drawer=talk:<uuid>` (one thread), `drawer=systems`, `drawer=incident:<uuid>`, `drawer=agent:<AgentKey>`, `drawer=plan:<uuid>`, `drawer=opp:<uuid>` (`:preview` opens on the issue preview), `drawer=jobs` (Jobs page), `drawer=newjob` (New job form), `drawer=jobdraft:<uuid>` (one job draft), `drawer=repos` (repository health), `drawer=repos:choose` (pick the project's repositories). Bad values fall back instead of erroring.
 export const BoardSearch = z.object({
   ws: Workspace.optional().catch(undefined),
-  // Cofounder home (the default) or the zone board (`view=board`); drawers open over either.
-  view: z.enum(["home", "board"]).optional().catch(undefined),
-  // The selected project of `ws` (FR-WKS-02); without one the board is a read-only aggregate.
+  // Today (absent) or one area's page; drawers open over any of them.
+  area: Area.optional().catch(undefined),
+  // The selected project of `ws` (FR-WKS-02); without one every page is a read-only aggregate.
   project: z.uuid().optional().catch(undefined),
   drawer: z
     .string()
@@ -60,9 +64,7 @@ function Root() {
   );
 }
 
-export type BoardView = "home" | "board";
-// `defaultView`: what `/` shows without `view=` (the Cofounder home in the app; tests of the zone board use "board").
-const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient; defaultView: BoardView }>()({
+const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   component: Root,
 });
 
@@ -86,7 +88,13 @@ const boardRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   validateSearch: BoardSearch,
-  beforeLoad: async ({ context }) => {
+  beforeLoad: async ({ context, location }) => {
+    // The zoomable board is gone: an old `view=board|home` bookmark lands on the same scope and drawer, without `view`.
+    const raw: Record<string, unknown> = location.search;
+    if ("view" in raw) {
+      const rest = Object.fromEntries(Object.entries(raw).filter(([k]) => k !== "view"));
+      throw redirect({ to: "/", search: BoardSearch.parse(rest), replace: true });
+    }
     try {
       await context.queryClient.ensureQueryData({ queryKey: keys.me, queryFn: api.me });
     } catch (e) {
@@ -94,7 +102,7 @@ const boardRoute = createRoute({
       throw e;
     }
   },
-  component: Board,
+  component: Shell,
   errorComponent: BoardError,
 });
 
@@ -103,7 +111,7 @@ function BoardError({ error }: { error: unknown }) {
   return (
     <main className="grid h-full place-items-center p-4">
       <div role="alert" className="glass2 flex max-w-md flex-col gap-4 rounded-[22px] p-6">
-        <span className="kicker">NEXUS can't load the board</span>
+        <span className="kicker">NEXUS can't load this page</span>
         <p className="m-0 text-[14px] leading-relaxed text-ink2">
           {error instanceof Error ? error.message : String(error)}
         </p>
@@ -121,8 +129,8 @@ function BoardError({ error }: { error: unknown }) {
 
 const routeTree = rootRoute.addChildren([loginRoute, boardRoute]);
 
-const makeRouter = (queryClient: QueryClient, history?: RouterHistory, defaultView: BoardView = "home") =>
-  createRouter({ routeTree, context: { queryClient, defaultView }, history, defaultPreloadStaleTime: 0 });
+const makeRouter = (queryClient: QueryClient, history?: RouterHistory) =>
+  createRouter({ routeTree, context: { queryClient }, history, defaultPreloadStaleTime: 0 });
 
 declare module "@tanstack/react-router" {
   interface Register {
@@ -131,7 +139,7 @@ declare module "@tanstack/react-router" {
 }
 
 /** One router + query client pair; tests pass a memory history. */
-export function createApp(history?: RouterHistory, defaultView: BoardView = "home") {
+export function createApp(history?: RouterHistory) {
   const queryClient: QueryClient = new QueryClient({
     // An expired session on any request sends the owner back to sign in.
     queryCache: new QueryCache({
@@ -146,6 +154,6 @@ export function createApp(history?: RouterHistory, defaultView: BoardView = "hom
       },
     },
   });
-  const router = makeRouter(queryClient, history, defaultView);
+  const router = makeRouter(queryClient, history);
   return { router, queryClient };
 }

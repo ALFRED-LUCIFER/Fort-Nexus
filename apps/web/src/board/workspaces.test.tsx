@@ -115,7 +115,7 @@ describe("workspace switch and project menu", () => {
     const user = userEvent.setup();
     const { router } = renderApp("/");
     const scope = await screen.findByRole("navigation", { name: "Scope" });
-    expect(scope.textContent).toMatch(/All workspaces.*cross-project ▾.*read-only/);
+    expect(scope.textContent).toMatch(/All workspaces.*cross-project.*read-only/);
 
     const button = within(scope).getByRole("button", { name: /^Project: cross-project/ });
     await user.click(button);
@@ -141,19 +141,24 @@ describe("workspace switch and project menu", () => {
     await user.click(button);
     await user.click(within(scope).getByRole("button", { name: /Home.*1 repository bound/ }));
     await waitFor(() => expect(router.state.location.search).toEqual({ ws: "dev", project: PROJECT_ID }));
-    expect(scope.textContent).toMatch(/Dev.*Home ▾.*home runner/);
+    expect(scope.textContent).toMatch(/Dev.*Home.*home runner/);
 
-    // The workspace switch clears the project; Business has one active project, so it opens on it.
-    await user.click(screen.getByRole("button", { name: "Business" }));
+    // The workspace choice (in the menu) clears the project; Business has one active project, so it opens on it.
+    await user.click(button);
+    await user.click(
+      within(within(scope).getByRole("group", { name: "Workspace" })).getByRole("button", {
+        name: "Business",
+      }),
+    );
     await waitFor(() =>
       expect(router.state.location.search).toEqual({ ws: "business", project: BIZ_PROJECT_ID }),
     );
-    expect(scope.textContent).toMatch(/Business.*Shop ▾/);
+    expect(scope.textContent).toMatch(/Business.*Shop/);
   });
 
   it("filters runs, approvals and repositories by the selected project", async () => {
     const calls = board();
-    renderApp(IN_PROJECT);
+    renderApp(`${IN_PROJECT}&area=code`);
     await screen.findByRole("button", { name: /^Inbox, 1 pending approval\b/ });
     await waitFor(() => expect(calls.some((c) => c.path === "/v1/repositories")).toBe(true));
     // The held-jobs count of the offline banner is about the runner, so it stays owner-wide (status=QUEUED).
@@ -164,15 +169,15 @@ describe("workspace switch and project menu", () => {
         reads(path).every((c) => c.query.get("projectId") === PROJECT_ID),
         path,
       ).toBe(true);
-    const code = screen.getByRole("region", { name: "Code" });
+    const code = screen.getByRole("main", { name: "Code" });
     expect(await within(code).findByText("acme/web")).toBeTruthy();
     expect(within(code).queryByText("acme/api")).toBeNull();
   });
 
   it("shows the decoy project's own empty state, never another project's data", async () => {
     board();
-    renderApp(`/?ws=dev&project=${OTHER_PROJECT_ID}`);
-    const code = await screen.findByRole("region", { name: "Code" });
+    renderApp(`/?ws=dev&project=${OTHER_PROJECT_ID}&area=code`);
+    const code = await screen.findByRole("main", { name: "Code" });
     expect(
       await within(code).findByText(
         "No repositories are bound to Decoy yet. Bind some in Settings → Workspaces.",
@@ -187,8 +192,8 @@ describe("workspace switch and project menu", () => {
         json({ items: c.query.get("projectId") === BIZ_PROJECT_ID ? [] : [{ id: "not-this-project" }] }),
     });
     const user = userEvent.setup();
-    renderApp(`/?ws=business&project=${BIZ_PROJECT_ID}`);
-    const biz = await screen.findByRole("region", { name: "Business" });
+    renderApp(`/?ws=business&project=${BIZ_PROJECT_ID}&area=business`);
+    const biz = await screen.findByRole("main", { name: "Business" });
     expect(await within(biz).findByText(/^No sources connected to Shop\./)).toBeTruthy();
     expect(
       calls

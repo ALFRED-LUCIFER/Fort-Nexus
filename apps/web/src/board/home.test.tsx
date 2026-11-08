@@ -17,6 +17,7 @@ import {
   project,
   renderApp,
   runner,
+  setViewport,
   workspaces,
 } from "../test/helpers.tsx";
 import { kpiDelta } from "./home/kpis.tsx";
@@ -196,27 +197,48 @@ function home(extra: Parameters<typeof mockFetch>[0] = {}) {
   });
 }
 
-const homeMain = () => screen.findByRole("main", { name: "Home" });
+const homeMain = () => screen.findByRole("main", { name: "Today" });
 const section = (name: string | RegExp) => screen.findByRole("region", { name });
 const card = (name: string) => screen.getByRole("heading", { level: 3, name }).closest("li")!;
+const INC = "abcdabcd-abcd-4bcd-8bcd-abcdabcdabcd";
 
-describe("Cofounder home", () => {
-  it("is what / shows, and the switch goes to the board", async () => {
-    home();
+describe("Today", () => {
+  it("lists an open incident first in Waiting on you and opens its drawer", async () => {
+    const base = summary();
+    home({
+      "GET /v1/home": () =>
+        json(
+          summary({
+            headline: { ...base.headline, decisionsWaiting: 5 },
+            decisions: {
+              ...base.decisions,
+              incidents: 1,
+              top: [
+                { ref: { kind: "INCIDENT", id: INC }, title: "checkout-api is down", expiresAt: null },
+                ...base.decisions.top,
+              ],
+            },
+          }),
+        ),
+    });
     const user = userEvent.setup();
-    renderApp("/", { view: "home" });
-    await homeMain();
-    expect(screen.queryByRole("main", { name: "Board" })).toBeNull();
-    await user.click(
-      within(screen.getByRole("group", { name: "View" })).getByRole("button", { name: "Board" }),
-    );
-    expect(await screen.findByRole("main", { name: "Board" })).toBeTruthy();
-    expect(screen.queryByRole("main", { name: "Home" })).toBeNull();
+    const { router } = renderApp(IN_PROJECT);
+    const waiting = await section("Waiting on you");
+    expect(
+      within(waiting).getByText("1 open incident · 1 approval · 1 plan · 1 job draft · 1 opportunity"),
+    ).toBeTruthy();
+    // The sidebar's Today counts every decision, incidents included.
+    const areas = screen.getByRole("navigation", { name: "Areas" });
+    expect(within(areas).getByRole("link", { name: /^Today/ }).textContent).toContain("5 waiting on you");
+    const row = within(waiting).getAllByRole("button")[0]!;
+    expect(row.textContent).toMatch(/^Incident\s*checkout-api is down$/);
+    await user.click(row);
+    await waitFor(() => expect(router.state.location.search.drawer).toBe(`incident:${INC}`));
   });
 
   it("reads the day for the project: date line, headline with its key phrase, prepared line", async () => {
     const calls = home();
-    renderApp(IN_PROJECT, { view: "home" });
+    renderApp(IN_PROJECT);
     const brief = await section(/^4 things are ready for you:\s*a push for #42\s*and 1 opportunity\.$/);
     expect(within(brief).getByText("a push for #42").tagName).toBe("EM");
     expect(within(brief).getByText("Wednesday 4 November · 14:32 · your cofounder’s read")).toBeTruthy();
@@ -229,7 +251,7 @@ describe("Cofounder home", () => {
 
   it("shows the four KPIs with units, worded deltas, sparklines and sources; no data is —, never 0", async () => {
     home();
-    renderApp(IN_PROJECT, { view: "home" });
+    renderApp(IN_PROJECT);
     const kpis = await section("Live · Home");
     expect(within(kpis).getAllByRole("listitem")).toHaveLength(4);
 
@@ -260,7 +282,7 @@ describe("Cofounder home", () => {
   it("lists what waits on the owner and opens each record's drawer", async () => {
     home();
     const user = userEvent.setup();
-    const { router } = renderApp(IN_PROJECT, { view: "home" });
+    const { router } = renderApp(IN_PROJECT);
     const waiting = await section("Waiting on you");
     expect(within(waiting).getByText("1 approval · 1 plan · 1 job draft · 1 opportunity")).toBeTruthy();
     const rows = within(waiting).getAllByRole("button");
@@ -285,69 +307,67 @@ describe("Cofounder home", () => {
     }
   });
 
-  it("says when nothing waits and nothing runs", async () => {
+  it("an empty section is one line: nothing waits, nothing runs, every agent idle, nothing noticed", async () => {
+    const base = summary();
     home({
       "GET /v1/home": () =>
         json(
           summary({
             decisions: { approvals: 0, plans: 0, jobDrafts: 0, opportunities: 0, incidents: 0, top: [] },
+            agents: base.agents.map((a) => ({ ...a, state: "IDLE" as const, doing: null, ref: null })),
             execution: [],
           }),
         ),
     });
-    renderApp(IN_PROJECT, { view: "home" });
+    renderApp(IN_PROJECT);
     const waiting = await section("Waiting on you");
-    expect(within(waiting).getByText("Nothing waits on you right now.")).toBeTruthy();
-    expect(within(waiting).getByText("nothing waiting")).toBeTruthy();
-    expect(within(await section("Execution")).getByText("Nothing running.")).toBeTruthy();
+    expect(waiting.textContent).toBe("Waiting on you· nothing right now");
+    expect((await section("Running now")).textContent).toBe(
+      `Running now· nothing running · ${AgentKey.options.length} agents idle`,
+    );
+    expect((await section("Noticed for you")).textContent).toMatch(/^Noticed for you· nothing yet/);
   });
 
-  it("Dev only: a hidden Business workspace hides its agents from Agent activity", async () => {
-    home({ "GET /v1/workspaces": () => json(workspaces([project()], [], false)) });
-    renderApp(IN_PROJECT, { view: "home" });
-    const agents = await section("Agent activity");
-    const rows = within(agents).getAllByRole("listitem");
-    expect(rows).toHaveLength(AgentKey.options.length - 1);
-    expect(rows.some((r) => r.textContent?.includes("Financial analyst"))).toBe(false);
-  });
-
-  it("shows every agent with its state in words, what it does and its est. cost; rows open drawers", async () => {
+  it("Running now: agents busy outside the listed runs, the others folded into an idle count", async () => {
     home();
     const user = userEvent.setup();
-    const { router } = renderApp(IN_PROJECT, { view: "home" });
-    const agents = await section("Agent activity");
-    const rows = within(agents).getAllByRole("listitem");
-    expect(rows).toHaveLength(AgentKey.options.length);
-    expect(within(agents).getByText("2 working · 1 waiting on you")).toBeTruthy();
-    const dev = rows.find((r) => r.textContent?.includes("Developer"))!;
-    expect(within(dev).getByText("working")).toBeTruthy();
-    expect(within(dev).getByText("$0.31 est. today")).toBeTruthy();
-    const qa = rows.find((r) => r.textContent?.includes("QA"))!;
-    expect(within(qa).getByText("waiting on you")).toBeTruthy();
-    expect(
-      within(rows.find((r) => r.textContent?.includes("Chief of Staff"))!).getByText("idle"),
-    ).toBeTruthy();
-
-    await user.click(within(dev).getByRole("button", { name: "Developer" }));
-    await waitFor(() => expect(router.state.location.search.drawer).toBe("agent:DEVELOPER"));
-    await act(() => router.navigate({ to: "/", search: { ws: "dev", project: PROJECT_ID } }));
-    await user.click(
-      within(await section("Agent activity")).getByRole("button", { name: "#42 cart rounding · test" }),
+    const { router } = renderApp(IN_PROJECT);
+    const running = await section("Running now");
+    expect(within(running).getByText("on your home machine · 2 working · 1 waiting on you")).toBeTruthy();
+    // The Developer works on JOB_ID, which is already a run row: it isn't listed twice.
+    const rows = within(within(running).getByRole("list", { name: "Agents at work" })).getAllByRole(
+      "listitem",
     );
-    await waitFor(() => expect(router.state.location.search.drawer).toBe(`run:${JOB_ID}`));
+    expect(rows.map((r) => r.textContent)).toEqual([
+      "QAQA#7 docs · reviewwaiting on you$0.18 est. today",
+      "ARAI researcherDeep dive · payout matchingworking$0.09 est. today",
+    ]);
+    expect(within(running).getByText(`${AgentKey.options.length - 3} agents idle`)).toBeTruthy();
+
+    await user.click(within(rows[1]!).getByRole("button", { name: "AI researcher" }));
+    await waitFor(() => expect(router.state.location.search.drawer).toBe("agent:AI_RESEARCHER"));
     await act(() => router.navigate({ to: "/", search: { ws: "dev", project: PROJECT_ID } }));
     await user.click(
-      within(await section("Agent activity")).getByRole("button", { name: "Deep dive · payout matching" }),
+      within(await section("Running now")).getByRole("button", { name: "Deep dive · payout matching" }),
     );
     await waitFor(() => expect(router.state.location.search.drawer).toBe(`research:${DIVE_ID}`));
+  });
+
+  it("Dev only: a hidden Business workspace's agents aren't counted", async () => {
+    home({ "GET /v1/workspaces": () => json(workspaces([project()], [], false)) });
+    renderApp(IN_PROJECT);
+    // 7 agents, 3 busy, the Financial analyst hidden.
+    expect(
+      within(await section("Running now")).getByText(`${AgentKey.options.length - 4} agents idle`),
+    ).toBeTruthy();
   });
 
   it("shows each run's stage in words on a six-stage bar, flags what needs the owner, and opens the run", async () => {
     home();
     const user = userEvent.setup();
-    const { router } = renderApp(IN_PROJECT, { view: "home" });
-    const exec = await section("Execution");
-    const runs = within(exec).getAllByRole("button");
+    const { router } = renderApp(IN_PROJECT);
+    const exec = await section("Running now");
+    const runs = within(within(exec).getByRole("list", { name: "Runs" })).getAllByRole("button");
     expect(runs).toHaveLength(3);
     expect(runs[0]!.textContent).toContain("Test · stage 4 of 6");
     expect(runs[0]!.textContent).not.toContain("needs you");
@@ -360,8 +380,8 @@ describe("Cofounder home", () => {
 
   it("shows the five results of the week with their sources, zeros included, AI spend as est.", async () => {
     home();
-    renderApp(IN_PROJECT, { view: "home" });
-    const results = await section("Results · this week");
+    renderApp(IN_PROJECT);
+    const results = await section("Results this week");
     const items = within(results).getAllByRole("listitem");
     expect(items.map((i) => i.textContent)).toEqual([
       "3draft PRs GitHub confirmed✓ source: GitHub · 7 days",
@@ -400,14 +420,14 @@ describe("Cofounder home", () => {
           ],
         }),
     });
-    renderApp("/", { view: "home" });
+    renderApp("/");
     expect(
       await screen.findByText(
         /prepared 14:32 · 3 sources · 4 decisions waiting on you · all projects · read-only/,
       ),
     ).toBeTruthy();
     expect(calls.filter((c) => c.path === "/v1/home").every((c) => !c.query.has("projectId"))).toBe(true);
-    const noticed = await section("Your cofounder noticed");
+    const noticed = await section("Noticed for you");
     const cardEl = await within(noticed).findByRole("article", { name: "Restore the payment timeout" });
     expect((within(cardEl).getByRole("button", { name: /Approve/ }) as HTMLButtonElement).disabled).toBe(
       true,
@@ -456,7 +476,7 @@ describe("Cofounder home", () => {
           previous: null,
         }),
     });
-    renderApp(IN_SHOP, { view: "home" });
+    renderApp(IN_SHOP);
     const kpis = await section("Live · Shop");
     expect(await within(kpis).findByRole("button", { name: /Paid orders today: 184, partial/ })).toBeTruthy();
     expect(within(kpis).getByRole("button", { name: /Failed payments today: no data/ })).toBeTruthy();
@@ -469,7 +489,7 @@ describe("Cofounder home", () => {
   it("Business project without a connector: an honest empty card that opens the Business drawer", async () => {
     home({ "GET /v1/business/connectors": () => json({ items: [] }) });
     const user = userEvent.setup();
-    const { router } = renderApp(IN_SHOP, { view: "home" });
+    const { router } = renderApp(IN_SHOP);
     const kpis = await section("Live · Shop");
     expect(await within(kpis).findByText(/No sources connected to Shop/)).toBeTruthy();
     await user.click(within(kpis).getByRole("button", { name: "Connect a source" }));
@@ -487,15 +507,15 @@ describe("Cofounder home", () => {
       },
     });
     const user = userEvent.setup();
-    renderApp(IN_PROJECT, { view: "home" });
+    renderApp(IN_PROJECT);
     const main = await homeMain();
     expect(await within(main).findByText("Loading your cofounder’s read…")).toBeTruthy();
     release();
     expect((await within(main).findByRole("alert")).textContent).toBe("NEXUS can't read the home summary.");
-    expect(within(main).queryByRole("region", { name: "Agent activity" })).toBeNull();
+    expect(within(main).queryByRole("region", { name: "Running now" })).toBeNull();
     fail = false;
     await user.click(within(main).getByRole("button", { name: "Try again" }));
-    expect(await section("Agent activity")).toBeTruthy();
+    expect(await section("Running now")).toBeTruthy();
   });
 
   it("keeps the last read when a refresh fails, and says so", async () => {
@@ -503,8 +523,8 @@ describe("Cofounder home", () => {
     home({
       "GET /v1/home": () => (fail ? apiError(503, "INTERNAL", "Down for a moment.") : json(summary())),
     });
-    const { queryClient } = renderApp(IN_PROJECT, { view: "home" });
-    await section("Agent activity");
+    const { queryClient } = renderApp(IN_PROJECT);
+    await section("Running now");
     fail = true;
     await act(() => queryClient.refetchQueries({ queryKey: keys.home(PROJECT_ID) }));
     expect(
@@ -512,13 +532,13 @@ describe("Cofounder home", () => {
         "role",
       ),
     ).toBe("status");
-    expect(screen.getByRole("region", { name: "Agent activity" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Running now" })).toBeTruthy();
   });
 
   it("offline: waits and says so instead of loading forever", async () => {
     home();
-    const { router } = renderApp(IN_PROJECT, { view: "home" });
-    await section("Agent activity");
+    const { router } = renderApp(IN_PROJECT);
+    await section("Running now");
     onlineManager.setOnline(false);
     try {
       await act(() => router.navigate({ to: "/", search: { ws: "dev", project: OTHER_PROJECT_ID } }));
@@ -529,32 +549,32 @@ describe("Cofounder home", () => {
     } finally {
       onlineManager.setOnline(true);
     }
-    expect(await section("Agent activity")).toBeTruthy();
+    expect(await section("Running now")).toBeTruthy();
   });
 
-  it("is a landmarked page of headed sections, lists and status text", async () => {
+  it("is a landmarked page of headed sections in the day's order, lists and status text", async () => {
+    setViewport(1440);
     home();
-    renderApp(IN_PROJECT, { view: "home" });
+    renderApp(IN_PROJECT);
     const main = await homeMain();
-    await section("Agent activity");
+    await section("Running now");
     expect(
       within(main)
         .getAllByRole("heading", { level: 2 })
         .map((h) => h.textContent),
     ).toEqual([
       "4 things are ready for you: a push for #42 and 1 opportunity.",
-      "Live · Home",
       "Waiting on you",
+      "Running now",
       "Your repositories · Home",
-      "Your cofounder noticed",
-      "Agent activity",
-      "Execution",
-      "Results · this week",
+      "Noticed for you",
+      "Live · Home",
+      "Results this week",
     ]);
-    for (const name of ["Waiting on you", "Agent activity", "Execution", "Results · this week"])
-      expect(within(await section(name)).getByRole("list")).toBeTruthy();
-    // The Cofounder panel sits beside the page, not inside its main landmark.
-    expect(main.contains(screen.getByRole("complementary"))).toBe(false);
+    for (const name of ["Waiting on you", "Running now", "Results this week"])
+      expect(within(await section(name)).getAllByRole("list").length).toBeGreaterThan(0);
+    // The docked Cofounder panel sits beside the page, not inside its main landmark.
+    expect(main.contains(screen.getByRole("complementary", { name: "Cofounder" }))).toBe(false);
   });
 });
 

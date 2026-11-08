@@ -204,7 +204,7 @@ function Card({ o, onOpen }: { o: Opportunity; onOpen: (id: string, focus?: "pre
   return (
     <article
       aria-labelledby={titleId}
-      className="flex h-full w-[364px] flex-col gap-2.5 rounded-[20px] border border-line bg-card p-[18px] shadow-nx"
+      className="flex h-full w-[min(364px,78vw)] flex-col gap-2.5 rounded-[20px] border border-line bg-card p-[18px] shadow-nx"
     >
       <div className="flex items-center justify-between gap-2">
         <KindTag kind={o.kind} />
@@ -330,7 +330,7 @@ function Detail({ o, focus }: { o: Opportunity; focus?: "preview" }) {
         <CreatedLink issue={o.issue} />
       ) : o.status === "DISMISSED" ? (
         <p role="status" className="m-0 text-[13px] text-ink2">
-          Dismissed. It no longer shows on the board.
+          Dismissed. It no longer shows on Today.
         </p>
       ) : (
         <>

@@ -14,7 +14,7 @@ import { api, keys } from "../lib/api.ts";
 import { clock } from "../lib/queries.ts";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { PICK_PROJECT, useScope } from "./scope.tsx";
-import { EmptyZone, type ZoneProps } from "./zones.tsx";
+import { EmptyZone, nodeGrid } from "./zones.tsx";
 
 // EPIC AGT registry, FR-WKS-04/05 versioned profiles and the C-04 autonomy dial. The server resolves and caps every
 // profile; this UI only shows what it says and saves new versions.
@@ -57,20 +57,19 @@ function AgentsState({ query, projectId }: { query: UseQueryResult<AgentSummary[
   if (!projectId)
     return (
       <EmptyZone>
-        Pick a project in the scope menu (bottom left) to see its agents: each project can tune their tools
-        and caps.
+        Pick a project in the scope menu to see its agents: each project can tune their tools and caps.
       </EmptyZone>
     );
   return <EmptyZone>{query.error ? query.error.message : "Loading…"}</EmptyZone>;
 }
 
-function AgentCard({ a, onOpen, wide }: { a: AgentSummary; onOpen: (k: AgentKey) => void; wide?: boolean }) {
+function AgentCard({ a, onOpen }: { a: AgentSummary; onOpen: (k: AgentKey) => void }) {
   const s = a.effective.settings;
   return (
     <button
       type="button"
       onClick={() => onOpen(a.agent)}
-      className={`flex flex-col gap-2 rounded-[20px] border border-line bg-card px-4 py-3.5 text-left shadow-nx transition-shadow hover:shadow-[0_0_0_2px_var(--teal),var(--shadow)] ${wide ? "w-[220px]" : "w-full"}`}
+      className="flex h-full w-full flex-col gap-2 rounded-[20px] border border-line bg-card px-4 py-3.5 text-left shadow-nx transition-shadow hover:shadow-[0_0_0_2px_var(--teal),var(--shadow)]"
     >
       <span className="flex w-full items-center gap-2">
         <span
@@ -88,84 +87,58 @@ function AgentCard({ a, onOpen, wide }: { a: AgentSummary; onOpen: (k: AgentKey)
   );
 }
 
-/** Domains grouping: the Agents zone's cards. */
-export function AgentsZone({
-  query,
-  projectId,
-  onOpen,
-  hide,
-}: {
+interface AgentsProps {
   query: UseQueryResult<AgentSummary[]>;
   projectId?: string;
   onOpen: (k: AgentKey) => void;
   /** Agents of a hidden workspace. */
   hide?: ReadonlySet<AgentKey>;
-}) {
+}
+
+/** The Agents area's cards. */
+export function AgentsZone({ query, projectId, onOpen, hide }: AgentsProps) {
   if (!query.data) return <AgentsState query={query} projectId={projectId} />;
   return (
-    <ul aria-label="Agents" className="m-0 flex list-none flex-wrap content-start gap-[30px] p-0">
+    <ul aria-label="Agents" className={nodeGrid}>
       {query.data
         .filter((a) => !hide?.has(a.agent))
         .map((a) => (
           <li key={a.agent}>
-            <AgentCard a={a} onOpen={onOpen} wide />
+            <AgentCard a={a} onOpen={onOpen} />
           </li>
         ))}
     </ul>
   );
 }
 
-const LANE_TINT = ["rgba(127,120,105,.09)", "rgba(127,120,105,.05)"];
-
-/** Agents grouping: one swim-lane per agent with its card, effective autonomy and tools (plan steps join later). */
-export function agentLanes(
-  query: UseQueryResult<AgentSummary[]>,
-  projectId: string | undefined,
-  onOpen: (k: AgentKey) => void,
-  hide?: ReadonlySet<AgentKey>,
-): (Omit<ZoneProps, "dim" | "children"> & { body: ReactNode })[] {
-  if (!query.data)
-    return [
-      {
-        id: "lanes",
-        label: "Agents",
-        sub: "",
-        x: 40,
-        y: 40,
-        w: 2000,
-        h: 400,
-        tint: LANE_TINT[0]!,
-        body: <AgentsState query={query} projectId={projectId} />,
-      },
-    ];
-  return query.data
-    .filter((a) => !hide?.has(a.agent))
-    .map((a, i) => ({
-      id: `lane-${a.agent}`,
-      label: a.label,
-      sub: "",
-      x: 40 + i * 290,
-      y: 40,
-      w: 270,
-      h: 2260,
-      tint: LANE_TINT[i % 2]!,
-      body: (
-        <div className="flex flex-col gap-4">
-          <AgentCard a={a} onOpen={onOpen} />
-          <dl className="m-0 flex flex-col gap-1 font-mono text-[11.5px] leading-[1.45] text-ink2">
-            <dt className="kicker">Autonomy</dt>
-            <dd className="m-0 mb-2">{AUTONOMY[a.effective.settings.autonomy].label}</dd>
-            <dt className="kicker">Tools</dt>
-            {a.effective.settings.tools.length === 0 && <dd className="m-0">none</dd>}
-            {a.effective.settings.tools.map((t) => (
-              <dd key={t} className="m-0 break-all">
-                {t} · {TOOL_RISK[t]}
-              </dd>
-            ))}
-          </dl>
-        </div>
-      ),
-    }));
+/** The Agents area "By agent": each agent's card with its effective autonomy and every allowed tool and its risk. */
+export function AgentsByAgent({ query, projectId, onOpen, hide }: AgentsProps) {
+  if (!query.data) return <AgentsState query={query} projectId={projectId} />;
+  return (
+    <ul
+      aria-label="Agents by agent"
+      className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4 p-0"
+    >
+      {query.data
+        .filter((a) => !hide?.has(a.agent))
+        .map((a) => (
+          <li key={a.agent} className="flex flex-col gap-3 rounded-[24px] border border-hair p-3">
+            <AgentCard a={a} onOpen={onOpen} />
+            <dl className="m-0 flex flex-col gap-1 px-1 font-mono text-[11.5px] leading-[1.45] text-ink2">
+              <dt className="kicker">Autonomy</dt>
+              <dd className="m-0 mb-2">{AUTONOMY[a.effective.settings.autonomy].label}</dd>
+              <dt className="kicker">Tools</dt>
+              {a.effective.settings.tools.length === 0 && <dd className="m-0">none</dd>}
+              {a.effective.settings.tools.map((t) => (
+                <dd key={t} className="m-0 break-all">
+                  {t} · {TOOL_RISK[t]}
+                </dd>
+              ))}
+            </dl>
+          </li>
+        ))}
+    </ul>
+  );
 }
 
 /** The `agent:<KEY>` drawer: effective profile, autonomy dial, tools, limits, history and Save (FR-WKS-04/05). */
