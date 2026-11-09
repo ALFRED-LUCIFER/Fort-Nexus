@@ -270,7 +270,7 @@ describe("DEV_ISSUE_TO_PR job", () => {
     expect(rules).toContain("smallest change that satisfies the acceptance criteria");
     expect(rules).toContain("Do not commit, push");
     expect(rules).toContain("Never read or modify .git");
-    expect(rules).toContain("offline");
+    expect(rules).toContain("NEXUS will run them afterwards");
     expect(rules).not.toContain("IGNORE ALL RULES");
     expect(rest!.endsWith(`\n${fence}>>>`)).toBe(true);
     expect(JSON.parse(rest!.slice(0, -`\n${fence}>>>`.length))).toEqual({
