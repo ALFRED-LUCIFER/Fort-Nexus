@@ -1,6 +1,6 @@
 # Self-healing runs and stronger coding agents
 
-Status: approved by the owner on 2026-11-09 ("consider this also and start building"). PRD: FR-RUN-06, FR-DEV-02/05/06, FR-AGT-02/03/06/09.
+Status: built on `feat/self-healing-runs` (2026-11-09), approved by the owner ("consider this also and start building"). Not yet merged; Talk integration for feedback not built. PRD: FR-RUN-06, FR-DEV-02/05/06, FR-AGT-02/03/06/09.
 
 ## Why
 

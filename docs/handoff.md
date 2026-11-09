@@ -2,7 +2,18 @@
 
 Read this first in a new session, then `CLAUDE.md`, `docs/mvp-tracker.md` and `docs/p1-tracker.md`.
 
-## Latest (2026-11-09)
+## Latest (2026-11-09, self-healing runs)
+
+Branch `feat/self-healing-runs` (spec `docs/specs/self-healing-runs.md`), not yet merged.
+
+- **A run repairs itself:** after the first attempt the Developer gets up to 3 repair rounds, each ending in NEXUS's own test run on the exact tree. **Nothing is pushed or approved unless that run passed**; the server enforces it. QA now reviews the change against the issue before approval (an opinion, never an authorization).
+- **Keep fixing:** a stuck job reports plainly what is stuck; the owner can say Keep fixing, with an optional note. The owner can also send feedback to the agent while it works (run drawer: rounds, phases, QA, stuck report, feedback box).
+- **Sandbox:** working `pnpm` and `yarn` for nested script calls. Image is now `nexus-sandbox:4`; build it on the machine with `pnpm --filter @nexus/runner sandbox:build` (`node scripts/nexus.mjs up` also does it). Already built on this machine.
+- **Migration `0017`.** Restart the API before the runner: heartbeats and uploads changed, an older API refuses them.
+- The Developer's profile now applies to every owner-started job, and its prompt follows repository conventions.
+- **Not built:** the Talk integration for feedback (feedback is sent from the run drawer only).
+
+## Earlier on 2026-11-09
 
 - **Settings → Remote access is live and read-only:** the runner reports Tailscale's state about once a minute (`apps/runner/src/remote-access.ts`); the API can't ask, it runs in a container. Changes stay in the home machine's terminal.
 - **Run again** on finished jobs: spec `docs/specs/run-again.md`. A new job linked by `retryOfJobId`, same agent. `job.agent` is only an attribution label today (the runner never sees it), so there is deliberately no agent picker.
