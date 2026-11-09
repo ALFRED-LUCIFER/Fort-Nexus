@@ -74,9 +74,24 @@ describe("checkIntegrity", () => {
       "@pytest.mark.skip\ndef test_a(): pass",
       "test.skip('a',()=>{})",
       "xdescribe('a',()=>{})",
+      "it.skipIf(c)('a',()=>{})",
+      't.Skipf("x")',
+      'b.Skip("x")',
+      "it.todo('a')",
+      "test.fixme('a')",
+      'pytest.skip("x")',
+      'pytest.importorskip("x")',
+      'self.skipTest("x")',
+      "it.skip.each([1])('a',()=>{})",
     ]) {
       const r = await checkIntegrity([file("src/a.test.ts", `ok\n${m}`)], baseOf({ "src/a.test.ts": "ok" }));
       expect(r.clean, m).toBe(false);
+    }
+  });
+  it("does not count ordinary property access", async () => {
+    for (const t of ["expect(result.skipped).toBe(0)", "this.todo = []", "const only = x.only;"]) {
+      const r = await checkIntegrity([file("a.test.ts", `ok\n${t}`)], baseOf({ "a.test.ts": "ok" }));
+      expect(r.clean, t).toBe(true);
     }
   });
   it("ignores a marker that already existed at base, flags an extra one", async () => {

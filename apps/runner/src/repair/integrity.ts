@@ -21,7 +21,7 @@ const CONFIG_PREFIXES = [
 
 // Skip and focus markers. A marker counts only when the file has more of it than the base file.
 const MARKERS: RegExp[] = [
-  /\.(?:only|skip\w*|todo|fixme)\b/g,
+  /\.(?:only|skip\w*|todo|fixme)\s*(?:\(|\.each\b|`)/g,
   /(?<![\w.])(?:xit|xdescribe|xtest|fit|fdescribe|ftest)\s*\(/g,
   /@(?:Ignore|Disabled)\b/g,
   /\[Ignore\b/g,
