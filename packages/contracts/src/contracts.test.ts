@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  PushDraftPrAction,
+  UploadChangesetRequest,
   AgentProfileSettings,
   MetricDictionary,
   toolForAction,
@@ -23,6 +25,10 @@ import {
   TERMINAL_JOB_STATUSES,
   canTransition,
   runnerStatus,
+  QaReview,
+  JobFeedbackRequest,
+  FEEDBACK_MAX,
+  Verification,
 } from "./index.ts";
 
 const PID = "0190f0a0-0000-7000-8000-000000000001";
@@ -281,5 +287,55 @@ describe("researcher (P1 wave 5)", () => {
       ProposedAction.safeParse({ type: "research.deep_dive", request: { ...request, sh: "x" }, preview: "p" })
         .success,
     ).toBe(false);
+  });
+});
+
+describe("self-healing run contracts", () => {
+  it("caps QA defects at 20", () => {
+    const defect = { severity: "minor" as const, file: null, evidence: "x" };
+    const review = (n: number) => ({
+      status: "reviewed" as const,
+      verdict: "defects" as const,
+      defects: Array.from({ length: n }, () => defect),
+      reason: null,
+    });
+    expect(QaReview.safeParse(review(20)).success).toBe(true);
+    expect(QaReview.safeParse(review(21)).success).toBe(false);
+  });
+
+  it("rejects feedback over the limit", () => {
+    expect(JobFeedbackRequest.safeParse({ text: "a".repeat(FEEDBACK_MAX) }).success).toBe(true);
+    expect(JobFeedbackRequest.safeParse({ text: "a".repeat(FEEDBACK_MAX + 1) }).success).toBe(false);
+  });
+
+  it.each([
+    ["upload", () => UploadChangesetRequest.shape.notes],
+    ["push action", () => PushDraftPrAction.shape.notes],
+  ] as const)("caps the %s notes at 5 entries of 500 characters, and they stay optional", (_name, schema) => {
+    const notes = schema();
+    expect(notes.safeParse(undefined).success).toBe(true);
+    expect(notes.safeParse(Array.from({ length: 5 }, () => "a".repeat(500))).success).toBe(true);
+    expect(notes.safeParse(Array.from({ length: 6 }, () => "a")).success).toBe(false);
+    expect(notes.safeParse(["a".repeat(501)]).success).toBe(false);
+  });
+
+  it("lets a verifying run go back to running", () => {
+    expect(canTransition("VERIFYING", "RUNNING")).toBe(true);
+  });
+
+  it("still parses a stored verification without failureKind", () => {
+    const stored = {
+      status: "passed",
+      reason: null,
+      source: "package.json",
+      install: null,
+      test: ["pnpm", "test"],
+      exitCode: 0,
+      durationMs: 10,
+      outputTail: "",
+    };
+    expect(Verification.safeParse(stored).success).toBe(true);
+    expect(Verification.safeParse({ ...stored, failureKind: "environment" }).success).toBe(true);
+    expect(Verification.safeParse({ ...stored, failureKind: "nope" }).success).toBe(false);
   });
 });

@@ -29,6 +29,10 @@ export type GitOptions = {
   timeoutMs?: number;
   /** Exact values masked in the error message. */
   secrets?: readonly string[];
+  /** Largest stdout accepted, in bytes (default Node's 1 MiB). */
+  maxBuffer?: number;
+  /** Return stdout exactly as git wrote it (default: trimmed). */
+  raw?: boolean;
 };
 
 export const git = (args: string[], opts: GitOptions = {}) =>
@@ -36,14 +40,52 @@ export const git = (args: string[], opts: GitOptions = {}) =>
     execFile(
       "git",
       args,
-      { env: { ...GIT_ENV, ...opts.env }, timeout: opts.timeoutMs ?? 120_000 },
+      {
+        env: { ...GIT_ENV, ...opts.env },
+        timeout: opts.timeoutMs ?? 120_000,
+        ...(opts.maxBuffer ? { maxBuffer: opts.maxBuffer } : {}),
+      },
       (err, stdout, stderr) => {
-        if (!err) return resolve(stdout.trim());
+        if (!err) return resolve(opts.raw ? stdout : stdout.trim());
         const msg = `git ${args.join(" ")}: ${stderr.trim() || err.message}`;
         reject(new Error(redact((opts.secrets ?? []).reduce((t, s) => t.replaceAll(s, "[REDACTED]"), msg))));
       },
     ),
   );
+
+const TREE_LIST_MAX_BUFFER = 256 * 1024 * 1024;
+
+/**
+ * Removes any `.git` at a path `baseRef` records as a gitlink. For such a path git starts a child `git status` inside
+ * the directory, and that child obeys the nested repo's own config, so a repo planted there runs its commands on the
+ * host. Run before any host git reads the worktree, and only once no container can still write to it.
+ */
+export async function removePlantedRepos(
+  worktreePath: string,
+  gitDir: string,
+  baseRef: string,
+): Promise<void> {
+  const listed = await git(
+    [`--git-dir=${gitDir}`, "-c", `core.hooksPath=${devNull}`, "ls-tree", "-r", "-z", baseRef],
+    { timeoutMs: 300_000, maxBuffer: TREE_LIST_MAX_BUFFER },
+  );
+  for (const entry of listed.split("\0")) {
+    const path = /^160000 commit [0-9a-f]+\t(.+)$/s.exec(entry)?.[1];
+    if (!path) continue;
+    const parts = path.split("/");
+    if (parts.some((p) => p === "" || p === "." || p === "..")) continue;
+    let dir: string | undefined = worktreePath;
+    for (const part of parts) {
+      dir = join(dir, part);
+      // lstat: a symlink is not a directory, so the walk ends there rather than following it.
+      if (!(await lstat(dir).catch(() => undefined))?.isDirectory()) {
+        dir = undefined;
+        break;
+      }
+    }
+    if (dir) await rm(join(dir, ".git"), { recursive: true, force: true });
+  }
+}
 
 const inside = (root: string, p: string) => p === root || p.startsWith(root + sep);
 
@@ -75,10 +117,12 @@ export function createWorkspaces(dataDir: string) {
   const roots = async () => {
     await mkdir(join(dataDir, "repos"), { recursive: true, mode: 0o700 });
     await mkdir(join(dataDir, "work"), { recursive: true, mode: 0o700 });
+    await mkdir(join(dataDir, "deps-cache"), { recursive: true, mode: 0o700 });
     const root = await realpath(dataDir);
     return {
       repos: await resolveInside(root, join(root, "repos"), "repos dir"),
       work: await resolveInside(root, join(root, "work"), "work dir"),
+      depsCache: await resolveInside(root, join(root, "deps-cache"), "deps cache dir"),
     };
   };
 
@@ -191,10 +235,19 @@ export function createWorkspaces(dataDir: string) {
     });
   }
 
-  /** Deletes work/<jobId> and its registration in the owning mirror. The branch stays in the mirror. */
+  /** An empty package-manager cache for this job, deleted with its worktree. */
+  async function prepareDepsCache(jobId: string): Promise<string> {
+    assertJobId(jobId);
+    const path = join((await roots()).depsCache, jobId);
+    await rm(path, { recursive: true, force: true });
+    await mkdir(path);
+    return path;
+  }
+
+  /** Deletes work/<jobId>, its dependency cache and its registration in the owning mirror. The branch stays in the mirror. */
   async function removeWorktree(jobId: string): Promise<void> {
     assertJobId(jobId);
-    const { repos, work } = await roots();
+    const { repos, work, depsCache } = await roots();
     // Never run git inside the worktree: after a run its content, including the .git pointer file, is untrusted.
     await rm(join(work, jobId), { recursive: true, force: true });
     for (const owner of await readdir(repos))
@@ -203,6 +256,7 @@ export function createWorkspaces(dataDir: string) {
         if (mirror && existsSync(join(mirror, "worktrees", jobId)))
           await withMirrorLock(mirror, () => git(["-C", mirror, "worktree", "prune"]));
       }
+    await rm(join(depsCache, jobId), { recursive: true, force: true });
   }
 
   /**
@@ -221,5 +275,5 @@ export function createWorkspaces(dataDir: string) {
     return removed;
   }
 
-  return { mirrorPath, fetchMirror, prepareWorktree, removeWorktree, pruneStale };
+  return { mirrorPath, fetchMirror, prepareWorktree, prepareDepsCache, removeWorktree, pruneStale };
 }

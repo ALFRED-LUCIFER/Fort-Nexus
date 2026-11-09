@@ -4,6 +4,8 @@ import {
   ApiError,
   AppendEventsRequest,
   AppendEventsResponse,
+  ClaimFeedbackRequest,
+  ClaimFeedbackResponse,
   HeartbeatRequest,
   HeartbeatResponse,
   LeaseResponse,
@@ -35,6 +37,10 @@ export class ApiCallError extends Error {
     this.retryable = retryable;
   }
 }
+
+/** This runner no longer holds the job: anything it would still report is refused. */
+export const isStaleLease = (err: unknown): boolean =>
+  err instanceof ApiCallError && err.code === "STALE_LEASE";
 
 export const isAuthError = (err: unknown): boolean =>
   err instanceof ApiCallError && (err.status === 401 || err.status === 403);
@@ -109,6 +115,14 @@ export function createApi(opts: { baseUrl: string; token?: string; fetch?: typeo
         `/v1/runner/jobs/${encodeURIComponent(jobId)}/events`,
         AppendEventsRequest.parse(req),
         AppendEventsResponse,
+        signal,
+      ),
+    // Atomic on the server: a retry for the same round returns the same items.
+    claimFeedback: (jobId: string, req: ClaimFeedbackRequest, signal?: AbortSignal) =>
+      post(
+        `/v1/runner/jobs/${encodeURIComponent(jobId)}/feedback/claim`,
+        ClaimFeedbackRequest.parse(req),
+        ClaimFeedbackResponse,
         signal,
       ),
     uploadChangeset: (jobId: string, req: UploadChangesetRequest, signal?: AbortSignal) =>

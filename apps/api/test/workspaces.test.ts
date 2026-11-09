@@ -129,7 +129,12 @@ async function pendingApproval(projectId: string) {
         job.id,
         SNAPSHOT,
         [],
-        { stats: { added: 0, removed: 0 }, agentSummary: "", verification: NOT_VERIFIED },
+        {
+          stats: { added: 0, removed: 0 },
+          agentSummary: "",
+          verification: NOT_VERIFIED,
+          integrity: { clean: true, problems: [] },
+        },
         "0".repeat(64),
       ),
       actionHash: "f".repeat(64),

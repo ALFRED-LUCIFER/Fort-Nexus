@@ -19,6 +19,7 @@ import {
   type RunEventType,
   type RunStage,
 } from "@nexus/contracts";
+import { resolveAgentProfile } from "./agents/service.ts";
 import { audit } from "./audit.ts";
 import type { Db, Tx } from "./db/index.ts";
 import { approvals, jobs, runEventBatches, runEvents, runners } from "./db/schema.ts";
@@ -48,6 +49,9 @@ export type NewEvent = {
   payload?: Record<string, unknown>;
   occurredAt?: Date;
 };
+
+/** A `test.completed` event with `only` is NEXUS's check of the base or of the tests alone, not the job's result. */
+export const notBaselineRun = sql`coalesce(${runEvents.payload}->>'only', '') not in ('base', 'red')`;
 
 export const defaultJobAgent = (t: JobType): AgentKey => (t === "DEV_ISSUE_TO_PR" ? "DEVELOPER" : "DEVOPS");
 
@@ -202,6 +206,40 @@ export async function failJob(
 // ── Owner operations ──
 // Creation and lists are scoped by project (FR-WKS-02); single-object reads stay owner-scoped and return projectId.
 
+/**
+ * Every issue job the owner (or an automation, draft or Talk on the owner's behalf) starts follows the Developer's
+ * effective profile: the budget cap and the model. Only an approved plan's steps keep their own behaviour; their
+ * idempotency keys are `plan:<id>:<index>`. The one predicate for both the cap and the lease's model.
+ */
+export const usesDeveloperProfile = (idempotencyKey: string) => !idempotencyKey.startsWith("plan:");
+
+/** The `plan:` namespace is the plan executor's: a key a caller supplies there would skip the profile. */
+export function assertCallerKey(idempotencyKey: string): string {
+  if (!usesDeveloperProfile(idempotencyKey))
+    throw new HttpError(400, "VALIDATION_FAILED", "Idempotency-Key can't start with plan:", {
+      field: "idempotency-key",
+    });
+  return idempotencyKey;
+}
+
+/** A direct issue job's budget never exceeds what the Developer's effective profile allows (spec §6). */
+async function withProfileLimits(
+  db: Db,
+  input: { ownerId: string; body: CreateJobRequest; idempotencyKey: string },
+): Promise<CreateJobRequest> {
+  const { body } = input;
+  if (!usesDeveloperProfile(input.idempotencyKey) || body.jobType !== "DEV_ISSUE_TO_PR") return body;
+  const { settings } = await resolveAgentProfile(db, input.ownerId, body.projectId, "DEVELOPER");
+  return {
+    ...body,
+    budget: {
+      ...body.budget,
+      maxCostUsd: Math.min(body.budget.maxCostUsd, settings.maxCostUsdPerTask),
+      maxTurns: Math.min(body.budget.maxTurns, settings.maxTurns),
+    },
+  };
+}
+
 export async function createJob(
   db: Db,
   input: {
@@ -215,14 +253,32 @@ export async function createJob(
     pinIssue: (body: Extract<CreateJobRequest, { jobType: "DEV_ISSUE_TO_PR" }>) => Promise<IssueSnapshot>;
     /** Trusted callers only (plan steps, job drafts); otherwise the job type's default agent. */
     agent?: AgentKey;
-    /** `retryJob` only: the finished job this one reruns. */
+    /** `retryJob` and `keepFixingJob` only: the finished job this one reruns. */
     retryOfJobId?: string;
+    /**
+     * `keepFixingJob` only: the new job starts from the original's issue snapshot (never pinned again), continues its
+     * stored changeset unless `beforeCreate` says it has nothing to continue (NEEDS_INFO), and carries the owner's note. `beforeCreate` runs in the creating
+     * transaction (not on a replay) and may refuse it.
+     */
+    keepFixing?: {
+      snapshot: IssueSnapshot;
+      note: string | null;
+      /** `note`: what the new job's agent reads, when it is more than the owner's own words. */
+      beforeCreate: (tx: Tx) => Promise<{ continues: boolean; note?: string }>;
+    };
   },
 ): Promise<JobRow> {
   // A rerun is identified by the job it reruns: its body is derived again on every call, so a runner pin dropped
-  // between two calls can't turn a replay into a key conflict.
+  // between two calls can't turn a replay into a key conflict. Keep fixing hashes differently, so a key used for one
+  // never replays as the other.
   const requestHash = sha256(
-    canonical(input.retryOfJobId ? { retryOfJobId: input.retryOfJobId } : input.body),
+    canonical(
+      input.keepFixing
+        ? { keepFixingOf: input.retryOfJobId, note: input.keepFixing.note }
+        : input.retryOfJobId
+          ? { retryOfJobId: input.retryOfJobId }
+          : input.body,
+    ),
   );
   const byKey = and(eq(jobs.initiatorId, input.ownerId), eq(jobs.idempotencyKey, input.idempotencyKey));
   const replay = (existing: JobRow) => {
@@ -237,15 +293,20 @@ export async function createJob(
 
   const [existing] = await db.select().from(jobs).where(byKey);
   if (existing) return replay(existing);
-  const body = input.body;
   // Before GitHub is called; both re-checked under lock below.
-  await assertProjectAllowsJob(db, input.ownerId, body);
+  await assertProjectAllowsJob(db, input.ownerId, input.body);
+  const body = await withProfileLimits(db, input);
   await assertCanStart(db, body, input.timezone);
-  const snapshot = body.jobType === "DEV_ISSUE_TO_PR" ? await input.pinIssue(body) : null;
+  const snapshot = input.keepFixing
+    ? input.keepFixing.snapshot
+    : body.jobType === "DEV_ISSUE_TO_PR"
+      ? await input.pinIssue(body)
+      : null;
 
   return db.transaction(async (tx) => {
     await assertProjectAllowsJob(tx, input.ownerId, body);
     await assertCanStart(tx, body, input.timezone);
+    const kept = await input.keepFixing?.beforeCreate(tx);
     const target = input.body.runnerId;
     if (target) {
       const [r] = await tx
@@ -265,6 +326,8 @@ export async function createJob(
         jobType: body.jobType,
         agent: input.agent ?? defaultJobAgent(body.jobType),
         retryOfJobId: input.retryOfJobId ?? null,
+        continuesChangeset: kept?.continues ?? false,
+        ownerNote: kept?.note ?? input.keepFixing?.note ?? null,
         status: "QUEUED",
         // RUNNER_DIAGNOSTIC: read-only fixed argv. DEV_ISSUE_TO_PR: sandboxed edits; the push is a separate R2 approval.
         riskTier: snapshot ? "R1" : "R0",
@@ -292,6 +355,7 @@ export async function createJob(
           jobType: job.jobType,
           request: job.request,
           ...(input.retryOfJobId ? { retryOfJobId: input.retryOfJobId } : {}),
+          ...(kept ? { keepFixing: true, continuesChangeset: kept.continues } : {}),
           // FR-DEV-01: missing acceptance criteria are recorded, not blocking.
           ...(snapshot
             ? { issue: snapshot, missingAcceptanceCriteria: snapshot.acceptanceCriteria.length === 0 }
@@ -303,7 +367,7 @@ export async function createJob(
     ]);
     await audit(tx, {
       actor,
-      action: input.retryOfJobId ? "job.retry" : "job.create",
+      action: input.keepFixing ? "job.keep_fixing" : input.retryOfJobId ? "job.retry" : "job.create",
       resourceType: "job",
       resourceId: job.id,
       correlationId: input.correlationId,
@@ -312,6 +376,7 @@ export async function createJob(
         projectId: job.projectId,
         targetRunnerId: target ?? null,
         ...(input.retryOfJobId ? { retryOfJobId: input.retryOfJobId } : {}),
+        ...(kept ? { continuesChangeset: kept.continues } : {}),
         ...(body.jobType === "RUNNER_DIAGNOSTIC"
           ? { preset: body.preset }
           : {
@@ -561,11 +626,12 @@ export async function appendRunnerEvents(
   const forbidden = body.events.find((e) => SERVER_ONLY_EVENTS.has(e.type));
   if (forbidden) throw new HttpError(400, "VALIDATION_FAILED", `Runners cannot emit ${forbidden.type}`);
   const t = body.transition;
-  if (t && (t.to === "COMPLETED" || t.to === "FAILED") !== (t.outcome !== undefined))
+  // A FAILED may have only a reason to give (job.failed carries it): the job's outcome then stays unset.
+  if (t && (t.to === "COMPLETED" ? t.outcome === undefined : t.to !== "FAILED" && t.outcome !== undefined))
     throw new HttpError(
       400,
       "VALIDATION_FAILED",
-      "outcome is required for COMPLETED/FAILED and only for them",
+      "outcome is required for COMPLETED and allowed only for COMPLETED and FAILED",
     );
 
   return db.transaction(async (tx) => {

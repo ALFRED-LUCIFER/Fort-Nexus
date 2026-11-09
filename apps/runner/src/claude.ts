@@ -23,7 +23,7 @@ import {
   stopEgress,
   writableUser,
 } from "./sandbox.ts";
-import { git } from "./workspace.ts";
+import { git, removePlantedRepos } from "./workspace.ts";
 
 // Claude coding engine (ENG-05): one Agent SDK run inside the per-job sandbox against a prepared
 // worktree, streamed as run events, with budgets enforced and egress limited to the model provider.
@@ -36,6 +36,7 @@ const MAX_LINE = 4 * 1024 * 1024;
 const TEXT_MAX = 2_000;
 const SUMMARY_MAX = 200;
 const MAX_FILES = 500;
+const FINAL_TEXT_MAX = 50_000;
 
 export const ClaudeBudget = z.strictObject({
   maxWallClockMs: z
@@ -176,6 +177,7 @@ export function agentStream(opts: {
   secrets: readonly string[];
   started?: Record<string, unknown>;
 }) {
+  let finalText: string | undefined;
   const scrub = scrubber(opts.secrets);
   const toolNames = new Map<string, string>();
   let summary: AgentSummary | undefined;
@@ -294,6 +296,7 @@ export function agentStream(opts: {
             : r.subtype !== "success" || r.is_error
               ? { reason: "agent_failed", subtype: summary.subtype }
               : undefined;
+      if (!r.is_error && r.result) finalText = scrub(r.result).slice(-FINAL_TEXT_MAX);
       const detail = r.is_error ? (r.errors?.join("\n") ?? r.result ?? "") : (r.result ?? "");
       return [
         {
@@ -329,6 +332,9 @@ export function agentStream(opts: {
     get summary() {
       return summary;
     },
+    get finalText() {
+      return finalText;
+    },
     timeout() {
       verdict ??= { reason: "budget_exceeded", budget: "wall_clock" };
     },
@@ -360,6 +366,7 @@ export type Artifacts = {
 
 /** Changed files and diff stat, host-side, with the trusted git dir and no repo-controlled config. */
 export async function collectArtifacts(worktreePath: string, gitDir: string): Promise<Artifacts> {
+  await removePlantedRepos(worktreePath, gitDir, "HEAD");
   const g = (args: string[]) =>
     git([
       `--git-dir=${gitDir}`,
@@ -370,7 +377,9 @@ export async function collectArtifacts(worktreePath: string, gitDir: string): Pr
       `core.hooksPath=${devNull}`,
       ...args,
     ]);
-  const tracked = (await g(["diff", "--name-status", "-z", "--no-renames", "HEAD"]))
+  const tracked = (
+    await g(["diff", "--name-status", "-z", "--no-renames", "--ignore-submodules=all", "HEAD"])
+  )
     .split("\0")
     .filter(Boolean);
   const files: { path: string; status: string }[] = [];
@@ -380,7 +389,14 @@ export async function collectArtifacts(worktreePath: string, gitDir: string): Pr
     .split("\0")
     .filter(Boolean))
     files.push({ status: "?", path });
-  const diffStat = await g(["diff", "--stat=120", "--no-ext-diff", "--no-textconv", "HEAD"]);
+  const diffStat = await g([
+    "diff",
+    "--stat=120",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--ignore-submodules=all",
+    "HEAD",
+  ]);
   return {
     files: files.slice(0, MAX_FILES),
     fileCount: files.length,
@@ -420,6 +436,11 @@ export type ClaudeTaskOptions = {
   jobId: string;
   /** A worktree from createWorkspaces().prepareWorktree, mounted read-write at /workspace/repo. */
   worktreePath: string;
+  /**
+   * The worktree's git dir, from worktreeGitDir before anything could write to the worktree. Never resolved here:
+   * by a later round the `.git` file is the agent's, and host-side git must not open a repository it chose.
+   */
+  gitDir: string;
   /** May contain untrusted issue text: it is data for the model, never policy. */
   prompt: string;
   budget: ClaudeBudget;
@@ -428,6 +449,12 @@ export type ClaudeTaskOptions = {
   signal?: AbortSignal;
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   runnerLabel?: string;
+  /** Overrides the provider's configured model for this run (the Developer profile's model). */
+  model?: string;
+  /** Package-manager cache (a host directory) mounted at /workspace/cache so the agent can run the tests offline. */
+  depsCache?: string;
+  /** Who this run is attributed to in `agent.started` (e.g. "QA"). */
+  agent?: string;
   image?: string;
   aiConfigFile?: string;
   killGraceMs?: number;
@@ -443,13 +470,32 @@ export type ClaudeTaskResult = {
   details?: Record<string, unknown>;
   outcome?: "TIMED_OUT";
   summary?: AgentSummary;
+  /** The agent's final message (redacted, the tail kept), for parsing NEXUS_RESULT. Untrusted model output. */
+  finalText?: string;
   artifacts?: Artifacts;
 };
+
+/** The package-manager cache mount and env (matching verify.ts) that let the agent run the tests offline. */
+export function depsCacheSpec(depsCache: string | undefined): {
+  mounts: { source: string; target: string }[];
+  env: Record<string, string>;
+} {
+  if (!depsCache) return { mounts: [], env: {} };
+  return {
+    mounts: [{ source: depsCache, target: "/workspace/cache" }],
+    env: {
+      XDG_CACHE_HOME: "/workspace/cache",
+      npm_config_cache: "/workspace/cache/npm",
+      COREPACK_HOME: "/workspace/cache/corepack",
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+    },
+  };
+}
 
 const Prompt = z.string().min(1).max(200_000);
 
 export async function runClaudeTask(opts: ClaudeTaskOptions): Promise<ClaudeTaskResult> {
-  const { jobId, worktreePath, onEvent, signal, runnerLabel = "local", image = SANDBOX_IMAGE } = opts;
+  const { jobId, worktreePath, gitDir, onEvent, signal, runnerLabel = "local", image = SANDBOX_IMAGE } = opts;
   const { killGraceMs = 5_000, log = defaultLog, aiConfigFile = AI_CONFIG_FILE } = opts;
   const budget = ClaudeBudget.parse(opts.budget);
   const prompt = Prompt.parse(opts.prompt);
@@ -482,20 +528,15 @@ export async function runClaudeTask(opts: ClaudeTaskOptions): Promise<ClaudeTask
       image,
       message: `Sandbox image ${image} is missing on the runner host. Build it with: ${SANDBOX_BUILD_COMMAND}`,
     });
-  let gitDir: string;
-  try {
-    gitDir = await worktreeGitDir(worktreePath);
-  } catch (err) {
-    return fail("worktree_invalid", { message: errorMessage(err) });
-  }
-
   if (signal?.aborted) return { status: "STOPPED" };
 
+  const model = opts.model ?? provider.model;
   const container = containerName(jobId);
   const stream = agentStream({
     maxCostUsd: budget.maxCostUsd,
     secrets,
     started: {
+      ...(opts.agent ? { agent: opts.agent } : {}),
       provider: provider.provider,
       egress: [provider.host],
       sandbox: { runtime, image, container, network: egressNames(jobId).network },
@@ -522,7 +563,7 @@ export async function runClaudeTask(opts: ClaudeTaskOptions): Promise<ClaudeTask
       join(jobDir, "task.json"),
       JSON.stringify({
         prompt,
-        model: provider.model,
+        model,
         maxTurns: budget.maxTurns,
         maxBudgetUsd: budget.maxCostUsd,
         allowedTools: CLAUDE_TOOLS,
@@ -531,6 +572,7 @@ export async function runClaudeTask(opts: ClaudeTaskOptions): Promise<ClaudeTask
       { mode: 0o644 },
     );
     await mkdir(join(jobDir, "repo")); // mount point for the worktree inside the read-only /workspace
+    if (opts.depsCache) await mkdir(join(jobDir, "cache")); // mount point for the package-manager cache
     await chmod(jobDir, 0o755);
 
     await startEgress({ jobId, runnerLabel, allowHosts: [provider.host], image });
@@ -539,13 +581,14 @@ export async function runClaudeTask(opts: ClaudeTaskOptions): Promise<ClaudeTask
       runnerLabel,
       workspace: jobDir,
       workspaceReadOnly: true,
-      mounts: [{ source: worktreePath, target: REPO }],
+      mounts: [{ source: worktreePath, target: REPO }, ...depsCacheSpec(opts.depsCache).mounts],
       argv: opts.agentArgv ?? AGENT_ARGV,
       image,
       network: egressNames(jobId).network,
       user: writableUser(runtime),
       env: {
         ...provider.env,
+        ...depsCacheSpec(opts.depsCache).env,
         HTTPS_PROXY: PROXY_URL,
         https_proxy: PROXY_URL,
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
@@ -559,7 +602,7 @@ export async function runClaudeTask(opts: ClaudeTaskOptions): Promise<ClaudeTask
     log("info", "claude task starting", {
       jobId,
       provider: provider.provider,
-      model: provider.model,
+      model,
       container,
     });
 
@@ -664,9 +707,10 @@ export async function runClaudeTask(opts: ClaudeTaskOptions): Promise<ClaudeTask
     artifactError = errorMessage(err);
     log("warn", "collecting claude artifacts failed", { jobId, error: artifactError });
   }
-  const done = (r: Omit<ClaudeTaskResult, "summary" | "artifacts">): ClaudeTaskResult => ({
+  const done = (r: Omit<ClaudeTaskResult, "summary" | "artifacts" | "finalText">): ClaudeTaskResult => ({
     ...r,
     summary,
+    finalText: stream.finalText,
     artifacts,
   });
 

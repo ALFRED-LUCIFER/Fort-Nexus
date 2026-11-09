@@ -127,7 +127,10 @@ export function buildAction(
   jobId: string,
   s: IssueSnapshot,
   files: ChangesetFile[],
-  changeset: Pick<UploadChangesetRequest, "stats" | "agentSummary" | "verification">,
+  changeset: Pick<
+    UploadChangesetRequest,
+    "stats" | "agentSummary" | "verification" | "qa" | "integrity" | "notes"
+  >,
   changesetSha256: string,
 ): PushDraftPrAction {
   const lines: string[] = [];
@@ -169,8 +172,25 @@ export function buildAction(
     files: files.map((f) => ({ path: f.path, change: f.change })),
     stats: { added, removed },
     verification: changeset.verification,
+    // Only present when sent, so an action without them hashes as it always did.
+    ...(changeset.qa ? { qa: changeset.qa } : {}),
+    ...(changeset.integrity.testFilesChanged
+      ? { testFilesChanged: changeset.integrity.testFilesChanged }
+      : {}),
+    ...(changeset.notes ? { notes: changeset.notes } : {}),
   };
 }
+
+/** The push gate (spec §4): NEXUS saw the tests pass, and the change didn't tamper with them. */
+const NOT_PUSHABLE = "This change can't be pushed: its tests did not pass.";
+const pushable = (b: Pick<UploadChangesetRequest, "verification" | "integrity">) =>
+  b.verification.status === "passed" && b.integrity.clean;
+
+const STOP_REASON = {
+  FAILED_TESTS: ["tests_failed", "The tests didn't pass."],
+  ENVIRONMENT_BLOCKED: ["environment_blocked", "The tests couldn't run in the sandbox."],
+  ALREADY_FAILING: ["already_failing", "The tests were already failing before the change."],
+} as const;
 
 /** Appends events to a job without changing its state. */
 async function appendEvents(tx: Tx, job: JobRow, actor: string, events: NewEvent[]) {
@@ -220,7 +240,7 @@ export async function uploadChangeset(
       // The same upload retried under the same lease gets its answer; anything else is a stale writer.
       if (!same) throw stale();
       const [a] = await tx.select().from(approvals).where(eq(approvals.jobId, job.id));
-      return { approvalId: a!.id, actionHash: a!.actionHash };
+      return { approvalId: a?.id ?? null, actionHash: a?.actionHash ?? null };
     }
 
     if (
@@ -250,7 +270,56 @@ export async function uploadChangeset(
       files,
       stats: body.stats,
       agentSummary: body.agentSummary,
+      verification: body.verification,
     });
+    const actor = runnerActor(runner.id);
+    const artifact: NewEvent = {
+      type: "artifact.created",
+      stage: "review",
+      payload: {
+        artifactType: "changeset",
+        changesetSha256,
+        baseSha: body.baseSha,
+        files: action.files,
+        stats: action.stats,
+        agentSummary: body.agentSummary, // untrusted agent report; shown labelled as such
+      },
+    };
+    if (!pushable(body)) {
+      // Kept for review and "keep fixing", but no approval exists for it.
+      const outcome = body.terminalOutcome ?? "FAILED_TESTS";
+      const [reason, message] =
+        body.verification.status === "passed"
+          ? ([
+              "integrity_failed",
+              "The change altered how the tests run, so a passing result can't be trusted.",
+            ] as const)
+          : STOP_REASON[outcome];
+      await moveJob(
+        tx,
+        job,
+        "FAILED",
+        actor,
+        [
+          artifact,
+          {
+            type: "job.failed",
+            payload: { reason, message, ...(body.report ? { report: body.report } : {}) },
+          },
+        ],
+        { outcome, leaseExpiresAt: null },
+      );
+      await audit(tx, {
+        actor,
+        action: "job.changeset_uploaded",
+        resourceType: "job",
+        resourceId: job.id,
+        correlationId: job.id,
+        outcome: "DENIED",
+        metadata: { approvalId: null, changesetSha256, reason, verification: body.verification.status },
+      });
+      return { approvalId: null, actionHash: null };
+    }
     const [approval] = await tx
       .insert(approvals)
       .values({
@@ -264,25 +333,13 @@ export async function uploadChangeset(
         expiresAt: new Date(now.getTime() + APPROVAL_TTL_MS),
       })
       .returning();
-    const actor = runnerActor(runner.id);
     await moveJob(
       tx,
       job,
       "AWAITING_APPROVAL",
       actor,
       [
-        {
-          type: "artifact.created",
-          stage: "review",
-          payload: {
-            artifactType: "changeset",
-            changesetSha256,
-            baseSha: body.baseSha,
-            files: action.files,
-            stats: action.stats,
-            agentSummary: body.agentSummary, // untrusted agent report; shown labelled as such
-          },
-        },
+        artifact,
         {
           type: "approval.requested",
           stage: "publish",
@@ -388,6 +445,15 @@ export async function decideApproval(
     if (a.actionHash !== actionHash)
       throw new HttpError(409, "CONFLICT", "The action changed since it was shown; review it again");
     if (job.status !== "AWAITING_APPROVAL") throw invalidTransition(job.status, "COMPLETED");
+    if (decision === "approve") {
+      // Also covers approvals created before the gate existed. Deny stays allowed.
+      const [cs] = await tx
+        .select({ verification: changesets.verification })
+        .from(changesets)
+        .where(eq(changesets.jobId, job.id));
+      if ((cs?.verification ?? a.action.verification).status !== "passed")
+        throw new HttpError(409, "CONFLICT", NOT_PUSHABLE);
+    }
 
     const status = decision === "approve" ? "APPROVED" : "DENIED";
     const [decided] = await tx

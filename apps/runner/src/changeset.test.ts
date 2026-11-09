@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { existsSync, lstatSync } from "node:fs";
+import { chmod, cp, mkdir, mkdtemp, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CHANGESET_MAX_BYTES, CHANGESET_MAX_FILES } from "@nexus/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ChangesetError, buildChangeset } from "./changeset.ts";
-import { worktreeGitDir } from "./claude.ts";
+import { collectArtifacts, worktreeGitDir } from "./claude.ts";
 import { git } from "./test-support.ts";
-import { createWorkspaces } from "./workspace.ts";
+import { createWorkspaces, removePlantedRepos } from "./workspace.ts";
 
 const b64 = (s: string | Buffer) => Buffer.from(s).toString("base64");
 const BINARY = Buffer.from([0, 1, 2, 255, 0, 10, 13, 0x89, 0x50]);
@@ -123,5 +124,107 @@ describe("buildChangeset", () => {
     await writeFile(join(wt.path, "back\\slash"), "x\n");
     const err = await failure(buildChangeset(wt.path, wt.gitDir, wt.baseSha));
     expect(err).toMatchObject({ reason: "changeset_invalid", details: { path: "back\\slash" } });
+  });
+});
+
+describe("nested repositories planted in the worktree", () => {
+  // A worktree whose base commit has a gitlink at `link`, and a repo whose HEAD is that gitlink's commit.
+  async function withGitlink(link = "sub") {
+    const seed = join(data, "seed");
+    git(["init", "-q", "-b", "main", seed]);
+    await writeFile(join(seed, "f"), "a\n");
+    git(["-C", seed, "add", "f"]);
+    git(["-C", seed, "commit", "-q", "-m", "seed"]);
+    const oid = git(["-C", seed, "rev-parse", "HEAD"]);
+
+    const src = join(data, "src");
+    git(["init", "-q", "-b", "main", src]);
+    await writeFile(join(src, "README.md"), "hello\n");
+    git(["-C", src, "add", "."]);
+    git(["-C", src, "update-index", "--add", "--cacheinfo", `160000,${oid},${link}`]);
+    git(["-C", src, "commit", "-q", "-m", "base"]);
+    const mirror = join(data, "repos", "acme", "demo.git");
+    git(["clone", "-q", "--mirror", src, mirror]);
+    const wt = await createWorkspaces(data).prepareWorktree({
+      jobId: randomUUID(),
+      mirrorPath: mirror,
+      baseRef: "main",
+      branch: "nexus/t",
+    });
+    const baseSha = git(["-C", mirror, "rev-parse", "main"]);
+    return { ...wt, baseSha, seed, gitDir: await worktreeGitDir(wt.path) };
+  }
+
+  /** What an agent can write: a `.git` at `dir` whose config has a filter that runs a command, and a dirty file. */
+  async function plant(seed: string, dir: string, marker: string) {
+    await mkdir(dir, { recursive: true });
+    await cp(join(seed, ".git"), join(dir, ".git"), { recursive: true });
+    await writeFile(
+      join(dir, ".git", "config"),
+      `[core]\n\trepositoryformatversion = 0\n[filter "x"]\n\tclean = "touch ${marker}; cat"\n\trequired = true\n`,
+    );
+    await writeFile(join(dir, ".git", "info", "attributes"), "* filter=x\n");
+    await writeFile(join(dir, "f"), "changed by the agent\n");
+  }
+
+  it("buildChangeset runs nothing from a repo planted at a base gitlink", async () => {
+    const r = await withGitlink();
+    const marker = join(data, "ran-build");
+    await plant(r.seed, join(r.path, "sub"), marker);
+    const built = await buildChangeset(r.path, r.gitDir, r.baseSha);
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(join(r.path, "sub", ".git"))).toBe(false);
+    expect(built.files).toEqual([]);
+  });
+
+  it("collectArtifacts runs nothing from a repo planted at a base gitlink", async () => {
+    const r = await withGitlink();
+    const marker = join(data, "ran-artifacts");
+    await plant(r.seed, join(r.path, "sub"), marker);
+    await collectArtifacts(r.path, r.gitDir);
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(join(r.path, "sub", ".git"))).toBe(false);
+  });
+
+  it("a repo planted where the base has no gitlink runs nothing and is still refused", async () => {
+    const r = await withGitlink();
+    const marker = join(data, "ran-new");
+    await plant(r.seed, join(r.path, "other"), marker);
+    await collectArtifacts(r.path, r.gitDir);
+    await expect(buildChangeset(r.path, r.gitDir, r.baseSha)).rejects.toMatchObject({
+      reason: "changeset_invalid",
+    });
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("removes a planted .git file or symlink without touching what it points at", async () => {
+    const r = await withGitlink();
+    const outside = join(data, "outside-repo");
+    await mkdir(join(outside, "keep"), { recursive: true });
+    await symlink(outside, join(r.path, "sub", ".git"));
+    await removePlantedRepos(r.path, r.gitDir, r.baseSha);
+    expect(() => lstatSync(join(r.path, "sub", ".git"))).toThrow();
+    expect(existsSync(join(outside, "keep"))).toBe(true);
+  });
+
+  it("runs nothing when the gitlink path itself is a symlink to a planted repo", async () => {
+    const r = await withGitlink();
+    const marker = join(data, "ran-symlink");
+    await plant(r.seed, join(r.path, "inner"), marker);
+    await rm(join(r.path, "sub"), { recursive: true });
+    await symlink("inner", join(r.path, "sub"));
+    await collectArtifacts(r.path, r.gitDir);
+    await buildChangeset(r.path, r.gitDir, r.baseSha).catch(() => undefined);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("never walks through a symlink on the way to a gitlink path", async () => {
+    const r = await withGitlink("a/sub");
+    const outside = join(data, "outside-tree");
+    await mkdir(join(outside, "sub", ".git"), { recursive: true });
+    await rm(join(r.path, "a"), { recursive: true });
+    await symlink(outside, join(r.path, "a"));
+    await removePlantedRepos(r.path, r.gitDir, r.baseSha);
+    expect(existsSync(join(outside, "sub", ".git"))).toBe(true);
   });
 });

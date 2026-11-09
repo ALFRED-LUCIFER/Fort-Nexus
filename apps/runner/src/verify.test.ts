@@ -21,6 +21,7 @@ import {
   VerifyConfigError,
   readVerifyPlan,
   runVerification,
+  treeWithTestsOnly,
   type VerifyOptions,
 } from "./verify.ts";
 import { createWorkspaces } from "./workspace.ts";
@@ -175,6 +176,30 @@ const verify = (r: Awaited<ReturnType<typeof repo>>, over: Partial<VerifyOptions
   return { result, events };
 };
 
+describe("treeWithTestsOnly", () => {
+  const names = (gitDir: string, tree: string) =>
+    git([`--git-dir=${gitDir}`, "ls-tree", "--name-only", tree]).split("\n");
+
+  it("is the base tree plus only the listed files from the changeset tree", async () => {
+    const r = await repo(
+      { "a.test.js": "old\n", "src.js": "v1\n" },
+      { "a.test.js": "new test\n", "b.test.js": "added test\n", "src.js": "v2\n", "extra.js": "x\n" },
+    );
+    const tree = await treeWithTestsOnly(r.gitDir, r.baseSha, r.tree, ["a.test.js", "b.test.js"]);
+    const show = (path: string) => git([`--git-dir=${r.gitDir}`, "show", `${tree}:${path}`]);
+    expect(show("a.test.js")).toBe("new test");
+    expect(show("b.test.js")).toBe("added test");
+    expect(show("src.js")).toBe("v1"); // the source change is left out
+    expect(names(r.gitDir, tree)).not.toContain("extra.js");
+  });
+
+  it("treats a path as literal, not a glob", async () => {
+    const r = await repo({}, { "a.test.js": "t\n" });
+    const tree = await treeWithTestsOnly(r.gitDir, r.baseSha, r.tree, ["*.js"]);
+    expect(names(r.gitDir, tree)).not.toContain("a.test.js");
+  });
+});
+
 describe("runVerification without a runnable config (no Docker needed)", () => {
   it("not_configured: nothing runs", async () => {
     const r = await repo({}, { "NOTES.md": "x\n" });
@@ -187,6 +212,7 @@ describe("runVerification without a runnable config (no Docker needed)", () => {
       exitCode: null,
       durationMs: expect.any(Number),
       outputTail: "",
+      failureKind: "not_configured",
     });
   });
 
@@ -199,6 +225,7 @@ describe("runVerification without a runnable config (no Docker needed)", () => {
       reason: ".nexus.json at the base commit is not valid JSON",
       source: null,
       exitCode: null,
+      failureKind: "environment",
     });
     expect(verification.outputTail).toBe("[nexus] .nexus.json at the base commit is not valid JSON");
   });
@@ -281,6 +308,28 @@ describe.skipIf(!dockerUp)("runVerification in the real sandbox", () => {
     await gone(r.jobId);
   }, 120_000);
 
+  it("verify: a test script that calls pnpm directly runs", async () => {
+    // A repository's own scripts call `pnpm` (not `corepack pnpm`): the shim must be on PATH and corepack fetches pnpm
+    // through the proxy from the real registry.
+    const r = await repo(
+      {
+        "package.json": JSON.stringify({
+          name: "fixture",
+          private: true,
+          packageManager: "pnpm@10.0.0",
+          scripts: { test: "pnpm --version" },
+        }),
+        ".nexus.json": nexusJson({ test: ["npm", "test"], egress: ["registry.npmjs.org"] }),
+      },
+      { "NOTES.md": "x\n" },
+    );
+    const { verification } = await verify(r, { runnerLabel }).result;
+    expect(verification).toMatchObject({ status: "passed", exitCode: 0 });
+    expect(verification.outputTail).toContain("10.0.0");
+    expect(verification.outputTail).not.toContain("not found");
+    await gone(r.jobId);
+  }, 180_000);
+
   it("failed: a non-zero test exit, with the redacted output tail capped at 8000 chars", async () => {
     const r = await repo(
       {
@@ -334,17 +383,39 @@ describe.skipIf(!dockerUp)("runVerification in the real sandbox", () => {
       { "NOTES.md": "x\n" },
     );
     const started = Date.now();
-    const { verification, stopConfirmed } = await verify(r, { runnerLabel, maxTimeoutMs: 2_000 }).result;
+    const { verification, stopConfirmed } = await verify(r, { runnerLabel, maxMs: 2_000 }).result;
     expect(Date.now() - started).toBeLessThan(30_000);
     expect(stopConfirmed).toBe(true);
     expect(verification).toMatchObject({
       status: "error",
       reason: "timed out after 2 s during test",
       exitCode: null,
+      failureKind: "test_timeout",
     });
     expect(verification.outputTail).toMatch(/\[nexus\] timed out after 2 s during test$/);
     await gone(r.jobId);
   }, 60_000);
+
+  it("failureKind: test_failed for a failing test, install_failed for a failing install", async () => {
+    const failing = await repo(
+      { ".nexus.json": nexusJson({ test: ["node", "-e", "process.exit(3)"] }) },
+      { "NOTES.md": "x\n" },
+    );
+    expect((await verify(failing, { runnerLabel }).result).verification).toMatchObject({
+      status: "failed",
+      failureKind: "test_failed",
+    });
+    const noInstall = await repo(
+      { ".nexus.json": nexusJson({ install: ["node", "-e", "process.exit(1)"], test: ["true"] }) },
+      { "NOTES.md": "x\n" },
+    );
+    expect((await verify(noInstall, { runnerLabel }).result).verification).toMatchObject({
+      status: "error",
+      failureKind: "install_failed",
+    });
+    const passing = await repo({ ".nexus.json": nexusJson({ test: ["true"] }) }, { "NOTES.md": "x\n" });
+    expect((await verify(passing, { runnerLabel }).result).verification.failureKind).toBeUndefined();
+  }, 120_000);
 
   it("a stop (cancel) during the test removes the container and reports stopped", async () => {
     const r = await repo(

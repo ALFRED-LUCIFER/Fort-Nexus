@@ -192,13 +192,7 @@ describe("approval gate", () => {
   });
 
   it.each([
-    [
-      "failed",
-      FAILED,
-      "Tests failed.",
-      "failed (exit 1) · run by NEXUS in the sandbox",
-      /they FAILED \(exit code 1\)/,
-    ],
+    ["failed", FAILED, "failed (exit 1) · run by NEXUS in the sandbox", "the tests NEXUS ran didn't pass."],
     [
       "error",
       {
@@ -208,41 +202,29 @@ describe("approval gate", () => {
         exitCode: null,
         outputTail: "[nexus] install failed with exit code 1",
       },
-      "Tests couldn't run.",
       "couldn't run · run by NEXUS in the sandbox",
-      /NEXUS couldn't run the tests: install failed with exit code 1\./,
+      "NEXUS couldn't run the tests.",
+    ],
+    [
+      "not_configured",
+      NOT_CONFIGURED,
+      "not verified by NEXUS",
+      "NEXUS has no tests it could run for this change.",
     ],
   ] as const)(
-    "verification %s: an amber warning on the gate, still approvable, and the confirm step repeats it",
-    async (_, verification, warning, tests, confirmText) => {
-      const calls = open(issueJob(), {
+    "verification %s: Approve is absent and one sentence says why, Deny stays",
+    async (_, verification, tests, why) => {
+      open(issueJob(), {
         "GET /v1/approvals": () =>
           json({ items: [approval({ action: { ...approval().action, verification } })] }),
-        [`POST /v1/approvals/${APPROVAL_ID}/decision`]: () => json(approval({ status: "APPROVED" })),
       });
-      const user = userEvent.setup();
       const gate = await screen.findByRole("region", { name: `Push ${HEAD} and open a draft PR?` });
-      const note = within(gate).getByRole("note");
-      expect(note.textContent).toMatch(new RegExp(`^${warning}`));
-      expect(note.textContent).toMatch(/You can still approve/);
       expect(fact(gate, "tests")).toBe(tests);
-      await user.click(within(gate).getByRole("button", { name: "Approve push" }));
-      const confirm = screen.getByRole("alertdialog", { name: "Approve this push?" });
-      expect(confirm.textContent).toMatch(confirmText);
-      await user.click(within(confirm).getByRole("button", { name: "Approve push" }));
-      await waitFor(() => expect(decisions(calls)).toHaveLength(1));
+      expect(within(gate).queryByRole("button", { name: "Approve push" })).toBeNull();
+      expect(within(gate).getByRole("button", { name: "Deny" })).toBeTruthy();
+      expect(within(gate).getByText(`Approve isn't offered because ${why}`)).toBeTruthy();
     },
   );
-
-  it("not verified: the gate says so plainly, without a warning", async () => {
-    open(issueJob(), {
-      "GET /v1/approvals": () =>
-        json({ items: [approval({ action: { ...approval().action, verification: NOT_CONFIGURED } })] }),
-    });
-    const gate = await screen.findByRole("region", { name: `Push ${HEAD} and open a draft PR?` });
-    expect(fact(gate, "tests")).toBe("not verified by NEXUS");
-    expect(within(gate).queryByRole("note")).toBeNull();
-  });
 
   it("denies without a confirm step and says nothing was pushed", async () => {
     let current = approval();

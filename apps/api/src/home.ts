@@ -18,6 +18,7 @@ import {
 } from "@nexus/contracts";
 import type { Db } from "./db/index.ts";
 import { aiSpend, approvals, jobs, runEvents, user, type AiSpendSource } from "./db/schema.ts";
+import { notBaselineRun } from "./jobs.ts";
 import { jobDrafts } from "./job-drafts/schema.ts";
 import { incidents } from "./monitoring/schema.ts";
 import { planSteps, plans } from "./plans/schema.ts";
@@ -303,7 +304,7 @@ export async function homeSummary(
   const tested = db
     .select({ status: sql<string | null>`${runEvents.payload}->>'status'`.as("event_tests") })
     .from(runEvents)
-    .where(and(eq(runEvents.jobId, jobs.id), eq(runEvents.type, "test.completed")))
+    .where(and(eq(runEvents.jobId, jobs.id), eq(runEvents.type, "test.completed"), notBaselineRun))
     .orderBy(desc(runEvents.sequence))
     .limit(1)
     .as("test_event");

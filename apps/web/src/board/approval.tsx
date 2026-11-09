@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Approval, ApprovalDecisionRequest } from "@nexus/contracts";
 import { ApiRequestError, api, keys } from "../lib/api.ts";
 import { shortHash, until, useNow } from "../lib/queries.ts";
+import { NexusNotes, QaBlock } from "./JobLoop.tsx";
 import { TEST_WORD } from "./runEvents.ts";
 import { decisionBlocked, useScope } from "./scope.tsx";
 
@@ -37,6 +38,8 @@ export function DecisionButtons({
   // Approvals are decided inside their own project only; "All" is read-only (FR-WKS-02, C-05).
   const blocked = decisionBlocked(useScope(), approval);
   const blockedId = useId();
+  // The server refuses to approve anything NEXUS's own tests didn't pass, so the control isn't offered.
+  const approvable = approval.action.verification.status === "passed";
   const [confirming, setConfirming] = useState<Approval | null>(null);
   const decide = useMutation({
     mutationFn: ({ a, decision }: { a: Approval; decision: ApprovalDecisionRequest["decision"] }) =>
@@ -67,17 +70,24 @@ export function DecisionButtons({
         >
           Deny{sr}
         </button>
-        <button
-          type="button"
-          disabled={decide.isPending || !!blocked}
-          aria-describedby={blocked ? blockedId : undefined}
-          onClick={() => setConfirming(approval)}
-          className="flex-1 rounded-xl bg-amber px-3 py-2.5 text-[12.5px] font-medium whitespace-nowrap text-onacc disabled:opacity-60"
-        >
-          {decide.isPending ? "Sending…" : approveLabel}
-          {sr}
-        </button>
+        {approvable && (
+          <button
+            type="button"
+            disabled={decide.isPending || !!blocked}
+            aria-describedby={blocked ? blockedId : undefined}
+            onClick={() => setConfirming(approval)}
+            className="flex-1 rounded-xl bg-amber px-3 py-2.5 text-[12.5px] font-medium whitespace-nowrap text-onacc disabled:opacity-60"
+          >
+            {decide.isPending ? "Sending…" : approveLabel}
+            {sr}
+          </button>
+        )}
       </div>
+      {!approvable && (
+        <p className="m-0 text-[12.5px] leading-snug text-ink2">
+          Approve isn&apos;t offered because {notPassedWhy(approval)}
+        </p>
+      )}
       {blocked && (
         <p id={blockedId} className="m-0 text-[12.5px] leading-snug text-ink2">
           {blocked}
@@ -145,6 +155,14 @@ const testsSentence = (a: Approval) =>
     not_configured: "The tests were not verified by NEXUS.",
   })[a.action.verification.status];
 
+const notPassedWhy = (a: Approval) =>
+  ({
+    passed: "",
+    failed: "the tests NEXUS ran didn't pass.",
+    error: "NEXUS couldn't run the tests.",
+    not_configured: "NEXUS has no tests it could run for this change.",
+  })[a.action.verification.status];
+
 const testsFact = (a: Approval) => {
   const v = a.action.verification;
   if (v.status === "not_configured") return "not verified by NEXUS";
@@ -201,7 +219,6 @@ export function ApprovalGate({ approval: a, jobCancelled }: { approval: Approval
     ],
     ["action hash", <span title={a.actionHash}>{shortHash(a.actionHash)}</span>],
   ];
-  const testsBad = action.verification.status === "failed" || action.verification.status === "error";
   if (a.status === "PENDING") facts.push(["expires", until(a.expiresAt, now)]);
 
   return (
@@ -235,19 +252,6 @@ export function ApprovalGate({ approval: a, jobCancelled }: { approval: Approval
           }[a.status]
         )}
       </h3>
-      {a.status === "PENDING" && testsBad && (
-        <p
-          role="note"
-          className="m-0 rounded-xl px-3 py-2.5 text-[12.5px] leading-[1.45] text-ink"
-          style={{ background: "oklch(0.70 0.13 65 / .22)" }}
-        >
-          <strong className="font-medium">
-            {action.verification.status === "failed" ? "Tests failed." : "Tests couldn't run."}
-          </strong>{" "}
-          {testsSentence(a)} You can still approve: the draft PR says so too. Check the test output in this
-          run first.
-        </p>
-      )}
       {a.status === "EXPIRED" && (
         <p className="m-0 text-[12.5px] leading-[1.45] text-ink2">
           Approvals lapse after 24 hours so a stale change is never pushed. Start a new run to try again.
@@ -264,6 +268,22 @@ export function ApprovalGate({ approval: a, jobCancelled }: { approval: Approval
           {a.error ?? "The API gave no reason."} Nothing was merged; the branch may need a look on GitHub.
         </p>
       )}
+      {action.qa && <QaBlock qa={action.qa} id="approval-qa" />}
+      {!!action.testFilesChanged?.length && (
+        <section aria-labelledby="approval-test-files" className="flex flex-col gap-1.5">
+          <h4 id="approval-test-files" className="m-0 text-[12px] font-medium text-ink">
+            Test files this change touches ({action.testFilesChanged.length})
+          </h4>
+          <ul className="m-0 max-h-32 list-none overflow-auto p-0 font-mono text-[11.5px] leading-[1.45] text-ink2">
+            {action.testFilesChanged.map((f) => (
+              <li key={f} className="break-words">
+                {f}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      <NexusNotes notes={action.notes ?? []} />
       <dl className="m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-[11.5px] leading-[1.45]">
         {facts.map(([k, v]) => (
           <div key={k} className="contents">

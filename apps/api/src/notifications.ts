@@ -1,4 +1,5 @@
 import { and, count, desc, eq, isNull, notInArray, or } from "drizzle-orm";
+import { StuckReport } from "@nexus/contracts";
 import type {
   Approval,
   JobOutcome,
@@ -43,6 +44,7 @@ type JobFacts = Pick<
 
 const NOTIFIED_STATES = new Set<JobStatus>(["COMPLETED", "FAILED", "RECOVERY_REQUIRED"]);
 const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
+const oneLine = (s: string, max: number) => clip(s.replace(/\s+/g, " ").trim(), max);
 
 export const toNotificationDto = (n: Row): Notification => ({
   id: n.id,
@@ -230,9 +232,33 @@ const REASONS: Record<string, [string, string]> = {
     "Pushing the branch or opening the draft PR failed; nothing was merged.",
     "Open the run for GitHub's answer, check the branch, then start a new run.",
   ],
+  tests_failed: [
+    "The tests didn't pass, so no push approval was created.",
+    "Open the run to see what failed, then keep fixing or start a new run.",
+  ],
+  environment_blocked: [
+    "The tests couldn't run in the sandbox, so no push approval was created.",
+    "Open the run to see what blocked them, then keep fixing or start a new run.",
+  ],
+  already_failing: [
+    "The tests were already failing before the change, so no push approval was created.",
+    "Fix the failing tests on the base branch, then start a new run.",
+  ],
+  integrity_failed: [
+    "The change altered how the tests run, so its passing result can't be trusted and no push approval was created.",
+    "Open the run to see what changed, then keep fixing or start a new run.",
+  ],
   agent_failed: [
     "The coding agent stopped with an error.",
     "Open the run for the last output, then start a new run.",
+  ],
+  needs_info: [
+    "The agent has a question only you can answer, so it stopped without pushing anything.",
+    "Open the run and answer it in the run to continue.",
+  ],
+  not_configured: [
+    "This repository has no tests NEXUS can run, so the agent was not started.",
+    "Add a `test` script to package.json with a committed lockfile, or a .nexus.json with a `verify` section, then use Run again.",
   ],
   changeset_upload_failed: [
     "The runner couldn't hand the changes to NEXUS.",
@@ -254,15 +280,22 @@ function failureText(
     `The run failed${reason ? ` (${reason})` : ""}.`,
     "Open the run for the last output, then start a new run.",
   ];
+  // A stopped repair loop says what still fails and what to do next. The agent's own guess stays in the run.
+  const stuck = StuckReport.safeParse(failed?.payload?.report);
+  const detail = stuck.success
+    ? `${why} Still failing: ${oneLine(stuck.data.stillFailing, 400)} Next step: ${oneLine(stuck.data.nextStep, 300)}`
+    : `${why} ${next}`;
   const head =
     to === "RECOVERY_REQUIRED"
       ? "Run needs recovery"
-      : outcome === "TIMED_OUT"
-        ? "Run timed out"
-        : outcome === "BUDGET_EXCEEDED" || reason === "budget_exceeded"
-          ? "Run stopped at its budget"
-          : "Run failed";
-  return { title: `${head} · ${subjectOf(j)}`, body: `${why} ${next}` };
+      : reason === "needs_info"
+        ? "Agent needs your answer"
+        : outcome === "TIMED_OUT"
+          ? "Run timed out"
+          : outcome === "BUDGET_EXCEEDED" || reason === "budget_exceeded"
+            ? "Run stopped at its budget"
+            : "Run failed";
+  return { title: `${head} · ${subjectOf(j)}`, body: detail };
 }
 
 async function completedText(tx: Tx, j: JobFacts, outcome: JobOutcome | undefined) {

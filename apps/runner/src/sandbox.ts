@@ -4,7 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { isAbsolute, resolve } from "node:path";
 
 // Bump together with the tag in package.json "sandbox:build" whenever infra/sandbox/Dockerfile changes.
-export const SANDBOX_IMAGE = "nexus-sandbox:3";
+export const SANDBOX_IMAGE = "nexus-sandbox:4";
 export const SANDBOX_BUILD_COMMAND = "pnpm --filter @nexus/runner sandbox:build";
 export const SANDBOX_USER = "10001:10001"; // the image's non-root `nexus` user
 

@@ -134,9 +134,18 @@ async function succeed({ batch, append }: Awaited<ReturnType<typeof running>>) {
   return done;
 }
 
-const failWith = (reason: string, outcome?: "TIMED_OUT" | "BUDGET_EXCEEDED") => ({
+const failWith = (
+  reason: string,
+  outcome?: "TIMED_OUT" | "BUDGET_EXCEEDED" | "NEEDS_INFO",
+  extra: Record<string, unknown> = {},
+) => ({
   events: [
-    { occurredAt: new Date().toISOString(), type: "job.failed" as const, stage: null, payload: { reason } },
+    {
+      occurredAt: new Date().toISOString(),
+      type: "job.failed" as const,
+      stage: null,
+      payload: { reason, ...extra },
+    },
   ],
   transition: { to: "FAILED" as const, ...(outcome ? { outcome } : { outcome: "COMMAND_FAILED" as const }) },
 });
@@ -154,8 +163,9 @@ async function pendingApproval(verification: Verification) {
     stats: { added: 3, removed: 1 },
     agentSummary: "All tests pass and the PR is open.", // agent narration: never in a notification
     verification,
+    integrity: { clean: true, problems: [] },
   });
-  return { job, ...up };
+  return { job, approvalId: up.approvalId!, actionHash: up.actionHash! };
 }
 const decide = (approvalId: string, actionHash: string, decision: "approve" | "deny") =>
   decideApproval(db, { ownerId, approvalId, body: { decision, actionHash }, correlationId: randomUUID() });
@@ -230,6 +240,75 @@ describe("job notifications", () => {
     },
   );
 
+  it("NEEDS_INFO → says the agent needs an answer and where to give it", async () => {
+    const { job, batch, append } = await diagnostic();
+    await append(batch(failWith("needs_info", "NEEDS_INFO", { questions: ["Which region?"] })));
+    const [n, ...rest] = await forJob(job.id);
+    expect(rest).toEqual([]);
+    expect(n).toMatchObject({
+      category: "TASK_FAILED",
+      title: "Agent needs your answer · node-version diagnostic",
+    });
+    expect(n!.body).toMatch(/question only you can answer/);
+    expect(n!.body).toMatch(/answer it in the run/i);
+    expect(n!.body).not.toMatch(/Which region/);
+  });
+
+  it("not_configured → says why no agent ran and what to add", async () => {
+    const { job, batch, append } = await diagnostic();
+    await append(batch(failWith("not_configured")));
+    const [n] = await forJob(job.id);
+    expect(n!.body).toMatch(/no tests NEXUS can run/);
+    expect(n!.body).toMatch(/test.*script|\.nexus\.json/);
+  });
+
+  it("FAILED with a stuck report → what still fails and the next step, never the agent's guess", async () => {
+    const { job, batch, append } = await diagnostic();
+    const GUESS = "probably a race in the cart reducer";
+    await append(
+      batch(
+        failWith("tests_failed", undefined, {
+          report: {
+            rounds: [{ round: 1, tried: "edited cart.ts", result: "2 tests still fail" }],
+            stillFailing: "cart totals test: expected 12, got 10",
+            rootCauseGuess: GUESS,
+            nextStep: "Keep fixing with a note about rounding.",
+          },
+        }),
+      ),
+    );
+    const [n] = await forJob(job.id);
+    expect(n!.body).toContain("Still failing: cart totals test: expected 12, got 10");
+    expect(n!.body).toContain("Next step: Keep fixing with a note about rounding.");
+    expect(n!.body).not.toContain(GUESS);
+    expect(n!.body.length).toBeLessThanOrEqual(1000);
+  });
+
+  it("a stuck report at its maximum size still fits the notification, and a malformed one is ignored", async () => {
+    const big = await diagnostic();
+    await big.append(
+      big.batch(
+        failWith("tests_failed", undefined, {
+          report: {
+            rounds: [],
+            stillFailing: "x".repeat(2000),
+            rootCauseGuess: null,
+            nextStep: "y".repeat(1000),
+          },
+        }),
+      ),
+    );
+    const [n] = await forJob(big.job.id);
+    expect(n!.body.length).toBeLessThanOrEqual(1000);
+    expect(n!.body).toContain("Still failing: ");
+    expect(n!.body).toContain("Next step: ");
+
+    const bad = await diagnostic();
+    await bad.append(bad.batch(failWith("tests_failed", undefined, { report: { stillFailing: 5 } })));
+    const [m] = await forJob(bad.job.id);
+    expect(m!.body).toMatch(/^The tests didn't pass.*keep fixing or start a new run\.$/);
+  });
+
   it("RECOVERY_REQUIRED → TASK_FAILED once, though the reaper runs again", async () => {
     const { job } = await diagnostic();
     await sql.query(`update jobs set lease_expires_at = now() - interval '1 minute' where id = $1`, [job.id]);
@@ -262,16 +341,7 @@ describe("job notifications", () => {
 });
 
 describe("issue run notifications (tests + PR facts)", () => {
-  it.each([
-    ["passed", V("passed"), "Tests passed (run by NEXUS in the sandbox)."],
-    ["failed", V("failed"), "Tests FAILED with exit code 1 (run by NEXUS in the sandbox)."],
-    ["not verified", V("not_configured"), "Tests not verified by NEXUS."],
-    [
-      "couldn't run",
-      V("error", { reason: "Docker is not reachable on the runner host" }),
-      "Tests couldn't run: Docker is not reachable on the runner host.",
-    ],
-  ])(
+  it.each([["passed", V("passed"), "Tests passed (run by NEXUS in the sandbox)."]])(
     "approval requested, tests %s → APPROVAL_REQUIRED 'ready for review', no PR claimed",
     async (_, v, tests) => {
       const { job, approvalId } = await pendingApproval(v);
@@ -286,6 +356,33 @@ describe("issue run notifications (tests + PR facts)", () => {
       ]);
     },
   );
+
+  it.each([
+    [undefined, "The tests didn't pass, so no push approval was created."],
+    ["ENVIRONMENT_BLOCKED", "The tests couldn't run in the sandbox, so no push approval was created."],
+  ])("a non-passing upload (%s) → TASK_FAILED, no approval to review", async (terminalOutcome, why) => {
+    await issueJob();
+    const { job } = await running();
+    await uploadChangeset(db, runner, job.id, {
+      fencingToken: job.fencingToken,
+      baseSha: SNAPSHOT.baseSha,
+      files: [{ change: "modified", path: "src/cart.ts", mode: "100644", contentBase64: "eA==" }],
+      stats: { added: 1, removed: 0 },
+      agentSummary: "Done.",
+      verification: V("failed"),
+      integrity: { clean: true, problems: [] },
+      ...(terminalOutcome ? { terminalOutcome: terminalOutcome as "ENVIRONMENT_BLOCKED" } : {}),
+    });
+    const notes = await forJob(job.id);
+    expect(notes).toEqual([
+      expect.objectContaining({
+        category: "TASK_FAILED",
+        title: "Run failed · acme/web#42",
+        body: expect.stringContaining(why),
+      }),
+    ]);
+    expect(notes[0]!.subject.approvalId).toBeNull();
+  });
 
   it("EXECUTED → TASK_DONE 'Draft PR #n opened' from GitHub's answer, once, though execution is reconciled again", async () => {
     const { job, approvalId, actionHash } = await pendingApproval(V("passed"));
@@ -304,12 +401,12 @@ describe("issue run notifications (tests + PR facts)", () => {
   });
 
   it("denied → TASK_DONE that says nothing was pushed and no PR exists", async () => {
-    const { job, approvalId, actionHash } = await pendingApproval(V("failed"));
+    const { job, approvalId, actionHash } = await pendingApproval(V("passed"));
     await decide(approvalId, actionHash, "deny");
     const done = (await forJob(job.id)).find((n) => n.category === "TASK_DONE");
     expect(done).toMatchObject({
       title: "Push denied · acme/web#42",
-      body: "You denied the push, so nothing was pushed and no PR exists. Tests FAILED with exit code 1 (run by NEXUS in the sandbox).",
+      body: "You denied the push, so nothing was pushed and no PR exists. Tests passed (run by NEXUS in the sandbox).",
     });
     expect(done!.title).not.toMatch(/PR #/);
   });

@@ -120,6 +120,13 @@
       "when": 1794171717708,
       "tag": "0016_giant_the_phantom",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1794191469342,
+      "tag": "0017_first_natasha_romanoff",
+      "breakpoints": true
     }
   ]
 }

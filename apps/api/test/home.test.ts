@@ -818,6 +818,27 @@ describe("GET /v1/home", () => {
     expect((await at(projectId)).decisions.incidents).toBe(0);
   });
 
+  it("a base or red-only test run never counts as a job's result", async () => {
+    const projectId = await newProject();
+    const today = (m: number) => utc(`2026-03-10T0${m}:00:00`);
+    const passedThenBase = await seedJob({ projectId, createdAt: today(1) });
+    await seedTests(passedThenBase.id, 1, "passed");
+    await seedEvent(passedThenBase.id, 2, {
+      type: "test.completed",
+      stage: "test",
+      payload: { ...verification("failed"), only: "base" },
+    });
+    const onlyRed = await seedJob({ projectId, createdAt: today(2) });
+    await seedEvent(onlyRed.id, 1, {
+      type: "test.completed",
+      stage: "test",
+      payload: { ...verification("failed"), only: "red" },
+    });
+    expect(text(await at(projectId))).toBe(
+      "Nothing needs you right now. 2 runs today, 1 with passing tests.",
+    );
+  });
+
   it("headline without decisions: runs today with passing tests, or no runs yet today", async () => {
     const projectId = await newProject();
     const old = await seedJob({ projectId, createdAt: utc("2026-03-07T10:00:00") });

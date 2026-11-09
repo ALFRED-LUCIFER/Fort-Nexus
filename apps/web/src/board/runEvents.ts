@@ -221,6 +221,24 @@ export function changedFiles(p: Record<string, unknown> | undefined) {
   return { files, fileCount: num(p?.fileCount) ?? files?.length };
 }
 
+/** What the Developer said last, without NEXUS's protocol lines. QA's final text is its review, shown as such. */
+function developerReport(events: readonly RunEvent[]): string | undefined {
+  let qa = false;
+  let report: string | undefined;
+  for (const e of events) {
+    if (e.type === "agent.started") qa = e.payload.agent === "QA";
+    else if (!qa && e.type === "agent.message" && e.payload.kind === "summary") {
+      const text = str(e.payload.text)
+        ?.split("\n")
+        .filter((l) => !/^\s*NEXUS_(?:PHASE|RESULT)\b/.test(l))
+        .join("\n")
+        .trim();
+      if (text) report = text;
+    }
+  }
+  return report;
+}
+
 export function agentFacts(events: readonly RunEvent[]): AgentFacts {
   const summary = events.findLast((e) => e.type === "agent.message" && e.payload.kind === "summary")?.payload;
   const usage = summary?.usage as Record<string, unknown> | undefined;
@@ -240,7 +258,7 @@ export function agentFacts(events: readonly RunEvent[]): AgentFacts {
     inputTokens: fresh === undefined ? undefined : fresh + cached,
     cachedInputTokens: fresh === undefined ? undefined : cached,
     outputTokens: num(usage?.outputTokens),
-    report: str(summary?.text),
+    report: developerReport(events),
     files,
     fileCount,
     secretLeak: art?.secretLeak === true,
@@ -256,6 +274,13 @@ export const tokens = (f: AgentFacts) =>
   f.inputTokens === undefined
     ? "—"
     : `${kilo(f.inputTokens)} / ${kilo(f.outputTokens ?? 0)}${f.cachedInputTokens ? ` · ${kilo(f.cachedInputTokens)} from cache` : ""}`;
+
+/**
+ * The test run that is the job's result. Runs with `only` ("base": the tests on the base commit, "red": the new tests
+ * without the change) are checks along the way, not the result.
+ */
+export const jobTestEvent = (events: readonly RunEvent[]) =>
+  events.findLast((e) => e.type === "test.completed" && e.payload.only === undefined);
 
 /** Plain words for NEXUS's own test result (FR-DEV-05). */
 export const TEST_WORD: Record<Verification["status"], string> = {
@@ -274,7 +299,7 @@ export function verificationOf(
   approval: Approval | null | undefined,
 ): Verification | undefined {
   if (approval) return approval.action.verification;
-  return Verification.safeParse(find(events, "test.completed")?.payload).data;
+  return Verification.safeParse(jobTestEvent(events)?.payload).data;
 }
 
 export type StageState = "pending" | "active" | "waiting" | "done" | "failed" | "skipped";
@@ -320,7 +345,7 @@ export function issueStages(
   const created = at((e) => e.type === "job.created");
   const implStart = at((e) => e.type === "agent.started") ?? state("RUNNING");
   const implDone = state("VERIFYING") ?? at((e) => e.type === "artifact.created");
-  const testEvent = find(events, "test.completed");
+  const testEvent = jobTestEvent(events);
   const tested = Verification.safeParse(testEvent?.payload).data;
   const gate = at((e) => e.type === "approval.requested");
   const published = at((e) => e.type === "external_action.completed");
@@ -431,6 +456,16 @@ export function explainIssue(
         const word = { wall_clock: "time ", cost: "cost ", turns: "turn " }[which] ?? "";
         return `The agent hit its ${word}budget and was stopped. Nothing was pushed.`;
       }
+      if (outcome === "NEEDS_INFO")
+        return "The agent has a question only you can answer. Nothing was pushed.";
+      if (outcome === "FAILED_TESTS")
+        return "NEXUS's own test run didn't pass, so there is no push approval. Nothing was pushed.";
+      if (f.failReason === "not_configured")
+        return "NEXUS has no tests it can run for this repository, so the agent wasn't started. Nothing was pushed.";
+      if (outcome === "ENVIRONMENT_BLOCKED")
+        return "The tests couldn't run in the sandbox, so there is no push approval. Nothing was pushed.";
+      if (outcome === "ALREADY_FAILING")
+        return "The tests were already failing before the change, so there is no push approval. Nothing was pushed.";
       return `The run failed${f.failReason ? ` (${f.failReason.replaceAll("_", " ")})` : ""}. Nothing was pushed.`;
     default:
       return explain(status, {}, runnerName, runnerOnline);
@@ -520,6 +555,11 @@ export function toLine(e: RunEvent): TermLine {
     case "test.completed": {
       const v = Verification.safeParse(p).data;
       if (!v) return line("tests", "result unreadable", CORAL);
+      if (p.only === "base" || p.only === "red")
+        return line(
+          "check",
+          `${p.only === "base" ? "tests on the base commit" : "new tests without the change"}: ${TEST_WORD[v.status]} · ${duration(v.durationMs)}`,
+        );
       const cmd = v.test ? ` · ${v.test.join(" ")}` : "";
       const exit = v.exitCode === null ? "" : ` · exit ${v.exitCode}`;
       const tone = v.status === "passed" ? GREEN : v.status === "not_configured" ? MUTED : CORAL;
@@ -561,6 +601,32 @@ export function toLine(e: RunEvent): TermLine {
         `code ${num(p.exitCode) ?? "?"} · ${duration(num(p.durationMs) ?? 0)}`,
         p.exitCode === 0 ? GREEN : CORAL,
       );
+    case "loop.round.started":
+      return line(
+        "round",
+        `round ${num(p.round) ?? "?"} of ${num(p.of) ?? "?"} · ${p.kind === "repair" ? "repair" : "first attempt"}`,
+        TEAL,
+      );
+    case "loop.round.completed":
+      return line(
+        "round",
+        `round ${num(p.round) ?? "?"} ended: ${str(p.summary) ?? str(p.result) ?? ""}`,
+        TEAL,
+      );
+    case "loop.stopped":
+      return line("loop", `stopped: ${(str(p.reason) ?? "?").replaceAll("_", " ")}`, AMBER);
+    case "phase.completed":
+      return line("phase", `${str(p.phase) ?? "?"} done`, VIOLET);
+    case "qa.completed":
+      return line(
+        "qa",
+        p.status === "reviewed"
+          ? `review (AI opinion): ${p.verdict === "pass" ? "no defects" : "defects found"}`
+          : "review could not run",
+        VIOLET,
+      );
+    case "feedback.delivered":
+      return line("you", `your message reached round ${num(p.round) ?? "?"}`, TEAL);
     case "job.completed":
       return line("done", str(p.outcome) ?? "completed", GREEN);
     case "job.failed":

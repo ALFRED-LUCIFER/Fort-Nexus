@@ -118,6 +118,12 @@ Checks on the merged tree: typecheck, lint, prettier, tests (api 460, web 274, r
 
 Owner setup: claude.ai plan with Claude Code on the web, the Claude GitHub App on the repository, one routine per repository with an API trigger, `~/.nexus/claude-cloud.json` (mode 600). Not live-tested against Anthropic yet.
 
+## Self-healing runs: built on `feat/self-healing-runs` (spec: `docs/specs/self-healing-runs.md`)
+
+Repair loop (up to 3 rounds, each ending in NEXUS's own test run), no push approval without a passing run on the pushed tree, QA review, Keep fixing, owner feedback while a run works, stuck report, Developer profile for direct jobs, sandbox `nexus-sandbox:4` (working `pnpm`/`yarn`), migration `0017`. Web: rounds, phases, QA, stuck report, feedback box and Keep fixing in the run drawer.
+
+Not built: Talk integration for feedback; fixing failed GitHub CI on an open draft PR (next wave); reworking Product, AI researcher, Financial analyst, Chief of Staff.
+
 ## Next
 
 - Owner check: one live Talk turn on Anthropic and on Foundry.

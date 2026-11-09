@@ -22,6 +22,8 @@ import {
   type CreateJobDraftRequest,
   type JobDraftPreviewRequest,
   type JobHistoryQuery,
+  type JobFeedbackRequest,
+  type KeepFixingRequest,
   type UpdateJobDraftRequest,
   AgentProfileVersion,
   AgentProfileVersionList,
@@ -54,6 +56,8 @@ import {
   IssueList,
   IssuePreview,
   Job,
+  JobFeedback,
+  JobFeedbackList,
   JobList,
   Me,
   MetricDictionary,
@@ -227,6 +231,21 @@ export const api = {
       CreateJobResponse,
       post({ [IDEMPOTENCY_HEADER]: idempotencyKey }),
     ),
+  // Keep fixing: a new job from this one's stored changes (or the owner's answer to its questions).
+  keepFixing: (id: string, idempotencyKey: string, note?: KeepFixingRequest["note"]) =>
+    request(
+      `/v1/jobs/${encodeURIComponent(id)}/keep-fixing`,
+      CreateJobResponse,
+      post({ [IDEMPOTENCY_HEADER]: idempotencyKey }, note === undefined ? undefined : { note }),
+    ),
+  sendFeedback: (id: string, text: JobFeedbackRequest["text"], idempotencyKey: string) =>
+    request(
+      `/v1/jobs/${encodeURIComponent(id)}/feedback`,
+      JobFeedback,
+      post({ [IDEMPOTENCY_HEADER]: idempotencyKey }, { text }),
+    ),
+  jobFeedback: (id: string) =>
+    request(`/v1/jobs/${encodeURIComponent(id)}/feedback`, JobFeedbackList).then((l) => l.items),
   githubStatus: () => request("/v1/github/status", GithubStatus),
   // With a project: only the repositories bound to it. Without: every installed repository (binding UI).
   repositories: (projectId?: string) =>
@@ -569,6 +588,7 @@ export const keys = {
   sessions: ["sessions"] as const,
   jobs: ["jobs"] as const,
   job: (id: string) => ["jobs", id] as const,
+  jobFeedback: (id: string) => ["jobs", id, "feedback"] as const,
   github: ["github"] as const,
   repositories: ["github", "repositories"] as const,
   repositoriesOf: (projectId: string | undefined) => ["github", "repositories", projectId ?? "all"] as const,
