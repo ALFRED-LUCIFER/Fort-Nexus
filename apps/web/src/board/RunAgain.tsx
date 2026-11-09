@@ -58,6 +58,8 @@ export function useKeepFixing(job: Job, scopeNoteId?: string) {
     pending: mutation.isPending,
     error: mutation.error,
     ready: scope.ready,
+    /** The scope's reason alone (the offline wording differs per use). */
+    scopeReason: scopeReasonFor(scope, job),
     reason: scopeReasonFor(scope, job) ?? offline,
   };
 }

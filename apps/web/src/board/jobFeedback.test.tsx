@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { onlineManager } from "@tanstack/react-query";
+import { PICK_PROJECT } from "./scope.tsx";
 import {
   SSE_RUN_EVENT,
   type Approval,
@@ -226,10 +227,6 @@ describe("run drawer: Keep fixing and answering", () => {
     await user.type(await box("Note for the agent (optional)"), "Try rounding in toCents.");
     await user.dblClick(screen.getByRole("button", { name: "Keep fixing" }));
     expect((await screen.findByRole<HTMLButtonElement>("button", { name: "Queueing…" })).disabled).toBe(true);
-    expect(
-      new Set(posts(calls, `/v1/jobs/${JOB_ID}/keep-fixing`).map((c) => c.headers.get("idempotency-key")))
-        .size,
-    ).toBe(1);
     release();
     await waitFor(() => expect(router.state.location.search.drawer).toBe(`run:${NEW_JOB}`));
     expect(posts(calls, `/v1/jobs/${JOB_ID}/keep-fixing`)).toHaveLength(1);
@@ -312,6 +309,123 @@ describe("run drawer: Keep fixing and answering", () => {
   });
 });
 
+const keyOf = (c: Call) => c.headers.get("idempotency-key");
+
+describe("idempotency keys follow the intended action", () => {
+  it("Keep fixing: a retry of the same note reuses the key, a changed note gets a new one", async () => {
+    let n = 0;
+    const user = userEvent.setup();
+    const { calls, emit } = await open(issueJob({ status: "FAILED", outcome: "FAILED_TESTS" }), {
+      [KEEP]: () => (++n === 1 ? apiError(500, "INTERNAL", "Try again.") : json(QUEUED, 202)),
+    });
+    emit(changed, event(2, "test.completed", tests("failed")));
+    const input = await box("Note for the agent (optional)");
+    await user.type(input, "first note");
+    await user.click(screen.getByRole("button", { name: "Keep fixing" }));
+    await screen.findByRole("alert");
+    n = 0;
+    await user.click(screen.getByRole("button", { name: "Keep fixing" }));
+    await waitFor(() => expect(posts(calls, `/v1/jobs/${JOB_ID}/keep-fixing`)).toHaveLength(2));
+    const [a, b] = posts(calls, `/v1/jobs/${JOB_ID}/keep-fixing`);
+    expect(keyOf(a!)).toBeTruthy();
+    expect(keyOf(b!)).toBe(keyOf(a!));
+  });
+
+  it("Keep fixing: changing the note after a failure uses a different key", async () => {
+    const user = userEvent.setup();
+    const { calls, emit } = await open(issueJob({ status: "FAILED", outcome: "FAILED_TESTS" }), {
+      [KEEP]: () => apiError(500, "INTERNAL", "Try again."),
+    });
+    emit(changed, event(2, "test.completed", tests("failed")));
+    const input = await box("Note for the agent (optional)");
+    await user.type(input, "first note");
+    await user.click(screen.getByRole("button", { name: "Keep fixing" }));
+    await waitFor(() => expect(posts(calls, `/v1/jobs/${JOB_ID}/keep-fixing`)).toHaveLength(1));
+    await screen.findByRole("alert");
+    await user.type(input, " and more");
+    await user.click(screen.getByRole("button", { name: "Keep fixing" }));
+    await waitFor(() => expect(posts(calls, `/v1/jobs/${JOB_ID}/keep-fixing`)).toHaveLength(2));
+    const [a, b] = posts(calls, `/v1/jobs/${JOB_ID}/keep-fixing`);
+    expect(keyOf(b!)).not.toBe(keyOf(a!));
+  });
+
+  it("feedback: the same words retried reuse the key; changed words get a new one", async () => {
+    const user = userEvent.setup();
+    const { calls } = await open(issueJob(), {
+      [`POST ${FEEDBACK}`]: () => apiError(500, "INTERNAL", "Try again."),
+    });
+    const input = await box("Message to the agent");
+    await user.type(input, "one");
+    await user.click(screen.getByRole("button", { name: "Send to the agent" }));
+    await waitFor(() => expect(posts(calls, FEEDBACK)).toHaveLength(1));
+    await screen.findByRole("alert");
+    await user.click(screen.getByRole("button", { name: "Send to the agent" }));
+    await waitFor(() => expect(posts(calls, FEEDBACK)).toHaveLength(2));
+    await user.type(input, " two");
+    await user.click(screen.getByRole("button", { name: "Send to the agent" }));
+    await waitFor(() => expect(posts(calls, FEEDBACK)).toHaveLength(3));
+    const [a, b, c] = posts(calls, FEEDBACK);
+    expect(keyOf(a!)).toBeTruthy();
+    expect(keyOf(b!)).toBe(keyOf(a!));
+    expect(keyOf(c!)).not.toBe(keyOf(a!));
+  });
+});
+
+describe("feedback delivery from the runner's own events", () => {
+  it("shows the round from feedback.delivered while the API still says null", async () => {
+    messages = [message({ deliveredRound: null })];
+    const { emit } = await open(issueJob());
+    const list = await screen.findByRole("status", { name: "Your messages to the agent" });
+    expect(list.textContent).toMatch(/Waiting for the next round/);
+    emit(event(5, "feedback.delivered", { ids: [FEEDBACK_ID], round: 3 }));
+    await waitFor(() => expect(list.textContent).toMatch(/Delivered to round 3/));
+  });
+
+  it("says a message wasn't used when loop.stopped lists it as unused", async () => {
+    messages = [message({ deliveredRound: null })];
+    const { emit } = await open(issueJob());
+    const list = await screen.findByRole("status", { name: "Your messages to the agent" });
+    emit(event(6, "loop.stopped", { reason: "rounds_exhausted", unusedFeedback: [FEEDBACK_ID] }));
+    await waitFor(() => expect(list.textContent).toMatch(/Not used: the job ended first/));
+  });
+});
+
+describe("scope and offline guards on paid or sending actions", () => {
+  it("the feedback box is disabled with the scope's reason in All", async () => {
+    mockFetch({
+      "GET /v1/me": () => json(ME),
+      "GET /v1/runners": () => json({ items: [runner()] }),
+      "GET /v1/jobs": () => json({ items: [issueJob()], nextCursor: null }),
+      [`GET /v1/jobs/${JOB_ID}`]: () => json(issueJob()),
+      "GET /v1/approvals": () => json({ items: [] }),
+      [`GET ${FEEDBACK}`]: () => json({ items: [] }),
+    });
+    const user = userEvent.setup();
+    renderApp(`/?ws=dev&drawer=run:${JOB_ID}`);
+    const input = await box("Message to the agent");
+    await user.type(input, "hello");
+    expect(await screen.findByText(PICK_PROJECT)).toBeTruthy();
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Send to the agent" }).disabled).toBe(true);
+  });
+
+  it("Keep fixing in the drawer is disabled offline and sends nothing", async () => {
+    const user = userEvent.setup();
+    const { calls, emit } = await open(issueJob({ status: "FAILED", outcome: "FAILED_TESTS" }), {
+      [KEEP]: () => json(QUEUED, 202),
+    });
+    emit(changed, event(2, "test.completed", tests("failed")));
+    await user.type(await box("Note for the agent (optional)"), "note");
+    act(() => onlineManager.setOnline(false));
+    const button = await screen.findByRole<HTMLButtonElement>("button", { name: "Keep fixing" });
+    await waitFor(() => expect(button.disabled).toBe(true));
+    expect(
+      screen.getByText(/You're offline\. You can keep fixing when the connection is back\./),
+    ).toBeTruthy();
+    await user.click(button);
+    expect(posts(calls, `/v1/jobs/${JOB_ID}/keep-fixing`)).toHaveLength(0);
+  });
+});
+
 describe("Jobs page: Keep fixing", () => {
   const NOT_PASSED = "33333333-3333-4333-8333-333333333331";
   const PASSED = "33333333-3333-4333-8333-333333333332";
@@ -346,5 +460,22 @@ describe("Jobs page: Keep fixing", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]!.body).toBeNull();
     expect(sent[0]!.headers.get("idempotency-key")).toBeTruthy();
+  });
+
+  it("is disabled offline on the row and sends nothing", async () => {
+    const calls = mockFetch({
+      "GET /v1/me": () => json(ME),
+      "GET /v1/runners": () => json({ items: [runner()] }),
+      "GET /v1/jobs": () => json({ items: [], nextCursor: null }),
+      "GET /v1/jobs/history": () => json({ items: [row(NOT_PASSED, "failed")], nextCursor: null }),
+      [`POST /v1/jobs/${NOT_PASSED}/keep-fixing`]: () => json(QUEUED, 202),
+    });
+    const user = userEvent.setup();
+    renderApp(`${IN_PROJECT}&drawer=jobs`);
+    const button = await screen.findByRole<HTMLButtonElement>("button", { name: /^Keep fixing/ });
+    act(() => onlineManager.setOnline(false));
+    await waitFor(() => expect(button.disabled).toBe(true));
+    await user.click(button);
+    expect(posts(calls, `/v1/jobs/${NOT_PASSED}/keep-fixing`)).toHaveLength(0);
   });
 });

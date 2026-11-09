@@ -100,12 +100,9 @@ export function JobFeedback({
   const error = mode === "feedback" ? send.error : fix.error;
   const reason =
     mode === "feedback"
-      ? online
-        ? null
-        : "You're offline. Send it when the connection is back."
+      ? (fix.scopeReason ?? (online ? null : "You're offline. Send it when the connection is back."))
       : fix.reason;
-  const canSend =
-    !pending && !reason && over <= 0 && (!needsText || !!words) && (mode === "feedback" || fix.ready);
+  const canSend = !pending && !reason && over <= 0 && (!needsText || !!words) && fix.ready;
 
   const submit = () => {
     if (!canSend || !mode) return;
