@@ -155,7 +155,7 @@ async function pendingApproval(verification: Verification) {
     agentSummary: "All tests pass and the PR is open.", // agent narration: never in a notification
     verification,
   });
-  return { job, ...up };
+  return { job, approvalId: up.approvalId!, actionHash: up.actionHash! };
 }
 const decide = (approvalId: string, actionHash: string, decision: "approve" | "deny") =>
   decideApproval(db, { ownerId, approvalId, body: { decision, actionHash }, correlationId: randomUUID() });
@@ -262,16 +262,7 @@ describe("job notifications", () => {
 });
 
 describe("issue run notifications (tests + PR facts)", () => {
-  it.each([
-    ["passed", V("passed"), "Tests passed (run by NEXUS in the sandbox)."],
-    ["failed", V("failed"), "Tests FAILED with exit code 1 (run by NEXUS in the sandbox)."],
-    ["not verified", V("not_configured"), "Tests not verified by NEXUS."],
-    [
-      "couldn't run",
-      V("error", { reason: "Docker is not reachable on the runner host" }),
-      "Tests couldn't run: Docker is not reachable on the runner host.",
-    ],
-  ])(
+  it.each([["passed", V("passed"), "Tests passed (run by NEXUS in the sandbox)."]])(
     "approval requested, tests %s → APPROVAL_REQUIRED 'ready for review', no PR claimed",
     async (_, v, tests) => {
       const { job, approvalId } = await pendingApproval(v);
@@ -286,6 +277,32 @@ describe("issue run notifications (tests + PR facts)", () => {
       ]);
     },
   );
+
+  it.each([
+    [undefined, "The tests didn't pass, so no push approval was created."],
+    ["ENVIRONMENT_BLOCKED", "The tests couldn't run in the sandbox, so no push approval was created."],
+  ])("a non-passing upload (%s) → TASK_FAILED, no approval to review", async (terminalOutcome, why) => {
+    await issueJob();
+    const { job } = await running();
+    await uploadChangeset(db, runner, job.id, {
+      fencingToken: job.fencingToken,
+      baseSha: SNAPSHOT.baseSha,
+      files: [{ change: "modified", path: "src/cart.ts", mode: "100644", contentBase64: "eA==" }],
+      stats: { added: 1, removed: 0 },
+      agentSummary: "Done.",
+      verification: V("failed"),
+      ...(terminalOutcome ? { terminalOutcome: terminalOutcome as "ENVIRONMENT_BLOCKED" } : {}),
+    });
+    const notes = await forJob(job.id);
+    expect(notes).toEqual([
+      expect.objectContaining({
+        category: "TASK_FAILED",
+        title: "Run failed · acme/web#42",
+        body: expect.stringContaining(why),
+      }),
+    ]);
+    expect(notes[0]!.subject.approvalId).toBeNull();
+  });
 
   it("EXECUTED → TASK_DONE 'Draft PR #n opened' from GitHub's answer, once, though execution is reconciled again", async () => {
     const { job, approvalId, actionHash } = await pendingApproval(V("passed"));
@@ -304,12 +321,12 @@ describe("issue run notifications (tests + PR facts)", () => {
   });
 
   it("denied → TASK_DONE that says nothing was pushed and no PR exists", async () => {
-    const { job, approvalId, actionHash } = await pendingApproval(V("failed"));
+    const { job, approvalId, actionHash } = await pendingApproval(V("passed"));
     await decide(approvalId, actionHash, "deny");
     const done = (await forJob(job.id)).find((n) => n.category === "TASK_DONE");
     expect(done).toMatchObject({
       title: "Push denied · acme/web#42",
-      body: "You denied the push, so nothing was pushed and no PR exists. Tests FAILED with exit code 1 (run by NEXUS in the sandbox).",
+      body: "You denied the push, so nothing was pushed and no PR exists. Tests passed (run by NEXUS in the sandbox).",
     });
     expect(done!.title).not.toMatch(/PR #/);
   });

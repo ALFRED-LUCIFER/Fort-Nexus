@@ -230,6 +230,22 @@ const REASONS: Record<string, [string, string]> = {
     "Pushing the branch or opening the draft PR failed; nothing was merged.",
     "Open the run for GitHub's answer, check the branch, then start a new run.",
   ],
+  tests_failed: [
+    "The tests didn't pass, so no push approval was created.",
+    "Open the run to see what failed, then keep fixing or start a new run.",
+  ],
+  environment_blocked: [
+    "The tests couldn't run in the sandbox, so no push approval was created.",
+    "Open the run to see what blocked them, then keep fixing or start a new run.",
+  ],
+  already_failing: [
+    "The tests were already failing before the change, so no push approval was created.",
+    "Fix the failing tests on the base branch, then start a new run.",
+  ],
+  integrity_failed: [
+    "The change altered how the tests run, so its passing result can't be trusted and no push approval was created.",
+    "Open the run to see what changed, then keep fixing or start a new run.",
+  ],
   agent_failed: [
     "The coding agent stopped with an error.",
     "Open the run for the last output, then start a new run.",

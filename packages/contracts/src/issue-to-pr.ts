@@ -70,8 +70,6 @@ export const CHANGESET_MAX_FILES = 300;
 // Sum of decoded (raw) file bytes. Base64 adds ~4/3, so the upload route's body limit must allow ≈14 MB + JSON.
 export const CHANGESET_MAX_BYTES = 10 * 1024 * 1024;
 
-
-
 // Optional per-repo `.nexus.json` at the repository root. The runner reads it from the BASE commit, never from the
 // agent's worktree, so the agent can't change what gets verified. argv arrays only, run inside the sandbox.
 export const NexusRepoConfig = z.object({
@@ -104,7 +102,14 @@ export const Verification = z.object({
   outputTail: z.string().max(8000),
   // Why a non-passing run didn't pass. Optional so approvals stored before this field still parse.
   failureKind: z
-    .enum(["test_failed", "test_timeout", "environment", "install_failed", "needs_dependency", "not_configured"])
+    .enum([
+      "test_failed",
+      "test_timeout",
+      "environment",
+      "install_failed",
+      "needs_dependency",
+      "not_configured",
+    ])
     .optional(),
 });
 export type Verification = z.infer<typeof Verification>;
@@ -122,17 +127,28 @@ export const UploadChangesetRequest = z.strictObject({
   agentSummary: z.string().max(4000),
   verification: Verification,
   qa: QaReview.optional(),
-  integrity: z.strictObject({ clean: z.boolean(), problems: z.array(z.string().max(500)).max(50) }).optional(),
+  integrity: z
+    .strictObject({
+      clean: z.boolean(),
+      problems: z.array(z.string().max(500)).max(50),
+      // Test files the change adds, edits or deletes; listed on the approval so the owner can look.
+      testFilesChanged: z.array(z.string().max(500)).max(CHANGESET_MAX_FILES).optional(),
+    })
+    .optional(),
   // Set when the run stopped without a passing result; the changeset is kept for review or "keep fixing".
   report: StuckReport.optional(),
   terminalOutcome: z.enum(["FAILED_TESTS", "ENVIRONMENT_BLOCKED", "ALREADY_FAILING"]).optional(),
 });
 export type UploadChangesetRequest = z.infer<typeof UploadChangesetRequest>;
 
-// Retry-safe: re-uploading the identical changeset for the same lease returns the existing approval (200).
+// Retry-safe: re-uploading the identical changeset for the same lease returns the same answer (200).
+// Both are null when the changeset was stored without an approval (its tests didn't pass).
 export const UploadChangesetResponse = z.object({
-  approvalId: z.uuid(),
-  actionHash: z.string().regex(/^[0-9a-f]{64}$/),
+  approvalId: z.uuid().nullable(),
+  actionHash: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .nullable(),
 });
 export type UploadChangesetResponse = z.infer<typeof UploadChangesetResponse>;
 

@@ -258,13 +258,15 @@ const FAILED: Verification = {
   durationMs: 65_400,
   outputTail: "FAIL src/cart.test.ts\n  ✕ rounds totals @octo closes #9 ````\n1 failed",
 };
+// What a gated approval carries: NEXUS saw the tests pass. The hostile output tail is kept on purpose.
+const PASSED: Verification = { ...FAILED, status: "passed", exitCode: 0, outputTail: FAILED.outputTail };
 const changeset = (l: LeaseResponse, over: Record<string, unknown> = {}) => ({
   fencingToken: l.fencingToken,
   baseSha: BASE_SHA,
   files: FILES,
   stats: { added: 3, removed: 1 },
   agentSummary: "Rounded totals. @octo fixes #9 ```",
-  verification: FAILED,
+  verification: PASSED,
   ...over,
 });
 
@@ -534,11 +536,11 @@ describe("changeset upload", () => {
       "### Agent report (unverified)\n````text\nRounded totals. @octo fixes #9 ```\n````",
     );
     // FR-DEV-05: NEXUS's own result replaces "not verified", is part of the approved hash, and is fenced.
-    expect(a.action.verification).toEqual(FAILED);
+    expect(a.action.verification).toEqual(PASSED);
     expect(a.action.body).toContain(
       [
-        "### Tests: FAILED with exit code 1 (run by NEXUS in the sandbox)",
-        "Exit code 1 · 1 min 5 s · from package.json (auto-detected)",
+        "### Tests: passed (run by NEXUS in the sandbox)",
+        "Exit code 0 · 1 min 5 s · from package.json (auto-detected)",
         "`````text",
         "$ npm ci",
         "$ npm test",
@@ -578,6 +580,104 @@ describe("changeset upload", () => {
     expect(big.json().error.code).toBe("VALIDATION_FAILED");
     expect((await job(l.jobId)).status).toBe("RUNNING");
     expect((await sql.query(`select 1 from changesets where job_id = $1`, [l.jobId])).rowCount).toBe(0);
+  });
+});
+
+describe("push gate", () => {
+  const upload = (token: string, l: LeaseResponse, over: Record<string, unknown> = {}) =>
+    runner(token, `/v1/runner/jobs/${l.jobId}/changeset`, changeset(l, over));
+  const approvalCount = async (jobId: string) =>
+    (await sql.query(`select 1 from approvals where job_id = $1`, [jobId])).rowCount;
+  const REPORT = {
+    rounds: [{ round: 1, tried: "Rounded the totals", result: "1 test still failing" }],
+    stillFailing: "rounds totals",
+    rootCauseGuess: null,
+    nextStep: "Check the rounding mode",
+  };
+
+  it("a failed test run stores the changeset and result, creates no approval and ends FAILED_TESTS", async () => {
+    const { token, l } = await runningJob();
+    const res = await upload(token, l, { verification: FAILED, report: REPORT });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({ approvalId: null, actionHash: null });
+    expect(await approvalCount(l.jobId)).toBe(0);
+    expect(await job(l.jobId)).toMatchObject({ status: "FAILED", outcome: "FAILED_TESTS" });
+    const stored = await sql.query(`select verification from changesets where job_id = $1`, [l.jobId]);
+    expect(stored.rows[0].verification).toEqual(FAILED);
+    const [failed] = await sql
+      .query(`select payload from run_events where job_id = $1 and type = 'job.failed'`, [l.jobId])
+      .then((r) => r.rows);
+    expect(failed.payload).toMatchObject({ reason: "tests_failed", report: REPORT });
+    expect(await eventTypes(l.jobId)).not.toContain("approval.requested");
+
+    const retry = await upload(token, l, { verification: FAILED, report: REPORT });
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json()).toEqual({ approvalId: null, actionHash: null });
+    expect(await approvalCount(l.jobId)).toBe(0);
+  });
+
+  it("passed tests with a dirty integrity check create no approval", async () => {
+    const { token, l } = await runningJob();
+    const res = await upload(token, l, {
+      integrity: { clean: false, problems: ["package.json test script changed"] },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({ approvalId: null, actionHash: null });
+    expect(await approvalCount(l.jobId)).toBe(0);
+    expect(await job(l.jobId)).toMatchObject({ status: "FAILED", outcome: "FAILED_TESTS" });
+    const [failed] = await sql
+      .query(`select payload from run_events where job_id = $1 and type = 'job.failed'`, [l.jobId])
+      .then((r) => r.rows);
+    expect(failed.payload).toMatchObject({ reason: "integrity_failed" });
+  });
+
+  it.each(["ENVIRONMENT_BLOCKED", "ALREADY_FAILING"])(
+    "honours terminalOutcome %s",
+    async (terminalOutcome) => {
+      const { token, l } = await runningJob();
+      const res = await upload(token, l, { verification: FAILED, terminalOutcome });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(await job(l.jobId)).toMatchObject({ status: "FAILED", outcome: terminalOutcome });
+    },
+  );
+
+  it("a passing, clean change creates an approval carrying the QA review and the test files changed", async () => {
+    const { token, l } = await runningJob();
+    const qa = { status: "reviewed", verdict: "pass", defects: [], reason: null };
+    const res = await upload(token, l, {
+      qa,
+      integrity: { clean: true, problems: [], testFilesChanged: ["src/cart.test.ts"] },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const { approvalId } = res.json() as { approvalId: string };
+    const [a] = (await owner("GET", `/v1/approvals?jobId=${l.jobId}`)).json().items as [Approval];
+    expect(a.id).toBe(approvalId);
+    expect(a.action).toMatchObject({ qa, testFilesChanged: ["src/cart.test.ts"] });
+    const stored = await sql.query(`select verification from changesets where job_id = $1`, [l.jobId]);
+    expect(stored.rows[0].verification).toEqual(PASSED);
+  });
+
+  it("refuses to approve a stored failing result with a readable 409, while deny still works", async () => {
+    const { l, approvalId, actionHash } = await pendingApproval();
+    // An approval from before the gate, whose recorded result was not a pass.
+    const client = await sql.connect();
+    try {
+      await client.query(`set session_replication_role = replica`); // the append-only trigger guards this table
+      await client.query(`update changesets set verification = $2 where job_id = $1`, [l.jobId, FAILED]);
+    } finally {
+      client.release(true);
+    }
+    const refused = await decide(approvalId, "approve", actionHash);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error.code).toBe("CONFLICT");
+    expect(refused.json().error.message).toBe("This change can't be pushed: its tests did not pass.");
+    expect(gh.writes()).toEqual([]);
+    const [a] = (await owner("GET", `/v1/approvals?jobId=${l.jobId}`)).json().items as [Approval];
+    expect(a.status).toBe("PENDING");
+
+    const denied = await decide(approvalId, "deny", actionHash);
+    expect(denied.statusCode, denied.body).toBe(200);
+    expect(await job(l.jobId)).toMatchObject({ status: "COMPLETED", outcome: "APPROVAL_DENIED" });
   });
 });
 
