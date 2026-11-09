@@ -460,6 +460,23 @@ export type ClaudeTaskResult = {
   artifacts?: Artifacts;
 };
 
+/** The package-manager cache mount and env (matching verify.ts) that let the agent run the tests offline. */
+export function depsCacheSpec(depsCache: string | undefined): {
+  mounts: { source: string; target: string }[];
+  env: Record<string, string>;
+} {
+  if (!depsCache) return { mounts: [], env: {} };
+  return {
+    mounts: [{ source: depsCache, target: "/workspace/cache" }],
+    env: {
+      XDG_CACHE_HOME: "/workspace/cache",
+      npm_config_cache: "/workspace/cache/npm",
+      COREPACK_HOME: "/workspace/cache/corepack",
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+    },
+  };
+}
+
 const Prompt = z.string().min(1).max(200_000);
 
 export async function runClaudeTask(opts: ClaudeTaskOptions): Promise<ClaudeTaskResult> {
@@ -556,24 +573,14 @@ export async function runClaudeTask(opts: ClaudeTaskOptions): Promise<ClaudeTask
       runnerLabel,
       workspace: jobDir,
       workspaceReadOnly: true,
-      mounts: [
-        { source: worktreePath, target: REPO },
-        ...(opts.depsCache ? [{ source: opts.depsCache, target: "/workspace/cache" }] : []),
-      ],
+      mounts: [{ source: worktreePath, target: REPO }, ...depsCacheSpec(opts.depsCache).mounts],
       argv: opts.agentArgv ?? AGENT_ARGV,
       image,
       network: egressNames(jobId).network,
       user: writableUser(runtime),
       env: {
         ...provider.env,
-        ...(opts.depsCache
-          ? {
-              XDG_CACHE_HOME: "/workspace/cache",
-              npm_config_cache: "/workspace/cache/npm",
-              COREPACK_HOME: "/workspace/cache/corepack",
-              COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-            }
-          : {}),
+        ...depsCacheSpec(opts.depsCache).env,
         HTTPS_PROXY: PROXY_URL,
         https_proxy: PROXY_URL,
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",

@@ -72,6 +72,8 @@ export async function runQaReview(opts: QaOptions): Promise<QaReview> {
     if (after !== before) return couldNot("The review changed the code, so it was discarded.");
     const parsed = r.finalText ? parseResult(r.finalText) : null;
     if (parsed?.status !== "qa") return couldNot("The review did not report a result.");
+    if (parsed.verdict === "defects" && parsed.defects.length === 0)
+      return couldNot("The review reported defects without evidence.");
     const blocking = parsed.defects.some((d) => d.severity === "blocking");
     return {
       status: "reviewed",

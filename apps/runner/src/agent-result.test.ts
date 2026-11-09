@@ -53,6 +53,18 @@ describe("parseResult", () => {
     expect(r?.status === "qa" && r.defects).toHaveLength(20);
     expect(r?.status === "qa" && r.defects[0]?.evidence).toHaveLength(1000);
   });
+  it("keeps a blocking defect that follows 20 minor ones", () => {
+    const minor = Array.from({ length: 20 }, () => ({ severity: "minor", file: "a", evidence: "m" }));
+    const r = parseResult(
+      res({
+        status: "qa",
+        verdict: "defects",
+        defects: [...minor, { severity: "blocking", file: "b", evidence: "B" }],
+      }),
+    );
+    expect(r?.status === "qa" && r.defects).toHaveLength(20);
+    expect(r?.status === "qa" && r.defects[0]).toMatchObject({ severity: "blocking", evidence: "B" });
+  });
   it("defaults a missing file to null", () => {
     expect(
       parseResult(

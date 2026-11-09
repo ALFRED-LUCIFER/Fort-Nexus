@@ -74,15 +74,21 @@ export function parseResult(finalText: string): AgentResult | null {
         questions: v.questions.slice(0, MAX_QUESTIONS).map((q) => q.slice(0, QUESTION_MAX)),
       };
     case "qa":
-      // Truncate to the upload contract; never reject a whole review for length.
+      // Truncate to the upload contract, never rejecting a review for length. Blocking defects go first
+      // so the cap can't drop one.
       return {
         status: "qa",
         verdict: v.verdict,
-        defects: v.defects.slice(0, MAX_DEFECTS).map((d) => ({
-          severity: d.severity,
-          file: d.file ? d.file.slice(0, FILE_MAX) : null,
-          evidence: d.evidence.slice(0, EVIDENCE_MAX),
-        })),
+        defects: [
+          ...v.defects.filter((d) => d.severity === "blocking"),
+          ...v.defects.filter((d) => d.severity !== "blocking"),
+        ]
+          .slice(0, MAX_DEFECTS)
+          .map((d) => ({
+            severity: d.severity,
+            file: d.file ? d.file.slice(0, FILE_MAX) : null,
+            evidence: d.evidence.slice(0, EVIDENCE_MAX),
+          })),
       };
   }
 }

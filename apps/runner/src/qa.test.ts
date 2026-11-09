@@ -60,6 +60,12 @@ describe("runQaReview", () => {
     run.mockResolvedValue({ status: "COMPLETED", finalText: 'NEXUS_RESULT {"status":"done"}' });
     expect((await runQaReview(opts)).status).toBe("could_not_run");
   });
+  it("could_not_run for verdict defects with no defects", async () => {
+    run.mockResolvedValue({ status: "COMPLETED", finalText: qa({ verdict: "defects", defects: [] }) });
+    const r = await runQaReview(opts);
+    expect(r).toMatchObject({ status: "could_not_run", verdict: null });
+    expect(r.reason).toMatch(/without evidence/);
+  });
   it("could_not_run when the tree changed", async () => {
     tree.mockReturnValueOnce("T1").mockReturnValueOnce("T2");
     run.mockResolvedValue({ status: "COMPLETED", finalText: qa({ verdict: "pass", defects: [] }) });

@@ -10,6 +10,7 @@ import {
   CLAUDE_TOOLS,
   agentStream,
   collectArtifacts,
+  depsCacheSpec,
   filesContaining,
   runClaudeTask,
   worktreeGitDir,
@@ -41,6 +42,33 @@ const feed = (lines: string[], maxCostUsd = 1) => {
   const s = agentStream({ maxCostUsd, secrets: [FAKE_KEY] });
   return { s, events: lines.flatMap((l) => s.push(l)) };
 };
+
+describe("depsCacheSpec", () => {
+  const args = (depsCache?: string) => {
+    const { mounts, env } = depsCacheSpec(depsCache);
+    return dockerRunArgs({
+      jobId: randomUUID(),
+      runnerLabel: "local",
+      workspace: "/tmp/w",
+      argv: ["x"],
+      mounts: [{ source: "/tmp/repo", target: "/workspace/repo" }, ...mounts],
+      env,
+    }).join(" ");
+  };
+  it("mounts the cache and sets the package-manager env when given", () => {
+    const a = args("/host/cache");
+    expect(a).toContain("/host/cache");
+    expect(a).toContain("/workspace/cache");
+    expect(a).toContain("COREPACK_HOME=/workspace/cache/corepack");
+    expect(a).toContain("XDG_CACHE_HOME=/workspace/cache");
+    expect(a).toContain("npm_config_cache=/workspace/cache/npm");
+  });
+  it("adds nothing without it", () => {
+    const a = args();
+    expect(a).not.toContain("/workspace/cache");
+    expect(a).not.toContain("COREPACK_HOME");
+  });
+});
 
 describe("agentStream final text and attribution", () => {
   it("keeps the tail of the final message, redacted, for result parsing", () => {
