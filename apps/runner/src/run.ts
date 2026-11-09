@@ -436,7 +436,7 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
       const result = await runClaudeTask({
         jobId,
         worktreePath,
-        prompt: issuePrompt(snapshot),
+        prompt: issuePrompt(snapshot, { canRunTests: false }),
         budget: {
           maxWallClockMs: request.budget.maxWallClockMinutes * 60_000,
           maxTurns: request.budget.maxTurns,

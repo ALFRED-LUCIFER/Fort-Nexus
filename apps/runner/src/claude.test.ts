@@ -42,6 +42,20 @@ const feed = (lines: string[], maxCostUsd = 1) => {
   return { s, events: lines.flatMap((l) => s.push(l)) };
 };
 
+describe("agentStream final text and attribution", () => {
+  it("keeps the tail of the final message, redacted, for result parsing", () => {
+    const text = `${"x".repeat(60_000)}\nkey ${FAKE_KEY}\nNEXUS_RESULT {"status":"done"}`;
+    const { s } = feed([result({ result: text })]);
+    expect(s.finalText?.endsWith('NEXUS_RESULT {"status":"done"}')).toBe(true);
+    expect(s.finalText).not.toContain(FAKE_KEY);
+    expect(s.finalText?.length).toBeLessThanOrEqual(50_000);
+  });
+  it("marks agent.started with the attributed agent", () => {
+    const s = agentStream({ maxCostUsd: 1, secrets: [], started: { agent: "QA" } });
+    expect(s.push(FIXTURE[0] ?? "")[0]?.payload).toMatchObject({ agent: "QA" });
+  });
+});
+
 describe("agentStream event mapping (recorded SDK messages)", () => {
   it("maps a full run to the run timeline", () => {
     const { s, events } = feed(FIXTURE);

@@ -36,6 +36,7 @@ const MAX_LINE = 4 * 1024 * 1024;
 const TEXT_MAX = 2_000;
 const SUMMARY_MAX = 200;
 const MAX_FILES = 500;
+const FINAL_TEXT_MAX = 50_000;
 
 export const ClaudeBudget = z.strictObject({
   maxWallClockMs: z
@@ -176,6 +177,7 @@ export function agentStream(opts: {
   secrets: readonly string[];
   started?: Record<string, unknown>;
 }) {
+  let finalText: string | undefined;
   const scrub = scrubber(opts.secrets);
   const toolNames = new Map<string, string>();
   let summary: AgentSummary | undefined;
@@ -294,6 +296,7 @@ export function agentStream(opts: {
             : r.subtype !== "success" || r.is_error
               ? { reason: "agent_failed", subtype: summary.subtype }
               : undefined;
+      if (!r.is_error && r.result) finalText = scrub(r.result).slice(-FINAL_TEXT_MAX);
       const detail = r.is_error ? (r.errors?.join("\n") ?? r.result ?? "") : (r.result ?? "");
       return [
         {
@@ -328,6 +331,9 @@ export function agentStream(opts: {
     },
     get summary() {
       return summary;
+    },
+    get finalText() {
+      return finalText;
     },
     timeout() {
       verdict ??= { reason: "budget_exceeded", budget: "wall_clock" };
@@ -428,6 +434,12 @@ export type ClaudeTaskOptions = {
   signal?: AbortSignal;
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   runnerLabel?: string;
+  /** Overrides the provider's configured model for this run (the Developer profile's model). */
+  model?: string;
+  /** Package-manager cache (a host directory) mounted at /workspace/cache so the agent can run the tests offline. */
+  depsCache?: string;
+  /** Who this run is attributed to in `agent.started` (e.g. "QA"). */
+  agent?: string;
   image?: string;
   aiConfigFile?: string;
   killGraceMs?: number;
@@ -443,6 +455,8 @@ export type ClaudeTaskResult = {
   details?: Record<string, unknown>;
   outcome?: "TIMED_OUT";
   summary?: AgentSummary;
+  /** The agent's final message (redacted, the tail kept), for parsing NEXUS_RESULT. Untrusted model output. */
+  finalText?: string;
   artifacts?: Artifacts;
 };
 
@@ -491,11 +505,13 @@ export async function runClaudeTask(opts: ClaudeTaskOptions): Promise<ClaudeTask
 
   if (signal?.aborted) return { status: "STOPPED" };
 
+  const model = opts.model ?? provider.model;
   const container = containerName(jobId);
   const stream = agentStream({
     maxCostUsd: budget.maxCostUsd,
     secrets,
     started: {
+      ...(opts.agent ? { agent: opts.agent } : {}),
       provider: provider.provider,
       egress: [provider.host],
       sandbox: { runtime, image, container, network: egressNames(jobId).network },
@@ -522,7 +538,7 @@ export async function runClaudeTask(opts: ClaudeTaskOptions): Promise<ClaudeTask
       join(jobDir, "task.json"),
       JSON.stringify({
         prompt,
-        model: provider.model,
+        model,
         maxTurns: budget.maxTurns,
         maxBudgetUsd: budget.maxCostUsd,
         allowedTools: CLAUDE_TOOLS,
@@ -531,6 +547,7 @@ export async function runClaudeTask(opts: ClaudeTaskOptions): Promise<ClaudeTask
       { mode: 0o644 },
     );
     await mkdir(join(jobDir, "repo")); // mount point for the worktree inside the read-only /workspace
+    if (opts.depsCache) await mkdir(join(jobDir, "cache")); // mount point for the package-manager cache
     await chmod(jobDir, 0o755);
 
     await startEgress({ jobId, runnerLabel, allowHosts: [provider.host], image });
@@ -539,13 +556,24 @@ export async function runClaudeTask(opts: ClaudeTaskOptions): Promise<ClaudeTask
       runnerLabel,
       workspace: jobDir,
       workspaceReadOnly: true,
-      mounts: [{ source: worktreePath, target: REPO }],
+      mounts: [
+        { source: worktreePath, target: REPO },
+        ...(opts.depsCache ? [{ source: opts.depsCache, target: "/workspace/cache" }] : []),
+      ],
       argv: opts.agentArgv ?? AGENT_ARGV,
       image,
       network: egressNames(jobId).network,
       user: writableUser(runtime),
       env: {
         ...provider.env,
+        ...(opts.depsCache
+          ? {
+              XDG_CACHE_HOME: "/workspace/cache",
+              npm_config_cache: "/workspace/cache/npm",
+              COREPACK_HOME: "/workspace/cache/corepack",
+              COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+            }
+          : {}),
         HTTPS_PROXY: PROXY_URL,
         https_proxy: PROXY_URL,
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
@@ -559,7 +587,7 @@ export async function runClaudeTask(opts: ClaudeTaskOptions): Promise<ClaudeTask
     log("info", "claude task starting", {
       jobId,
       provider: provider.provider,
-      model: provider.model,
+      model,
       container,
     });
 
@@ -664,9 +692,10 @@ export async function runClaudeTask(opts: ClaudeTaskOptions): Promise<ClaudeTask
     artifactError = errorMessage(err);
     log("warn", "collecting claude artifacts failed", { jobId, error: artifactError });
   }
-  const done = (r: Omit<ClaudeTaskResult, "summary" | "artifacts">): ClaudeTaskResult => ({
+  const done = (r: Omit<ClaudeTaskResult, "summary" | "artifacts" | "finalText">): ClaudeTaskResult => ({
     ...r,
     summary,
+    finalText: stream.finalText,
     artifacts,
   });
 
