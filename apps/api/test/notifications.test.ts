@@ -134,9 +134,18 @@ async function succeed({ batch, append }: Awaited<ReturnType<typeof running>>) {
   return done;
 }
 
-const failWith = (reason: string, outcome?: "TIMED_OUT" | "BUDGET_EXCEEDED") => ({
+const failWith = (
+  reason: string,
+  outcome?: "TIMED_OUT" | "BUDGET_EXCEEDED",
+  extra: Record<string, unknown> = {},
+) => ({
   events: [
-    { occurredAt: new Date().toISOString(), type: "job.failed" as const, stage: null, payload: { reason } },
+    {
+      occurredAt: new Date().toISOString(),
+      type: "job.failed" as const,
+      stage: null,
+      payload: { reason, ...extra },
+    },
   ],
   transition: { to: "FAILED" as const, ...(outcome ? { outcome } : { outcome: "COMMAND_FAILED" as const }) },
 });
@@ -230,6 +239,53 @@ describe("job notifications", () => {
       expect(n!.body).toMatch(body);
     },
   );
+
+  it("FAILED with a stuck report → what still fails and the next step, never the agent's guess", async () => {
+    const { job, batch, append } = await diagnostic();
+    const GUESS = "probably a race in the cart reducer";
+    await append(
+      batch(
+        failWith("tests_failed", undefined, {
+          report: {
+            rounds: [{ round: 1, tried: "edited cart.ts", result: "2 tests still fail" }],
+            stillFailing: "cart totals test: expected 12, got 10",
+            rootCauseGuess: GUESS,
+            nextStep: "Keep fixing with a note about rounding.",
+          },
+        }),
+      ),
+    );
+    const [n] = await forJob(job.id);
+    expect(n!.body).toContain("Still failing: cart totals test: expected 12, got 10");
+    expect(n!.body).toContain("Next step: Keep fixing with a note about rounding.");
+    expect(n!.body).not.toContain(GUESS);
+    expect(n!.body.length).toBeLessThanOrEqual(1000);
+  });
+
+  it("a stuck report at its maximum size still fits the notification, and a malformed one is ignored", async () => {
+    const big = await diagnostic();
+    await big.append(
+      big.batch(
+        failWith("tests_failed", undefined, {
+          report: {
+            rounds: [],
+            stillFailing: "x".repeat(2000),
+            rootCauseGuess: null,
+            nextStep: "y".repeat(1000),
+          },
+        }),
+      ),
+    );
+    const [n] = await forJob(big.job.id);
+    expect(n!.body.length).toBeLessThanOrEqual(1000);
+    expect(n!.body).toContain("Still failing: ");
+    expect(n!.body).toContain("Next step: ");
+
+    const bad = await diagnostic();
+    await bad.append(bad.batch(failWith("tests_failed", undefined, { report: { stillFailing: 5 } })));
+    const [m] = await forJob(bad.job.id);
+    expect(m!.body).toMatch(/^The tests didn't pass.*keep fixing or start a new run\.$/);
+  });
 
   it("RECOVERY_REQUIRED → TASK_FAILED once, though the reaper runs again", async () => {
     const { job } = await diagnostic();

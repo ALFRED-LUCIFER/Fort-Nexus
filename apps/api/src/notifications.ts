@@ -1,4 +1,5 @@
 import { and, count, desc, eq, isNull, notInArray, or } from "drizzle-orm";
+import { StuckReport } from "@nexus/contracts";
 import type {
   Approval,
   JobOutcome,
@@ -43,6 +44,7 @@ type JobFacts = Pick<
 
 const NOTIFIED_STATES = new Set<JobStatus>(["COMPLETED", "FAILED", "RECOVERY_REQUIRED"]);
 const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
+const oneLine = (s: string, max: number) => clip(s.replace(/\s+/g, " ").trim(), max);
 
 export const toNotificationDto = (n: Row): Notification => ({
   id: n.id,
@@ -270,6 +272,11 @@ function failureText(
     `The run failed${reason ? ` (${reason})` : ""}.`,
     "Open the run for the last output, then start a new run.",
   ];
+  // A stopped repair loop says what still fails and what to do next. The agent's own guess stays in the run.
+  const stuck = StuckReport.safeParse(failed?.payload?.report);
+  const detail = stuck.success
+    ? `${why} Still failing: ${oneLine(stuck.data.stillFailing, 400)} Next step: ${oneLine(stuck.data.nextStep, 300)}`
+    : `${why} ${next}`;
   const head =
     to === "RECOVERY_REQUIRED"
       ? "Run needs recovery"
@@ -278,7 +285,7 @@ function failureText(
         : outcome === "BUDGET_EXCEEDED" || reason === "budget_exceeded"
           ? "Run stopped at its budget"
           : "Run failed";
-  return { title: `${head} · ${subjectOf(j)}`, body: `${why} ${next}` };
+  return { title: `${head} · ${subjectOf(j)}`, body: detail };
 }
 
 async function completedText(tx: Tx, j: JobFacts, outcome: JobOutcome | undefined) {

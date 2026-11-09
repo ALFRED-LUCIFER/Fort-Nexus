@@ -22,7 +22,8 @@ import {
 } from "../lib/queries.ts";
 import { field, ghostBtn, primaryBtn } from "./deepDive.tsx";
 import { Drawer, DrawerHeader } from "./Drawer.tsx";
-import { RunAgain } from "./RunAgain.tsx";
+import { KeepFixing, RunAgain } from "./RunAgain.tsx";
+import { keepFixingListed } from "./loopEvents.ts";
 import { useScope } from "./scope.tsx";
 import { AGENT_LABEL } from "./agentLabels.ts";
 
@@ -431,7 +432,10 @@ function JobRow({
         </Fact>
         <Fact term="Outcome">{job.outcome ? OUTCOME[job.outcome] : "—"}</Fact>
       </dl>
-      <RunAgain job={job} context={title} scopeNoteId={scopeNoteId} />
+      <div className="flex flex-wrap items-start gap-2">
+        {keepFixingListed(item) && <KeepFixing job={job} context={title} scopeNoteId={scopeNoteId} />}
+        <RunAgain job={job} context={title} scopeNoteId={scopeNoteId} />
+      </div>
     </li>
   );
 }

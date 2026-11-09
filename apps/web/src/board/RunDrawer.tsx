@@ -14,6 +14,9 @@ import {
   useRunners,
 } from "../lib/queries.ts";
 import { ApprovalGate } from "./approval.tsx";
+import { JobFeedback } from "./JobFeedback.tsx";
+import { JobLoop } from "./JobLoop.tsx";
+import { keepFixingOf, loopOf, stuckOf } from "./loopEvents.ts";
 import { Drawer, DrawerHeader, DrawerState } from "./Drawer.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { RerunOf, RunAgain } from "./RunAgain.tsx";
@@ -134,6 +137,9 @@ function RunBody({ jobId }: { jobId: string }) {
   const agent = issueReq ? agentFacts(events) : undefined;
   const cost = agent?.costUsd ?? j.estimatedCostUsd ?? undefined;
   const verification = issueReq ? verificationOf(events, a) : undefined;
+  const loop = issueReq ? loopOf(events) : undefined;
+  const stuck = stuckOf(events);
+  const keep = keepFixingOf(j, status, a, events);
   const repoName =
     a?.action.repositoryFullName ??
     j.issue?.fullName ??
@@ -190,6 +196,12 @@ function RunBody({ jobId }: { jobId: string }) {
           </p>
         )}
         <Terminal events={events} stream={stream} status={status} runnerName={runner?.name ?? runnerName} />
+        {issueReq && loop && (
+          <>
+            <JobFeedback job={j} status={status} keep={keep} stuck={stuck} view={loop} />
+            <JobLoop view={loop} status={status} stuck={stuck} qa={a ? undefined : loop.qa} />
+          </>
+        )}
         {agent?.secretLeak && (
           <p
             role="alert"

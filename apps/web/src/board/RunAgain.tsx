@@ -1,16 +1,105 @@
-import { useId, useState, useSyncExternalStore } from "react";
+import { useId, useRef, useState, useSyncExternalStore } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Link, getRouteApi } from "@tanstack/react-router";
 import { onlineManager, useMutation, useQueryClient } from "@tanstack/react-query";
 import { isTerminal, type Job } from "@nexus/contracts";
 import { api, keys } from "../lib/api.ts";
 import { ghostBtn, primaryBtn } from "./deepDive.tsx";
-import { useScope } from "./scope.tsx";
+import { useScope, type Scope } from "./scope.tsx";
 
 const route = getRouteApi("/");
 
 const subscribeOnline = (notify: () => void) => onlineManager.subscribe(notify);
 const isOnline = () => onlineManager.isOnline();
+
+/** Why nothing can be started for this job right now; null until the workspaces are known, or when nothing blocks it. */
+const scopeReasonFor = (scope: Scope, job: Job) =>
+  !scope.ready
+    ? null
+    : (scope.blocked ??
+      (scope.project?.id === job.projectId
+        ? null
+        : "This job belongs to another project: switch to it first."));
+
+/**
+ * Keep fixing (spec §5): a new job from this one's stored changes, optionally with the owner's note. One
+ * Idempotency-Key per intended action: a double tap or a retry of a failed request starts one job; a changed note is a
+ * different action and gets its own key. The server decides whether the job qualifies and its message is shown as is.
+ */
+export function useKeepFixing(job: Job, scopeNoteId?: string) {
+  const scope = useScope();
+  const navigate = route.useNavigate();
+  const queryClient = useQueryClient();
+  const intent = useRef<{ note: string | undefined; key: string } | null>(null);
+  const online = useSyncExternalStore(subscribeOnline, isOnline);
+  const mutation = useMutation({
+    mutationFn: (note: string | undefined) => {
+      const mine =
+        intent.current && intent.current.note === note ? intent.current : { note, key: crypto.randomUUID() };
+      intent.current = mine;
+      return api.keepFixing(job.id, mine.key, note);
+    },
+    // Never paused for a later reconnect: a paid run doesn't start by itself hours after the tap.
+    networkMode: "always",
+    onSuccess: (res) => {
+      void queryClient.invalidateQueries({ queryKey: keys.jobs });
+      void queryClient.invalidateQueries({ queryKey: keys.homeAll });
+      void queryClient.invalidateQueries({ queryKey: keys.approvals });
+      void navigate({ search: { ...scope.keep, drawer: `run:${res.jobId}` } });
+    },
+  });
+  const offline = online
+    ? null
+    : scopeNoteId
+      ? "You're offline."
+      : "You're offline. You can keep fixing when the connection is back.";
+  return {
+    run: (note?: string) => mutation.mutate(note),
+    pending: mutation.isPending,
+    error: mutation.error,
+    ready: scope.ready,
+    reason: scopeReasonFor(scope, job) ?? offline,
+  };
+}
+
+/** "Keep fixing" without a note, beside Run again on a job that qualifies (the Jobs list). */
+export function KeepFixing({
+  job,
+  context,
+  scopeNoteId,
+}: {
+  job: Job;
+  context?: string;
+  scopeNoteId?: string;
+}) {
+  const fix = useKeepFixing(job, scopeNoteId);
+  const reasonId = useId();
+  const shared = scopeNoteId && fix.reason ? scopeNoteId : undefined;
+  return (
+    <div className="flex flex-none flex-col items-start gap-2">
+      <button
+        type="button"
+        disabled={!fix.ready || !!fix.reason || fix.pending}
+        aria-describedby={fix.reason ? (shared ?? reasonId) : undefined}
+        onClick={() => fix.run()}
+        className={ghostBtn}
+      >
+        {fix.pending ? "Queueing…" : "Keep fixing"}
+        {context && <span className="sr-only">: {context}</span>}
+      </button>
+      {fix.error && (
+        <p role="alert" className="m-0 text-[12.5px] leading-snug text-coral">
+          {fix.error.message}
+        </p>
+      )}
+      {fix.reason && !shared && (
+        <p id={reasonId} className="m-0 text-[12.5px] leading-snug text-ink2">
+          {fix.reason}
+        </p>
+      )}
+    </div>
+  );
+}
 
 /**
  * "Run again" for a finished job (FR-RUN-06): queues a new job linked to this one, which stays as it is. One
@@ -49,12 +138,7 @@ export function RunAgain({
   if (!isTerminal(job.status)) return null;
 
   // Until the workspaces arrive the scope isn't known: disabled, without claiming a reason yet.
-  const scopeReason = !scope.ready
-    ? null
-    : (scope.blocked ??
-      (scope.project?.id === job.projectId
-        ? null
-        : "This job belongs to another project: switch to it first."));
+  const scopeReason = scopeReasonFor(scope, job);
   const shared = scope.ready && scope.blocked ? scopeNoteId : undefined;
   const offlineReason = online
     ? null
