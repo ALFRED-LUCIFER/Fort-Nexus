@@ -4,6 +4,8 @@ import {
   ApiError,
   AppendEventsRequest,
   AppendEventsResponse,
+  ClaimFeedbackRequest,
+  ClaimFeedbackResponse,
   HeartbeatRequest,
   HeartbeatResponse,
   LeaseResponse,
@@ -113,6 +115,14 @@ export function createApi(opts: { baseUrl: string; token?: string; fetch?: typeo
         `/v1/runner/jobs/${encodeURIComponent(jobId)}/events`,
         AppendEventsRequest.parse(req),
         AppendEventsResponse,
+        signal,
+      ),
+    // Atomic on the server: a retry for the same round returns the same items.
+    claimFeedback: (jobId: string, req: ClaimFeedbackRequest, signal?: AbortSignal) =>
+      post(
+        `/v1/runner/jobs/${encodeURIComponent(jobId)}/feedback/claim`,
+        ClaimFeedbackRequest.parse(req),
+        ClaimFeedbackResponse,
         signal,
       ),
     uploadChangeset: (jobId: string, req: UploadChangesetRequest, signal?: AbortSignal) =>

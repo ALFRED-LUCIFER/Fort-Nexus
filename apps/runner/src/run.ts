@@ -7,6 +7,7 @@ import {
   CreateJobRequest,
   DIAGNOSTIC_TIMEOUT_MS,
   IssueToPrTask,
+  REPAIR_ROUNDS,
   RUNNER_LEASE_TTL_MS,
   type DiagnosticPreset,
   type JobOutcome,
@@ -15,13 +16,15 @@ import {
   type RunnerTransition,
 } from "@nexus/contracts";
 import type { z } from "zod";
-import { ApiCallError, withRetry, type Lease, type RunnerApi } from "./api.ts";
-import { ChangesetError, buildChangeset } from "./changeset.ts";
-import { runClaudeTask, worktreeGitDir } from "./claude.ts";
-import { issuePrompt } from "./issue-prompt.ts";
+import { ApiCallError, isStaleLease, withRetry, type Lease, type RunnerApi } from "./api.ts";
+import { worktreeGitDir } from "./claude.ts";
 import { errorMessage, log as defaultLog, type Log } from "./log.ts";
 import { OutputBuffer, redact, type Stream } from "./output.ts";
+import { prepareDeps } from "./prepare-deps.ts";
 import { PRESET_ARGV } from "./presets.ts";
+import { applyStoredFiles, createRepairAdapter } from "./repair-adapter.ts";
+import { runRepairLoop } from "./repair-loop.ts";
+import type { LoopResult } from "./repair-loop-types.ts";
 import {
   SANDBOX_BUILD_COMMAND,
   SANDBOX_IMAGE,
@@ -33,7 +36,6 @@ import {
   removeContainer,
   type SandboxMode,
 } from "./sandbox.ts";
-import { runVerification } from "./verify.ts";
 import { createWorkspaces, git, withMirrorLock } from "./workspace.ts";
 
 export type JobOptions = {
@@ -352,8 +354,8 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
     }
   };
 
-  // ENG-07 spec step 3: fetch → worktree → Claude → changeset → verify (FR-DEV-05) → upload (the API then awaits
-  // the owner's approval).
+  // ENG-07 spec step 3: fetch → worktree → install → the repair loop (agent, NEXUS's tests, QA) → upload (the API then
+  // awaits the owner's approval, or ends the job when its tests didn't pass).
   const runIssueToPr = async (request: IssueRequest, task: IssueToPrTask): Promise<void> => {
     const { snapshot, workBranch } = task;
     const { baseBranch, baseSha } = snapshot;
@@ -399,6 +401,8 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
       if (stop) return stopped(false);
       let worktreePath: string;
       let gitDir: string;
+      let baseTree: string;
+      let depsCache: string;
       try {
         await cleanup();
         ({ path: worktreePath } = await workspaces.prepareWorktree({
@@ -409,6 +413,8 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
         }));
         // Resolved before the run: afterwards the worktree's .git file is agent-controlled.
         gitDir = await worktreeGitDir(worktreePath);
+        baseTree = await git([`--git-dir=${gitDir}`, "rev-parse", `${baseSha}^{tree}`]);
+        depsCache = await workspaces.prepareDepsCache(jobId);
       } catch (err) {
         return finish(
           "job.failed",
@@ -431,88 +437,131 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
       if (lost) return;
       if (stop) return stopped(false);
 
+      // Everything from here runs in a sandbox and answers the stop signal, so a cancel is honoured at every point.
       phase = "running";
-      let agentSummary = "";
-      const result = await runClaudeTask({
-        jobId,
-        worktreePath,
-        prompt: issuePrompt(snapshot, { canRunTests: false }),
-        budget: {
-          maxWallClockMs: request.budget.maxWallClockMinutes * 60_000,
-          maxTurns: request.budget.maxTurns,
-          maxCostUsd: request.budget.maxCostUsd,
-        },
-        onEvent: (type, payload) => {
-          if (type === "agent.message" && payload.kind === "summary" && typeof payload.text === "string")
-            agentSummary = payload.text;
-          queue(type, payload);
-        },
-        signal: stopAbort.signal,
-        runnerLabel,
-        image,
-        killGraceMs,
-        log,
-        ...(aiConfigFile ? { aiConfigFile } : {}),
-      });
-      phase = "finishing";
-      if (lost) return;
-      // Never report a stop (or anything else) while the container may still be writing to the worktree.
-      if (result.reason === "stop_failed")
-        return finish("job.failed", { reason: "stop_failed", ...result.details }, "FAILED");
-      if (stop || result.status === "STOPPED") return stopped(true);
-      if (result.status === "FAILED")
-        return finish(
-          "job.failed",
-          { reason: result.reason, ...result.details },
-          "FAILED",
-          result.outcome ?? (result.reason === "budget_exceeded" ? "BUDGET_EXCEEDED" : undefined),
-        );
+      const wallClockMs = request.budget.maxWallClockMinutes * 60_000;
+      const deadline = Date.now() + wallClockMs;
+      const stopFailed = (details: Record<string, unknown>) =>
+        finish("job.failed", { reason: "stop_failed", ...details }, "FAILED");
 
-      await flush({ to: "VERIFYING" });
-      if (lost) return;
-      let changeset;
-      try {
-        changeset = await buildChangeset(worktreePath, gitDir, baseSha);
-      } catch (err) {
-        return err instanceof ChangesetError
-          ? finish("job.failed", { reason: err.reason, ...err.details }, "FAILED")
-          : finish(
-              "job.failed",
-              { reason: "changeset_failed", message: redact(errorMessage(err)) },
-              "FAILED",
-            );
-      }
-      if (changeset.files.length === 0)
-        return finish("job.completed", { changes: 0 }, "COMPLETED", "COMPLETED_NO_CHANGES");
-
-      // FR-DEV-05: the repo's tests on exactly base + changeset, in a fresh sandbox. A failed result doesn't
-      // block the upload (the owner decides), but a stop does.
-      phase = "running";
-      const verified = await runVerification({
+      // Runs before the stored files go in: it demands a clean worktree, and installs what the base commit declares.
+      // Capped at half the wall clock, so a slow install can't leave the agent nothing.
+      const installed = await prepareDeps({
         jobId,
         gitDir,
         baseSha,
-        tree: changeset.tree,
-        onEvent: queue,
+        worktreePath,
+        cacheDir: depsCache,
+        image,
+        runnerLabel,
         signal: stopAbort.signal,
+        killGraceMs,
+        log,
+        maxTimeoutMs: Math.floor(wallClockMs / 2),
+      });
+      if (lost) return;
+      if (installed.stopFailed) return stopFailed({ container: containerName(jobId) });
+      if (stop) return stopped(true);
+      if (!installed.ok)
+        log("warn", "dependency install failed, the agent cannot run the tests", {
+          jobId,
+          reason: installed.reason,
+        });
+
+      try {
+        await applyStoredFiles(worktreePath, gitDir, baseSha, task.continuation?.files ?? []);
+      } catch (err) {
+        return finish(
+          "job.failed",
+          { reason: "continuation_invalid", message: redact(errorMessage(err)) },
+          "FAILED",
+        );
+      }
+
+      let state: "RUNNING" | "VERIFYING" = "RUNNING";
+      const enter = async (next: typeof state) => {
+        if (state === next) return;
+        state = next;
+        await flush({ to: next });
+      };
+      const adapter = createRepairAdapter({
+        jobId,
+        worktreePath,
+        gitDir,
+        issue: snapshot,
+        deadline,
+        depsCache,
+        model: task.model,
+        signal: stopAbort.signal,
+        abort: () => stopAbort.abort(),
+        event: queue,
+        enter,
+        claimFeedback: async (round) =>
+          (
+            await withRetry(() => api.claimFeedback(jobId, { fencingToken, round }, appendAbort.signal), {
+              forMs: retryForMs,
+              signal: appendAbort.signal,
+            })
+          ).items,
         runnerLabel,
         image,
         killGraceMs,
         log,
+        aiConfigFile,
       });
+
+      let result: LoopResult;
+      try {
+        result = await runRepairLoop(adapter.deps, {
+          issue: snapshot,
+          budget: {
+            maxWallClockMs: deadline - Date.now(),
+            maxTurns: request.budget.maxTurns,
+            maxCostUsd: request.budget.maxCostUsd,
+          },
+          rounds: REPAIR_ROUNDS,
+          baseTree,
+          continuation: task.continuation,
+          canRunTests: installed.ok,
+        });
+      } catch (err) {
+        if (isStaleLease(err)) return abandon("stale_lease", err);
+        throw err;
+      }
       phase = "finishing";
       if (lost) return;
-      if (!verified.stopConfirmed)
-        return finish("job.failed", { reason: "stop_failed", container: containerName(jobId) }, "FAILED");
-      if (stop || verified.stopped) return stopped(true);
-      const { verification } = verified;
-      event("test.completed", verification);
+      // Never report anything else while a container may still be writing to the worktree.
+      const stopFailure = adapter.stopFailure();
+      if (stopFailure) return stopFailed(stopFailure);
+      // A failure that survives a stop is a secret leak: that is what the owner needs to read.
+      if (result.kind === "stopped" || (stop && result.kind !== "failed")) return stopped(true);
+      if (result.kind === "no_changes") {
+        await enter("VERIFYING"); // RUNNING can't go straight to COMPLETED
+        if (lost) return;
+        return finish("job.completed", { changes: 0 }, "COMPLETED", "COMPLETED_NO_CHANGES");
+      }
+      if (result.kind === "needs_info")
+        return finish(
+          "job.failed",
+          { reason: "needs_info", questions: result.questions },
+          "FAILED",
+          "NEEDS_INFO",
+        );
+      if (result.kind === "failed")
+        return finish(
+          "job.failed",
+          { reason: result.reason, ...result.details, report: result.report },
+          "FAILED",
+          result.outcome,
+        );
+
       await flush();
       if (lost) return;
-
+      const { changeset, verification, qa, integrity, report, terminalOutcome, notes } = result;
       const { files, stats } = changeset;
+      let approvalId: string | null;
       try {
-        await withRetry(
+        ({ approvalId } = await withRetry(
           () =>
             api.uploadChangeset(
               jobId,
@@ -521,25 +570,31 @@ export function startJob(api: RunnerApi, lease: Lease, opts: JobOptions = {}): J
                 baseSha,
                 files,
                 stats,
-                agentSummary: agentSummary.slice(0, 4_000),
+                agentSummary: adapter.summaryOf(changeset.tree).slice(0, 4_000),
                 verification,
+                qa,
+                integrity,
+                ...(notes ? { notes } : {}),
+                ...(report ? { report } : {}),
+                ...(terminalOutcome ? { terminalOutcome } : {}),
               },
               appendAbort.signal,
             ),
           { forMs: retryForMs, signal: appendAbort.signal },
-        );
+        ));
       } catch (err) {
-        if (err instanceof ApiCallError && err.code === "STALE_LEASE") return abandon("stale_lease", err);
+        if (isStaleLease(err)) return abandon("stale_lease", err);
         if (lost) return;
         log("error", "changeset upload failed", { jobId, error: errorMessage(err) });
         const code = err instanceof ApiCallError ? err.code : "ERROR";
         return finish("job.failed", { reason: "changeset_upload_failed", code }, "FAILED");
       }
-      // The API moved the job to AWAITING_APPROVAL and released the lease: nothing more to append.
-      log("info", "changeset uploaded, awaiting approval", {
+      // The API ended the job's run (AWAITING_APPROVAL, or FAILED without an approval) and released the lease.
+      log("info", approvalId ? "changeset uploaded, awaiting approval" : "changeset stored, not pushable", {
         jobId,
         files: files.length,
         verification: verification.status,
+        ...(terminalOutcome ? { terminalOutcome } : {}),
       });
     } finally {
       clearTimeout(flushTimer);

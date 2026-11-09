@@ -169,8 +169,8 @@ export type VerifyOptions = {
   egressNetwork?: string;
   /** Tags this run's tool.denied events so the drawer can tell the base and red runs from a normal one. */
   only?: "base" | "red";
-  /** Test seam: caps the plan's timeout (the contract's minimum is a minute). */
-  maxTimeoutMs?: number;
+  /** Caps the plan's timeout: what is left of the job's wall clock. */
+  maxMs?: number;
 };
 
 type FailureKind = NonNullable<Verification["failureKind"]>;
@@ -287,7 +287,7 @@ export async function runVerification(opts: VerifyOptions): Promise<VerifyResult
     runnerLabel = "local",
     image = SANDBOX_IMAGE,
   } = opts;
-  const { killGraceMs = 5_000, log = defaultLog, egressNetwork, maxTimeoutMs = Infinity } = opts;
+  const { killGraceMs = 5_000, log = defaultLog, egressNetwork, maxMs = Infinity } = opts;
   const started = Date.now();
   let output = "";
   const result = (
@@ -338,7 +338,7 @@ export async function runVerification(opts: VerifyOptions): Promise<VerifyResult
   let dir: string | undefined;
   let egress = false;
   let stopConfirmed = true;
-  const timeoutMs = Math.min(p.timeoutMs, maxTimeoutMs);
+  const timeoutMs = Math.min(p.timeoutMs, maxMs);
   const deadline = started + timeoutMs;
 
   // One `docker run` per argv (no shell to chain them). Stops on abort or at the shared deadline.

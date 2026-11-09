@@ -174,7 +174,7 @@ export function buildAction(
     verification: changeset.verification,
     // Only present when sent, so an action without them hashes as it always did.
     ...(changeset.qa ? { qa: changeset.qa } : {}),
-    ...(changeset.integrity?.testFilesChanged
+    ...(changeset.integrity.testFilesChanged
       ? { testFilesChanged: changeset.integrity.testFilesChanged }
       : {}),
     ...(changeset.notes ? { notes: changeset.notes } : {}),
@@ -184,7 +184,7 @@ export function buildAction(
 /** The push gate (spec §4): NEXUS saw the tests pass, and the change didn't tamper with them. */
 const NOT_PUSHABLE = "This change can't be pushed: its tests did not pass.";
 const pushable = (b: Pick<UploadChangesetRequest, "verification" | "integrity">) =>
-  b.verification.status === "passed" && (b.integrity?.clean ?? true); // no integrity block: a runner from before the check
+  b.verification.status === "passed" && b.integrity.clean;
 
 const STOP_REASON = {
   FAILED_TESTS: ["tests_failed", "The tests didn't pass."],

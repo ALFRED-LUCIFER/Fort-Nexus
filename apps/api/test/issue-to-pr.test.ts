@@ -267,6 +267,7 @@ const changeset = (l: LeaseResponse, over: Record<string, unknown> = {}) => ({
   stats: { added: 3, removed: 1 },
   agentSummary: "Rounded totals. @octo fixes #9 ```",
   verification: PASSED,
+  integrity: { clean: true, problems: [] },
   ...over,
 });
 
@@ -616,6 +617,15 @@ describe("push gate", () => {
     expect(await approvalCount(l.jobId)).toBe(0);
   });
 
+  it("refuses an upload without an integrity result: a missing check is never a clean one", async () => {
+    const { token, l } = await runningJob();
+    const body: Record<string, unknown> = changeset(l);
+    delete body.integrity;
+    const res = await runner(token, `/v1/runner/jobs/${l.jobId}/changeset`, body);
+    expect(res.statusCode, res.body).toBe(400);
+    expect(await approvalCount(l.jobId)).toBe(0);
+  });
+
   it("passed tests with a dirty integrity check create no approval", async () => {
     const { token, l } = await runningJob();
     const res = await upload(token, l, {
@@ -707,12 +717,13 @@ describe("buildAction verification", () => {
     baseBranch: "main",
     baseSha: BASE_SHA,
   };
+  const CLEAN = { clean: true, problems: [] };
   const action = (verification: Verification) =>
     buildAction(
       randomUUID(),
       snapshot,
       [],
-      { stats: { added: 0, removed: 0 }, agentSummary: "", verification },
+      { stats: { added: 0, removed: 0 }, agentSummary: "", verification, integrity: CLEAN },
       "c".repeat(64),
     );
   const notConfigured: Verification = {
@@ -735,7 +746,7 @@ describe("buildAction verification", () => {
             jobId,
             snapshot,
             [],
-            { stats: { added: 0, removed: 0 }, agentSummary: "", verification: v },
+            { stats: { added: 0, removed: 0 }, agentSummary: "", verification: v, integrity: CLEAN },
             "c".repeat(64),
           ),
         ),

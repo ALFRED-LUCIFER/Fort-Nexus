@@ -45,7 +45,8 @@ export type PrepareDepsOptions = {
   maxTimeoutMs?: number;
 };
 
-export type PrepareDepsResult = { ok: boolean; reason: string | null };
+/** `stopFailed`: Docker could not confirm the install container is gone, so nothing else may start. */
+export type PrepareDepsResult = { ok: boolean; reason: string | null; stopFailed?: true };
 
 /** Removes everything git would pick up from the worktree, through the trusted git dir and no repo-controlled config. */
 async function restoreWorktree(worktreePath: string, gitDir: string, baseSha: string) {
@@ -137,7 +138,11 @@ export async function prepareDeps(opts: PrepareDepsOptions): Promise<PrepareDeps
     result = fail(`dependency install could not run: ${errorMessage(err)}`);
   }
   if (!(await removeContainer(container, killGraceMs))) stopConfirmed = false;
-  if (egress && stopConfirmed) {
+  if (!stopConfirmed) {
+    log("error", "install container could not be confirmed gone", { jobId, container });
+    return { ...fail("the install container could not be stopped"), stopFailed: true };
+  }
+  if (egress) {
     const { removed } = await stopEgress(jobId);
     if (!removed) log("error", "install egress proxy or network could not be removed", { jobId });
   }

@@ -154,6 +154,7 @@ async function pendingApproval(verification: Verification) {
     stats: { added: 3, removed: 1 },
     agentSummary: "All tests pass and the PR is open.", // agent narration: never in a notification
     verification,
+    integrity: { clean: true, problems: [] },
   });
   return { job, approvalId: up.approvalId!, actionHash: up.actionHash! };
 }
@@ -291,6 +292,7 @@ describe("issue run notifications (tests + PR facts)", () => {
       stats: { added: 1, removed: 0 },
       agentSummary: "Done.",
       verification: V("failed"),
+      integrity: { clean: true, problems: [] },
       ...(terminalOutcome ? { terminalOutcome: terminalOutcome as "ENVIRONMENT_BLOCKED" } : {}),
     });
     const notes = await forJob(job.id);

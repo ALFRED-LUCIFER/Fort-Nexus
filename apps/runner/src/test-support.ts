@@ -5,7 +5,12 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { AppendEventsRequest, HeartbeatRequest, UploadChangesetRequest } from "@nexus/contracts";
+import type {
+  AppendEventsRequest,
+  ClaimFeedbackRequest,
+  HeartbeatRequest,
+  UploadChangesetRequest,
+} from "@nexus/contracts";
 import { createApi } from "./api.ts";
 
 export const JOB = "6f1c1d3e-8a4b-4c1e-9f00-000000000001";
@@ -32,6 +37,8 @@ export type FakeOptions = {
   heartbeat?: () => Response;
   onAppend?: (body: AppendEventsRequest) => Response | undefined;
   onChangeset?: (body: UploadChangesetRequest) => Response | undefined;
+  /** The items a claim returns, or a Response to answer with (default: nothing waiting). */
+  onClaim?: (body: ClaimFeedbackRequest) => Response | { id: string; text: string }[] | undefined;
 };
 
 // In-process fake of the runner endpoints, going through the real client (and its schema checks).
@@ -40,6 +47,7 @@ export function fakeApi(opts: FakeOptions = {}) {
   const appends: AppendEventsRequest[] = [];
   const changesets: UploadChangesetRequest[] = [];
   const heartbeats: HeartbeatRequest[] = [];
+  const claims: ClaimFeedbackRequest[] = [];
   let leased = false;
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const path = new URL(String(input)).pathname;
@@ -68,6 +76,12 @@ export function fakeApi(opts: FakeOptions = {}) {
       changesets.push(req);
       return opts.onChangeset?.(req) ?? json(200, { approvalId: jobId, actionHash: "a".repeat(64) });
     }
+    if (path === `/v1/runner/jobs/${jobId}/feedback/claim`) {
+      const req = body as ClaimFeedbackRequest;
+      claims.push(req);
+      const answer = opts.onClaim?.(req) ?? [];
+      return answer instanceof Response ? answer : json(200, { items: answer });
+    }
     return json(404, { error: { code: "NOT_FOUND", message: path }, requestId: "r" });
   };
   return {
@@ -75,6 +89,7 @@ export function fakeApi(opts: FakeOptions = {}) {
     appends,
     changesets,
     heartbeats,
+    claims,
   };
 }
 

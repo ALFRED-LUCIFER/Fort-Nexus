@@ -383,7 +383,7 @@ describe.skipIf(!dockerUp)("runVerification in the real sandbox", () => {
       { "NOTES.md": "x\n" },
     );
     const started = Date.now();
-    const { verification, stopConfirmed } = await verify(r, { runnerLabel, maxTimeoutMs: 2_000 }).result;
+    const { verification, stopConfirmed } = await verify(r, { runnerLabel, maxMs: 2_000 }).result;
     expect(Date.now() - started).toBeLessThan(30_000);
     expect(stopConfirmed).toBe(true);
     expect(verification).toMatchObject({

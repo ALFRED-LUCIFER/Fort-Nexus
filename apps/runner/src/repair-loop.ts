@@ -102,7 +102,7 @@ type Ctx = {
 };
 
 const cap = (text: string, max: number) => text.slice(0, max);
-const agentStatement = (finalText: string | undefined) =>
+export const agentStatement = (finalText: string | undefined) =>
   (finalText ?? "")
     .split("\n")
     .filter((l) => !/^\s*NEXUS_(?:PHASE|RESULT)\b/.test(l))

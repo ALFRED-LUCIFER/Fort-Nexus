@@ -129,14 +129,12 @@ export const UploadChangesetRequest = z.strictObject({
   agentSummary: z.string().max(4000),
   verification: Verification,
   qa: QaReview.optional(),
-  integrity: z
-    .strictObject({
-      clean: z.boolean(),
-      problems: z.array(z.string().max(500)).max(50),
-      // Test files the change adds, edits or deletes; listed on the approval so the owner can look.
-      testFilesChanged: z.array(z.string().max(500)).max(CHANGESET_MAX_FILES).optional(),
-    })
-    .optional(),
+  integrity: z.strictObject({
+    clean: z.boolean(),
+    problems: z.array(z.string().max(500)).max(50),
+    // Test files the change adds, edits or deletes; listed on the approval so the owner can look.
+    testFilesChanged: z.array(z.string().max(500)).max(CHANGESET_MAX_FILES).optional(),
+  }),
   notes: ChangeNotes.optional(),
   // Set when the run stopped without a passing result; the changeset is kept for review or "keep fixing".
   report: StuckReport.optional(),
