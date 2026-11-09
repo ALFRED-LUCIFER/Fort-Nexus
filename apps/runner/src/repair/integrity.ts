@@ -21,14 +21,17 @@ const CONFIG_PREFIXES = [
 
 // Skip and focus markers. A marker counts only when the file has more of it than the base file.
 const MARKERS: RegExp[] = [
-  /\.(?:only|skip)\b/g,
+  /\.(?:only|skip\w*|todo|fixme)\b/g,
   /(?<![\w.])(?:xit|xdescribe|xtest|fit|fdescribe|ftest)\s*\(/g,
   /@(?:Ignore|Disabled)\b/g,
   /\[Ignore\b/g,
   /\bSkip\s*=/g,
   /pytest\.mark\.(?:skip|skipif|xfail)\b/g,
   /\bunittest\.skip/g,
-  /\bt\.Skip(?:Now)?\s*\(/g,
+  /\b[tb]\.Skip\w*\s*\(/g,
+  /\bpytest\.skip\s*\(/g,
+  /\bpytest\.importorskip\s*\(/g,
+  /\.skipTest\s*\(/g,
 ];
 
 const baseName = (p: string): string => p.slice(p.lastIndexOf("/") + 1);

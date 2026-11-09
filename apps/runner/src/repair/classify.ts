@@ -5,13 +5,13 @@ export type FailureClass = "repair" | "environment" | "needs_dependency" | "not_
 
 // Narrow on purpose: a test that merely prints "not found" must not be read as a broken environment.
 const ENVIRONMENT_PATTERNS = [
-  /^\s*(?:\S+: )?(?:sh|bash|zsh|dash): (?:\d+: )?[^\s:]+: not found\s*$/m,
+  /^\s*(?:\S*\/)?(?:sh|bash|zsh|dash): (?:\d+: )?[^\s:]+: not found\s*$/m,
   /command not found/i,
   /getaddrinfo ENOTFOUND/,
   /getaddrinfo EAI_AGAIN/,
   /\bEAI_AGAIN\b/,
-  /\bECONNREFUSED\b.*(?:registry|npm|pnpm|yarn|pypi|crates)/i,
-  /(?:registry|npm|pnpm|yarn|pypi|crates).*\bECONNREFUSED\b/i,
+  /\bECONNREFUSED\b.*\b(?:registry|npm|pnpm|yarn|pypi|crates)\b/i,
+  /\b(?:registry|npm|pnpm|yarn|pypi|crates)\b.*\bECONNREFUSED\b/i,
 ];
 
 const MANIFEST_BASENAMES = new Set([
@@ -73,8 +73,8 @@ export function classifyFailure(v: Verification, changedPaths: string[]): Failur
   if (v.status === "not_configured") return "not_configured";
   if (v.status === "error") {
     const reason = v.reason ?? "";
-    if (/time(?:d)?[ -]?out/i.test(reason)) return "repair";
     if (/install/i.test(reason)) return touchesManifest(changedPaths) ? "needs_dependency" : "environment";
+    if (/time(?:d)?[ -]?out/i.test(reason)) return "repair";
     return "environment";
   }
   if (looksLikeEnvironment(v)) return "environment";
@@ -86,8 +86,9 @@ const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 const DURATION = /\b\d+(?:\.\d+)?\s?(?:ms|s|sec|secs|seconds|m|min)\b/gi;
 const ABS_PATH = /(?:[A-Za-z]:)?(?:\/[^\s/:'"()]+){2,}/g;
 
+// null when nothing meaningful is left: unknown, never a repeat.
 // Stable id for "the same failure again": timings, absolute paths and numbers don't change it.
-export function fingerprint(outputTail: string): string {
+export function fingerprint(outputTail: string): string | null {
   const normalized = outputTail
     .replace(ANSI, "")
     .replace(DURATION, "")
@@ -95,5 +96,6 @@ export function fingerprint(outputTail: string): string {
     .replace(/\d+/g, "")
     .replace(/\s+/g, " ")
     .trim();
+  if (!/[a-z]/i.test(normalized)) return null;
   return createHash("sha256").update(normalized).digest("hex");
 }

@@ -18,6 +18,7 @@ describe("classifyFailure", () => {
   it("treats a missing shell command as environment", () => {
     expect(classifyFailure(v({ outputTail: "sh: pnpm: not found", exitCode: 127 }), [])).toBe("environment");
     expect(classifyFailure(v({ outputTail: "bash: foo: command not found" }), [])).toBe("environment");
+    expect(classifyFailure(v({ outputTail: "/bin/sh: 1: pnpm: not found" }), [])).toBe("environment");
     expect(classifyFailure(v({ exitCode: 127, outputTail: "" }), [])).toBe("environment");
   });
   it("treats registry network errors as environment", () => {
@@ -52,6 +53,15 @@ describe("classifyFailure", () => {
       "needs_dependency",
     );
   });
+  it("checks install before timeout without failureKind", () => {
+    expect(classifyFailure(v({ status: "error", reason: "Install timed out" }), ["package.json"])).toBe(
+      "needs_dependency",
+    );
+    expect(classifyFailure(v({ status: "error", reason: "Install timed out" }), [])).toBe("environment");
+  });
+  it("does not match package manager names inside other words", () => {
+    expect(classifyFailure(v({ outputTail: "connect ECONNREFUSED in snpmx" }), [])).toBe("repair");
+  });
   it("uses failureKind first", () => {
     expect(classifyFailure(v({ failureKind: "test_failed", outputTail: "sh: x: not found" }), [])).toBe(
       "repair",
@@ -72,6 +82,10 @@ describe("fingerprint", () => {
     const b = "\u001b[31mFAIL\u001b[0m /home/u/y2/src/a.test.ts 340ms\nexpected 5 got 6 (0.4s)";
     expect(fingerprint(a)).toBe(fingerprint(b));
     expect(fingerprint(a)).toMatch(/^[0-9a-f]{64}$/);
+  });
+  it("returns null when no content is left", () => {
+    expect(fingerprint("")).toBeNull();
+    expect(fingerprint("\u001b[0m 12ms\n 3")).toBeNull();
   });
   it("differs for a different failure", () => {
     expect(fingerprint("FAIL a")).not.toBe(fingerprint("FAIL b"));
