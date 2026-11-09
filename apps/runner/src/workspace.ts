@@ -53,6 +53,40 @@ export const git = (args: string[], opts: GitOptions = {}) =>
     ),
   );
 
+const TREE_LIST_MAX_BUFFER = 256 * 1024 * 1024;
+
+/**
+ * Removes any `.git` at a path `baseRef` records as a gitlink. For such a path git starts a child `git status` inside
+ * the directory, and that child obeys the nested repo's own config, so a repo planted there runs its commands on the
+ * host. Run before any host git reads the worktree, and only once no container can still write to it.
+ */
+export async function removePlantedRepos(
+  worktreePath: string,
+  gitDir: string,
+  baseRef: string,
+): Promise<void> {
+  const listed = await git(
+    [`--git-dir=${gitDir}`, "-c", `core.hooksPath=${devNull}`, "ls-tree", "-r", "-z", baseRef],
+    { timeoutMs: 300_000, maxBuffer: TREE_LIST_MAX_BUFFER },
+  );
+  for (const entry of listed.split("\0")) {
+    const path = /^160000 commit [0-9a-f]+\t(.+)$/s.exec(entry)?.[1];
+    if (!path) continue;
+    const parts = path.split("/");
+    if (parts.some((p) => p === "" || p === "." || p === "..")) continue;
+    let dir: string | undefined = worktreePath;
+    for (const part of parts) {
+      dir = join(dir, part);
+      // lstat: a symlink is not a directory, so the walk ends there rather than following it.
+      if (!(await lstat(dir).catch(() => undefined))?.isDirectory()) {
+        dir = undefined;
+        break;
+      }
+    }
+    if (dir) await rm(join(dir, ".git"), { recursive: true, force: true });
+  }
+}
+
 const inside = (root: string, p: string) => p === root || p.startsWith(root + sep);
 
 /** Realpath of `p`, which must exist and resolve (after symlinks) inside `root`. */

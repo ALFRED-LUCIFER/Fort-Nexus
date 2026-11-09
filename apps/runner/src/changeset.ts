@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { CHANGESET_MAX_BYTES, CHANGESET_MAX_FILES, ChangesetFile } from "@nexus/contracts";
-import { GIT_ENV, git } from "./workspace.ts";
+import { GIT_ENV, git, removePlantedRepos } from "./workspace.ts";
 
 // ENG-07: the agent's work as an UploadChangesetRequest file list, built host-side from the worktree vs baseSha.
 
@@ -34,6 +34,7 @@ export async function buildChangeset(
   baseSha: string,
 ): Promise<Changeset> {
   if (!/^[0-9a-f]{40}$/.test(baseSha)) throw new Error("invalid base sha");
+  await removePlantedRepos(worktreePath, gitDir, baseSha);
   const tmp = await mkdtemp(join(tmpdir(), "nexus-index-"));
   const env = { GIT_INDEX_FILE: join(tmp, "index") };
   // Trusted git dir, no repo-controlled config or hooks; modes and symlinks recorded as on disk.

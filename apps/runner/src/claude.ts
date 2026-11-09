@@ -23,7 +23,7 @@ import {
   stopEgress,
   writableUser,
 } from "./sandbox.ts";
-import { git } from "./workspace.ts";
+import { git, removePlantedRepos } from "./workspace.ts";
 
 // Claude coding engine (ENG-05): one Agent SDK run inside the per-job sandbox against a prepared
 // worktree, streamed as run events, with budgets enforced and egress limited to the model provider.
@@ -366,6 +366,7 @@ export type Artifacts = {
 
 /** Changed files and diff stat, host-side, with the trusted git dir and no repo-controlled config. */
 export async function collectArtifacts(worktreePath: string, gitDir: string): Promise<Artifacts> {
+  await removePlantedRepos(worktreePath, gitDir, "HEAD");
   const g = (args: string[]) =>
     git([
       `--git-dir=${gitDir}`,
@@ -376,7 +377,9 @@ export async function collectArtifacts(worktreePath: string, gitDir: string): Pr
       `core.hooksPath=${devNull}`,
       ...args,
     ]);
-  const tracked = (await g(["diff", "--name-status", "-z", "--no-renames", "HEAD"]))
+  const tracked = (
+    await g(["diff", "--name-status", "-z", "--no-renames", "--ignore-submodules=all", "HEAD"])
+  )
     .split("\0")
     .filter(Boolean);
   const files: { path: string; status: string }[] = [];
@@ -386,7 +389,14 @@ export async function collectArtifacts(worktreePath: string, gitDir: string): Pr
     .split("\0")
     .filter(Boolean))
     files.push({ status: "?", path });
-  const diffStat = await g(["diff", "--stat=120", "--no-ext-diff", "--no-textconv", "HEAD"]);
+  const diffStat = await g([
+    "diff",
+    "--stat=120",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--ignore-submodules=all",
+    "HEAD",
+  ]);
   return {
     files: files.slice(0, MAX_FILES),
     fileCount: files.length,
