@@ -5,6 +5,8 @@ import {
   AppendEventsRequest,
   AppendEventsResponse,
   CHANGESET_MAX_BYTES,
+  ClaimFeedbackRequest,
+  ClaimFeedbackResponse,
   HeartbeatRequest,
   HeartbeatResponse,
   LeaseResponse,
@@ -16,6 +18,7 @@ import {
 } from "@nexus/contracts";
 import type { Deps } from "../app.ts";
 import { HttpError } from "../errors.ts";
+import { claimFeedback, leaseContinuation, leaseModel } from "../job-feedback.ts";
 import { uploadChangeset, workBranch } from "../issue-to-pr.ts";
 import { appendRunnerEvents, failJob, heartbeat, runnerActor, tryLease } from "../jobs.ts";
 import { leaseRequest } from "../system.ts";
@@ -100,9 +103,17 @@ export async function runnerRoutes(app: FastifyInstance, deps: Deps) {
         try {
           if (!deps.github) throw new HttpError(409, "CONFLICT", "GitHub isn't set up on this NEXUS.");
           const git = await deps.github.readToken(snapshot.repositoryId);
-          task = { kind: "issue_to_pr", snapshot, workBranch: workBranch(snapshot.issueNumber, job.id), git };
+          const [continuation, model] = await Promise.all([leaseContinuation(db, job), leaseModel(db, job)]);
+          task = {
+            kind: "issue_to_pr",
+            snapshot,
+            workBranch: workBranch(snapshot.issueNumber, job.id),
+            git,
+            ...(continuation ? { continuation } : {}),
+            ...(model ? { model } : {}),
+          };
         } catch (err) {
-          // The runner can't fetch without it: fail the job (the owner re-runs) rather than wedge the queue.
+          // The runner can't start without these: fail the job (the owner re-runs) rather than wedge the queue.
           if (!(err instanceof HttpError)) req.log.error({ err, correlationId: job.id }, "read token failed");
           await failJob(db, {
             jobId: job.id,
@@ -149,6 +160,18 @@ export async function runnerRoutes(app: FastifyInstance, deps: Deps) {
     async (req) => {
       req.log = req.log.child({ correlationId: req.params.id });
       return uploadChangeset(db, runnerOf(req), req.params.id, req.body);
+    },
+  );
+
+  // At every round boundary the runner takes the owner's waiting messages (spec §6a).
+  r.post(
+    "/v1/runner/jobs/:id/feedback/claim",
+    {
+      schema: { params: JobParams, body: ClaimFeedbackRequest, response: { 200: ClaimFeedbackResponse } },
+    },
+    async (req) => {
+      req.log = req.log.child({ correlationId: req.params.id });
+      return claimFeedback(db, runnerOf(req), req.params.id, req.body);
     },
   );
 

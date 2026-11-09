@@ -259,6 +259,20 @@ describe("auth and validation", () => {
 });
 
 describe("GET /v1/jobs/history", () => {
+  it("a base or red-only test run is NEXUS's check of the base, never the job's result", async () => {
+    const projectId = await newProject();
+    const job = await seedJob({ projectId, repo: REPOS.web, status: "VERIFYING" });
+    await seedTestEvent(job.id, 1, verification("failed"));
+    await seedTestEvent(job.id, 2, { ...verification("passed"), only: "base" });
+    await seedTestEvent(job.id, 3, { ...verification("passed"), only: "red" });
+    const onlyBase = await seedJob({ projectId, repo: REPOS.web, status: "VERIFYING" });
+    await seedTestEvent(onlyBase.id, 1, { ...verification("failed"), only: "base" });
+
+    const items = new Map((await history({ projectId })).items.map((i) => [i.job.id, i]));
+    expect(items.get(job.id)!.tests).toBe("failed");
+    expect(items.get(onlyBase.id)!.tests).toBeNull();
+  });
+
   it("items: repository from the snapshot, duration, tests from NEXUS's verification, PR only when EXECUTED", async () => {
     const projectId = await newProject();
     const t0 = new Date("2026-10-01T10:00:00Z");

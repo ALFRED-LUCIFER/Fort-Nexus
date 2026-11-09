@@ -12,7 +12,11 @@ import {
   IdempotencyKey,
   Job,
   JobEventsQuery,
+  JobFeedback,
+  JobFeedbackList,
+  JobFeedbackRequest,
   JobList,
+  KeepFixingRequest,
   ListApprovalsQuery,
   ListJobsQuery,
   Me,
@@ -24,6 +28,7 @@ import {
 import type { Deps } from "../app.ts";
 import { HttpError } from "../errors.ts";
 import { decideApproval, listApprovals, toApprovalDto } from "../issue-to-pr.ts";
+import { createFeedback, keepFixingJob, listFeedback } from "../job-feedback.ts";
 import { cancelJob, createJob, getJob, listJobs, retryJob, toJobDto } from "../jobs.ts";
 import { createPairingCode, listRunners, remoteAccessStatus, revokeRunner } from "../runners.ts";
 import { streamJobEvents } from "../sse.ts";
@@ -95,6 +100,7 @@ export async function ownerRoutes(app: FastifyInstance, deps: Deps) {
         body: req.body,
         correlationId: req.id,
         timezone: config.ownerTimezone,
+        applyProfile: true,
         pinIssue: (b) =>
           requireGithub(deps.github).issueSnapshot(b.repositoryId, b.issueNumber, b.baseBranch),
       });
@@ -154,6 +160,59 @@ export async function ownerRoutes(app: FastifyInstance, deps: Deps) {
       reply.code(202);
       return { jobId: job.id, status: job.status, streamUrl: `/v1/jobs/${job.id}/events` };
     },
+  );
+
+  r.post(
+    "/v1/jobs/:id/keep-fixing",
+    {
+      schema: {
+        params: IdParams,
+        headers: z.object({ [IDEMPOTENCY_HEADER]: IdempotencyKey }),
+        body: KeepFixingRequest.nullish(),
+        response: { 202: CreateJobResponse },
+      },
+    },
+    async (req, reply) => {
+      const job = await keepFixingJob(db, {
+        ownerId: owner(req).id,
+        jobId: req.params.id,
+        note: req.body?.note ?? null,
+        idempotencyKey: req.headers[IDEMPOTENCY_HEADER],
+        correlationId: req.id,
+        timezone: config.ownerTimezone,
+      });
+      reply.code(202);
+      return { jobId: job.id, status: job.status, streamUrl: `/v1/jobs/${job.id}/events` };
+    },
+  );
+
+  r.post(
+    "/v1/jobs/:id/feedback",
+    {
+      schema: {
+        params: IdParams,
+        headers: z.object({ [IDEMPOTENCY_HEADER]: IdempotencyKey }),
+        body: JobFeedbackRequest,
+        response: { 201: JobFeedback },
+      },
+    },
+    async (req, reply) => {
+      const feedback = await createFeedback(db, {
+        ownerId: owner(req).id,
+        jobId: req.params.id,
+        text: req.body.text,
+        idempotencyKey: req.headers[IDEMPOTENCY_HEADER],
+        correlationId: req.id,
+      });
+      reply.code(201);
+      return feedback;
+    },
+  );
+
+  r.get(
+    "/v1/jobs/:id/feedback",
+    { schema: { params: IdParams, response: { 200: JobFeedbackList } } },
+    async (req) => listFeedback(db, owner(req).id, req.params.id),
   );
 
   r.get(

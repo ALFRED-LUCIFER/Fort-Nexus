@@ -13,7 +13,7 @@ import {
 import type { Db } from "./db/index.ts";
 import { aiSpend, approvals, jobs, runEvents, workspaces, type AiSpendSource } from "./db/schema.ts";
 import { HttpError } from "./errors.ts";
-import { toJobDto } from "./jobs.ts";
+import { notBaselineRun, toJobDto } from "./jobs.ts";
 import { localDate } from "./research/schedule.ts";
 import { resolveProject } from "./workspaces.ts";
 
@@ -74,7 +74,7 @@ export async function jobHistory(
   const tested = db
     .select({ status: sql<string | null>`${runEvents.payload}->>'status'`.as("event_tests") })
     .from(runEvents)
-    .where(and(eq(runEvents.jobId, jobs.id), eq(runEvents.type, "test.completed")))
+    .where(and(eq(runEvents.jobId, jobs.id), eq(runEvents.type, "test.completed"), notBaselineRun))
     .orderBy(desc(runEvents.sequence))
     .limit(1)
     .as("test_event");
