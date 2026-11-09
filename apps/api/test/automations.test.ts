@@ -193,6 +193,13 @@ describe("AUTO-G01 n8n launches a typed home-host job", () => {
 });
 
 describe("AUTO-G02 reject forged webhook", () => {
+  it("refuses an idempotency key in the plan: namespace, which is the plan executor's", async () => {
+    const c = await newClient();
+    const res = await fire(c, diagnostic(projectA, "plan:12345678" as never));
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().error.code).toBe("VALIDATION_FAILED");
+  });
+
   it("AUTO-G02: bad signature, stale or future timestamp, unknown or disabled client, tampering and missing headers all get the same 401 and enqueue nothing", async () => {
     const c = await newClient();
     const disabled = await newClient();

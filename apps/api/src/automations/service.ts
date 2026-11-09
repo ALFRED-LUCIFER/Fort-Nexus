@@ -18,7 +18,7 @@ import type { Deps } from "../app.ts";
 import { audit } from "../audit.ts";
 import type { Db } from "../db/index.ts";
 import { HttpError, notFound } from "../errors.ts";
-import { canonical, createJob, ownerActor, sha256 } from "../jobs.ts";
+import { assertCallerKey, canonical, createJob, ownerActor, sha256 } from "../jobs.ts";
 import { requireGithub } from "../routes/github.ts";
 import { assertNotStopped } from "../system.ts";
 import { ownerWorkspaceIds, resolveProject } from "../workspaces.ts";
@@ -266,7 +266,7 @@ async function runAction(
   const action = body.action;
   if (!client.allowedActions.includes(action.type))
     throw new HttpError(403, "FORBIDDEN", `This automation client may not run ${action.type}`);
-  const idempotencyKey = `automation:${client.id}:${body.idempotencyKey}`;
+  const idempotencyKey = `automation:${client.id}:${assertCallerKey(body.idempotencyKey)}`;
   if (action.type === "jobs.create") {
     const req = action.request;
     if (!client.allowedJobTypes.includes(req.jobType))

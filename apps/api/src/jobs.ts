@@ -213,6 +213,15 @@ export async function failJob(
  */
 export const usesDeveloperProfile = (idempotencyKey: string) => !idempotencyKey.startsWith("plan:");
 
+/** The `plan:` namespace is the plan executor's: a key a caller supplies there would skip the profile. */
+export function assertCallerKey(idempotencyKey: string): string {
+  if (!usesDeveloperProfile(idempotencyKey))
+    throw new HttpError(400, "VALIDATION_FAILED", "Idempotency-Key can't start with plan:", {
+      field: "idempotency-key",
+    });
+  return idempotencyKey;
+}
+
 /** A direct issue job's budget never exceeds what the Developer's effective profile allows (spec §6). */
 async function withProfileLimits(
   db: Db,

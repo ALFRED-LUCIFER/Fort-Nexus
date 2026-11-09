@@ -97,6 +97,23 @@ describe("Developer profile for direct issue jobs", () => {
   });
 });
 
+describe("the plan: key namespace belongs to the plan executor", () => {
+  it("is refused as a caller's Idempotency-Key on create, run again and keep fixing", async () => {
+    expect((await setProfile()).statusCode).toBe(200);
+    const bad = "plan:12345678";
+    const create = await k.createIssueJob({}, bad as never);
+    expect(create.statusCode, create.body).toBe(400);
+    expect(create.json().error.code).toBe("VALIDATION_FAILED");
+
+    const id = await k.stoppedJob();
+    for (const route of ["retry", "keep-fixing"]) {
+      const res = await k.owner("POST", `/v1/jobs/${id}/${route}`, { key: bad });
+      expect(res.statusCode, res.body).toBe(400);
+    }
+    expect((await k.sql.query(`select 1 from jobs where idempotency_key = $1`, [bad])).rowCount).toBe(0);
+  });
+});
+
 describe("the profile covers every owner-started issue job, not plan steps", () => {
   it("caps a draft-created and an automation-created job, keeps a smaller budget, and leaves plan steps alone", async () => {
     expect((await setProfile()).statusCode).toBe(200);

@@ -21,7 +21,7 @@ import type {
 import { AgentTool } from "@nexus/contracts";
 import { createDb } from "../src/db/index.ts";
 import { aiSpend, auditRecords, jobs, notifications } from "../src/db/schema.ts";
-import { canonical, moveJob, sha256, type NewEvent } from "../src/jobs.ts";
+import { canonical, createJob, moveJob, sha256, type NewEvent } from "../src/jobs.ts";
 import type { DeepDives } from "../src/plans/deep-dives.ts";
 import { createPlanExecutor } from "../src/plans/executor.ts";
 import { planHash } from "../src/plans/service.ts";
@@ -778,13 +778,16 @@ describe("executor (FR-AGT-01/09)", () => {
   it("idempotent restart: a step claimed before a crash adopts the job its key already created", async () => {
     const p = await approved([step(diag())]);
     // The crash left: step claimed (RUNNING) and the job created under the step's key, but not recorded.
-    const created = await call(
-      "POST",
-      "/v1/jobs",
-      { jobType: "RUNNER_DIAGNOSTIC", preset: "node-version", projectId: home.id },
-      { "idempotency-key": `plan:${p.id}:0` },
-    );
-    expect(created.statusCode).toBe(202);
+    // The plan: key namespace is the executor's alone (the owner route refuses it), so the job comes from createJob.
+    const crashed = await createJob(db.db, {
+      ownerId: (await call("GET", "/v1/me")).json().id as string,
+      idempotencyKey: `plan:${p.id}:0`,
+      body: { jobType: "RUNNER_DIAGNOSTIC", preset: "node-version", projectId: home.id },
+      correlationId: p.id,
+      timezone: "UTC",
+      pinIssue: () => Promise.reject(new Error("diagnostics pin nothing")),
+    });
+    const created = { json: () => ({ jobId: crashed.id }) };
     await db.db
       .update(planSteps)
       .set({ status: "RUNNING", startedAt: new Date() })

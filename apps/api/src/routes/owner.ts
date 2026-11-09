@@ -29,7 +29,7 @@ import type { Deps } from "../app.ts";
 import { HttpError } from "../errors.ts";
 import { decideApproval, listApprovals, toApprovalDto } from "../issue-to-pr.ts";
 import { createFeedback, keepFixingJob, listFeedback } from "../job-feedback.ts";
-import { cancelJob, createJob, getJob, listJobs, retryJob, toJobDto } from "../jobs.ts";
+import { assertCallerKey, cancelJob, createJob, getJob, listJobs, retryJob, toJobDto } from "../jobs.ts";
 import { createPairingCode, listRunners, remoteAccessStatus, revokeRunner } from "../runners.ts";
 import { streamJobEvents } from "../sse.ts";
 import { requireGithub } from "./github.ts";
@@ -96,7 +96,7 @@ export async function ownerRoutes(app: FastifyInstance, deps: Deps) {
     async (req, reply) => {
       const job = await createJob(db, {
         ownerId: owner(req).id,
-        idempotencyKey: req.headers[IDEMPOTENCY_HEADER],
+        idempotencyKey: assertCallerKey(req.headers[IDEMPOTENCY_HEADER]),
         body: req.body,
         correlationId: req.id,
         timezone: config.ownerTimezone,
@@ -150,7 +150,7 @@ export async function ownerRoutes(app: FastifyInstance, deps: Deps) {
       const job = await retryJob(db, {
         ownerId: owner(req).id,
         jobId: req.params.id,
-        idempotencyKey: req.headers[IDEMPOTENCY_HEADER],
+        idempotencyKey: assertCallerKey(req.headers[IDEMPOTENCY_HEADER]),
         correlationId: req.id,
         timezone: config.ownerTimezone,
         pinIssue: (b) =>
@@ -176,7 +176,7 @@ export async function ownerRoutes(app: FastifyInstance, deps: Deps) {
         ownerId: owner(req).id,
         jobId: req.params.id,
         note: req.body?.note ?? null,
-        idempotencyKey: req.headers[IDEMPOTENCY_HEADER],
+        idempotencyKey: assertCallerKey(req.headers[IDEMPOTENCY_HEADER]),
         correlationId: req.id,
         timezone: config.ownerTimezone,
       });
