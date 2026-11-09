@@ -9,7 +9,7 @@ Branch `feat/self-healing-runs` (spec `docs/specs/self-healing-runs.md`), not ye
 - **A run repairs itself:** after the first attempt the Developer gets up to 3 repair rounds, each ending in NEXUS's own test run on the exact tree. **Nothing is pushed or approved unless that run passed**; the server enforces it. QA now reviews the change against the issue before approval (an opinion, never an authorization).
 - **Keep fixing:** a stuck job reports plainly what is stuck; the owner can say Keep fixing, with an optional note. The owner can also send feedback to the agent while it works (run drawer: rounds, phases, QA, stuck report, feedback box).
 - **Sandbox:** working `pnpm` and `yarn` for nested script calls. Image is now `nexus-sandbox:4`; build it on the machine with `pnpm --filter @nexus/runner sandbox:build` (`node scripts/nexus.mjs up` also does it). Already built on this machine.
-- **Migration `0017`.** Restart the API before the runner: heartbeats and uploads changed, an older API refuses them.
+- **Migration `0017`. Deploy order: stop the runner, restart the API, start the runner.** Changeset uploads changed: a runner still on the old code that finishes during the API restart would get a 400 on its upload. Heartbeats didn't change.
 - The Developer's profile now applies to every owner-started job, and its prompt follows repository conventions.
 - **Not built:** the Talk integration for feedback (feedback is sent from the run drawer only).
 

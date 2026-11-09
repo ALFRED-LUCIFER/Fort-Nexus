@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { FEEDBACK_MAX } from "@nexus/contracts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { approvals, changesets } from "../src/db/schema.ts";
 import { buildAction } from "../src/issue-to-pr.ts";
@@ -20,8 +21,24 @@ const row = async (id: string) =>
 const audits = async (action: string) =>
   (await k.sql.query(`select * from audit_records where action = $1 order by occurred_at`, [action])).rows;
 /** A NEEDS_INFO job: the agent stopped with questions and stored no changeset. */
-async function needsInfoJob() {
+async function needsInfoJob(questions?: string[]) {
   const l = await k.runningJob();
+  if (questions) {
+    const res = await k.runner(`/v1/runner/jobs/${l.jobId}/events`, {
+      batchId: randomUUID(),
+      fencingToken: l.fencingToken,
+      events: [
+        {
+          occurredAt: new Date().toISOString(),
+          type: "job.failed",
+          payload: { reason: "needs_info", questions },
+        },
+      ],
+      transition: { to: "FAILED", outcome: "NEEDS_INFO" },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    return l.jobId;
+  }
   for (const transition of [{ to: "VERIFYING" }, { to: "COMPLETED", outcome: "NEEDS_INFO" }]) {
     const res = await k.runner(`/v1/runner/jobs/${l.jobId}/events`, {
       batchId: randomUUID(),
@@ -237,6 +254,41 @@ describe("keep fixing", () => {
     expect(pushed.json().error.message).toMatch(/pull request|pushed/i);
   });
 
+  it("continues a passing change no approval can act on: the integrity block, and a denied or expired approval", async () => {
+    // Integrity problems: the tests passed but the API made no approval.
+    const stopped = await k.runningJob();
+    const blocked = await k.upload(stopped, {
+      verification: PASSED,
+      integrity: { clean: false, problems: ["Changed the test script"] },
+      terminalOutcome: "FAILED_TESTS",
+    });
+    expect(blocked.statusCode, blocked.body).toBe(200);
+    const res = await keepFixing(stopped.jobId, { note: "Put the test script back" });
+    expect(res.statusCode, res.body).toBe(202);
+    expect(await row(res.json().jobId)).toMatchObject({ continues_changeset: true });
+
+    for (const status of ["DENIED", "EXPIRED"] as const) {
+      await k.reset();
+      const l = await k.runningJob();
+      expect((await k.upload(l, { verification: PASSED })).statusCode).toBe(200);
+      await k.sql.query(`update approvals set status = $2 where job_id = $1`, [l.jobId, status]);
+      await k.sql.query(`update jobs set status = 'CANCELLED', lease_expires_at = null where id = $1`, [
+        l.jobId,
+      ]);
+      const again = await keepFixing(l.jobId);
+      expect(again.statusCode, again.body).toBe(202);
+    }
+  });
+
+  it("a passing change with an open approval says to decide it, and doesn't call it nothing to fix", async () => {
+    const l = await k.runningJob();
+    expect((await k.upload(l, { verification: PASSED })).statusCode).toBe(200);
+    const res = await keepFixing(l.jobId);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toMatch(/waiting for your approval/i);
+    expect(res.json().error.message).not.toMatch(/nothing to fix/i);
+  });
+
   it("refuses an executed approval even when the stored tests did not pass", async () => {
     const id = await k.stoppedJob();
     const [cs] = await k.sql.query(`select * from changesets where job_id = $1`, [id]).then((r) => r.rows);
@@ -301,6 +353,33 @@ describe("keep fixing", () => {
     const l = await k.lease();
     expect(l.jobId).toBe(res.json().jobId);
     expect(l.task?.continuation).toEqual({ files: [], note: "Round to 2 decimals" });
+  });
+
+  it("stores the agent's questions with the owner's answer, so the new run knows what was asked", async () => {
+    const id = await needsInfoJob(["Which region?", "Which currency?"]);
+    const res = await keepFixing(id, { note: "EU, in euros" });
+    expect(res.statusCode, res.body).toBe(202);
+    const expected = "The agent asked: Which region? Which currency?\n\nThe owner answered: EU, in euros";
+    expect((await row(res.json().jobId)).owner_note).toBe(expected);
+    const l = await k.lease();
+    expect(l.task?.continuation).toEqual({ files: [], note: expected });
+  });
+
+  it("keeps the whole answer and the note's limit: long questions are the part that is cut", async () => {
+    const answer = "a".repeat(1900);
+    const id = await needsInfoJob(["q".repeat(5000)]);
+    const res = await keepFixing(id, { note: answer });
+    expect(res.statusCode, res.body).toBe(202);
+    const note = (await row(res.json().jobId)).owner_note as string;
+    expect(note.length).toBeLessThanOrEqual(FEEDBACK_MAX);
+    expect(note).toMatch(/^The agent asked: q+…\n\nThe owner answered: a+$/);
+    expect(note.endsWith(answer)).toBe(true);
+
+    await k.reset();
+    const full = "b".repeat(FEEDBACK_MAX);
+    const noRoom = await needsInfoJob(["Which region?"]);
+    const kept = await keepFixing(noRoom, { note: full });
+    expect((await row(kept.json().jobId)).owner_note).toBe(full);
   });
 
   it("is idempotent per key, and a retry's key can't be replayed as keep fixing", async () => {

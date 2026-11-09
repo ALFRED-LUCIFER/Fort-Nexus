@@ -31,12 +31,14 @@ export function boxMode(status: JobStatus, keep: KeepFixingState): Mode | null {
   return keep.answers ? "answer" : "keep";
 }
 
-/** Where one message stands, from the API's record and the runner's own event, never from a guess. */
+/**
+ * Where one message stands, only from the runner's own event: the API's record is set when a round claims the message,
+ * and that round may never have run. Once the loop stopped, nothing will read a message that is still undelivered.
+ */
 export function feedbackState(f: Feedback, view: LoopView, ended: boolean) {
-  const round = f.deliveredRound ?? view.delivered.get(f.id) ?? null;
-  if (round === 0 || (round === null && (view.stopped?.unusedFeedback.includes(f.id) || ended)))
-    return "Not used: the job ended first";
-  return round === null ? "Waiting for the next round" : `Delivered to round ${round}`;
+  const round = view.delivered.get(f.id);
+  if (round !== undefined) return `Delivered to round ${round}`;
+  return ended || view.stopped ? "Not used: the job ended first" : "Waiting for the next round";
 }
 
 /**

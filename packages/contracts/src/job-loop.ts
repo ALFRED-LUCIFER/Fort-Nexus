@@ -55,7 +55,9 @@ export const JobFeedbackList = z.object({ items: z.array(JobFeedback) });
 export type JobFeedbackList = z.infer<typeof JobFeedbackList>;
 
 // Owner asks a stopped run to keep going from its saved changes, optionally with a note.
-export const KeepFixingRequest = z.strictObject({ note: z.string().trim().min(1).max(FEEDBACK_MAX).optional() });
+export const KeepFixingRequest = z.strictObject({
+  note: z.string().trim().min(1).max(FEEDBACK_MAX).optional(),
+});
 export type KeepFixingRequest = z.infer<typeof KeepFixingRequest>;
 
 // Runner pulls the feedback waiting for the round it is about to start.

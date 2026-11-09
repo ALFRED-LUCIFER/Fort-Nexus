@@ -53,4 +53,4 @@ Restarting the API reconciles against GitHub by the stable branch name and idemp
 
 ## Sandbox image rebuild
 
-The job sandbox image is tagged (`SANDBOX_IMAGE`, currently `nexus-sandbox:4`, with working `pnpm` and `yarn` on `PATH`). After pulling a change that bumps the tag, build it on the home machine before the runner starts jobs: `pnpm --filter @nexus/runner sandbox:build` (or `node scripts/nexus.mjs up`). Without it, runs fail at container start. Remove old tags with `docker rmi nexus-sandbox:<n>` once no job uses them. Restart the API before the runner after an upgrade.
+The job sandbox image is tagged (`SANDBOX_IMAGE`, currently `nexus-sandbox:4`, with working `pnpm` and `yarn` on `PATH`). After pulling a change that bumps the tag, build it on the home machine before the runner starts jobs: `pnpm --filter @nexus/runner sandbox:build` (or `node scripts/nexus.mjs up`). Without it, runs fail at container start. Remove old tags with `docker rmi nexus-sandbox:<n>` once no job uses them. After an upgrade that changes the runner API: stop the runner, restart the API, then start the runner, so a runner on the old code can't finish a job against the new API.

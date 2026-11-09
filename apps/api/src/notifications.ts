@@ -252,6 +252,14 @@ const REASONS: Record<string, [string, string]> = {
     "The coding agent stopped with an error.",
     "Open the run for the last output, then start a new run.",
   ],
+  needs_info: [
+    "The agent has a question only you can answer, so it stopped without pushing anything.",
+    "Open the run and answer it in the run to continue.",
+  ],
+  not_configured: [
+    "This repository has no tests NEXUS can run, so the agent was not started.",
+    "Add a `test` script to package.json with a committed lockfile, or a .nexus.json with a `verify` section, then use Run again.",
+  ],
   changeset_upload_failed: [
     "The runner couldn't hand the changes to NEXUS.",
     "Check the runner can reach the API, then start a new run.",
@@ -280,11 +288,13 @@ function failureText(
   const head =
     to === "RECOVERY_REQUIRED"
       ? "Run needs recovery"
-      : outcome === "TIMED_OUT"
-        ? "Run timed out"
-        : outcome === "BUDGET_EXCEEDED" || reason === "budget_exceeded"
-          ? "Run stopped at its budget"
-          : "Run failed";
+      : reason === "needs_info"
+        ? "Agent needs your answer"
+        : outcome === "TIMED_OUT"
+          ? "Run timed out"
+          : outcome === "BUDGET_EXCEEDED" || reason === "budget_exceeded"
+            ? "Run stopped at its budget"
+            : "Run failed";
   return { title: `${head} · ${subjectOf(j)}`, body: detail };
 }
 

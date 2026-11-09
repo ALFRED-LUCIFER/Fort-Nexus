@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { SSE_RUN_EVENT, type Approval, type Job, type Verification } from "@nexus/contracts";
 import {
   FakeEventSource,
@@ -14,8 +14,9 @@ import {
   renderApp,
   runner,
 } from "../test/helpers.tsx";
-import { keepFixingOf, loopOf, stuckOf } from "./loopEvents.ts";
-import { issueStages, verificationOf } from "./runEvents.ts";
+import { JobLoop } from "./JobLoop.tsx";
+import { keepFixingListed, keepFixingOf, loopOf, stuckOf } from "./loopEvents.ts";
+import { explainIssue, issueStages, verificationOf } from "./runEvents.ts";
 
 const APPROVAL_ID = "44444444-4444-4444-8444-444444444444";
 const HEAD = "nexus/issue-42-22222222";
@@ -236,6 +237,33 @@ describe("loop events", () => {
   });
 });
 
+describe("the questions of a run that kept a passing tree", () => {
+  it("shows a question asked after a passing tree, under the stop reason", async () => {
+    const view = loopOf([
+      event(1, "loop.stopped", { reason: "needs_info", questions: ["Which region?"] }),
+    ] as never);
+    expect(view.stopped?.questions).toEqual(["Which region?"]);
+    render(<JobLoop view={view} status="AWAITING_APPROVAL" stuck={{ questions: [] }} qa={undefined} />);
+    expect(screen.getByText("Which region?")).toBeTruthy();
+  });
+
+  it("doesn't repeat questions the answer box already shows", () => {
+    const view = loopOf([
+      event(1, "loop.stopped", { reason: "needs_info", questions: ["Which region?"] }),
+    ] as never);
+    render(<JobLoop view={view} status="FAILED" stuck={{ questions: ["Which region?"] }} qa={undefined} />);
+    expect(screen.queryByText("Which region?")).toBeNull();
+  });
+});
+
+describe("a repository with no test plan", () => {
+  it("explains that the agent was never started", () => {
+    expect(
+      explainIssue("FAILED", "ENVIRONMENT_BLOCKED", { failReason: "not_configured" }, null, undefined, true),
+    ).toMatch(/no tests it can run.*agent wasn't started/i);
+  });
+});
+
 describe("Keep fixing eligibility", () => {
   const changed = event(1, "artifact.created", {
     kind: "diff",
@@ -253,11 +281,27 @@ describe("Keep fixing eligibility", () => {
     },
   );
 
-  it("is not offered while working, when tests passed, with no changes, or after the push", () => {
+  it("a passing change no approval can act on is eligible: the integrity block, or a denied approval", () => {
+    const passedTests = event(2, "test.completed", test("passed"));
+    expect(state(issueJob({ status: "FAILED" }), [changed, passedTests])).toBe("eligible");
+    const denied: Approval = { ...approval(), status: "DENIED" };
+    expect(state(issueJob({ status: "CANCELLED" }), [changed, passedTests], denied)).toBe("eligible");
+  });
+
+  it("a passing change with an open approval is decided there, not kept fixing", () => {
+    const passedTests = event(2, "test.completed", test("passed"));
+    expect(state(issueJob({ status: "AWAITING_APPROVAL" }), [changed, passedTests], approval())).toBe("no");
+  });
+
+  it("the Jobs list offers it for tests that passed only when integrity problems blocked the approval", () => {
+    const item = (over: Partial<Job>, tests: "passed" | "failed" = "passed") =>
+      ({ job: issueJob(over), tests, approval: null }) as never;
+    expect(keepFixingListed(item({ status: "FAILED", outcome: "FAILED_TESTS" }))).toBe(true);
+    expect(keepFixingListed(item({ status: "COMPLETED", outcome: "PR_CREATED" }))).toBe(false);
+  });
+
+  it("is not offered while working, with no changes, or after the push", () => {
     expect(state(issueJob({ status: "RUNNING" }), [changed, failedTests])).toBe("no");
-    expect(state(issueJob({ status: "FAILED" }), [changed, event(2, "test.completed", test("passed"))])).toBe(
-      "no",
-    );
     expect(state(issueJob({ status: "FAILED" }), [failedTests])).toBe("no");
     expect(
       state(issueJob({ status: "FAILED" }), [

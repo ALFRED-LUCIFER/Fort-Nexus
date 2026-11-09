@@ -84,6 +84,8 @@ type Fakes = {
   onVerify?: (tree: string, label?: string) => void;
   now?: () => number;
   input?: Partial<LoopInput>;
+  /** Whether the base commit names tests NEXUS can run; the default is yes. */
+  testPlan?: boolean;
 };
 
 function harness(f: Fakes) {
@@ -105,6 +107,7 @@ function harness(f: Fakes) {
   let files = f.startFiles ?? [];
 
   const deps: LoopDeps = {
+    hasTestPlan: async () => f.testPlan ?? true,
     runAgent: async (prompt, budgetLeft) => {
       hit("agent");
       prompts.push(prompt);
@@ -635,6 +638,22 @@ describe("runRepairLoop", () => {
     expect(h.prompts[0]).toContain("Look at the cache");
     expect(r.report?.rounds.map((x) => x.round)).toEqual([1, 2, 3]);
     expect(StuckReport.safeParse(r.report).success).toBe(true);
+  });
+
+  it("stops before any agent spend when the base has no test plan, with the not_configured report", async () => {
+    const h = harness({ testPlan: false, agent: trees("t1") });
+    const r = await h.run();
+    expect(h.count("agent")).toBe(0);
+    expect(h.count("verify")).toBe(0);
+    expect(h.count("qa")).toBe(0);
+    expect(r).toMatchObject({ kind: "failed", reason: "not_configured", outcome: "ENVIRONMENT_BLOCKED" });
+    if (r.kind !== "failed") throw new Error("expected failed");
+    expect(StuckReport.safeParse(r.report).success).toBe(true);
+    expect(r.report.rounds).toEqual([]);
+    expect(r.report.stillFailing).toMatch(/no test/i);
+    expect(r.report.nextStep).toMatch(/\.nexus\.json/);
+    expect(h.ofType("loop.stopped")).toEqual([{ reason: "not_configured" }]);
+    expect(h.ofType("loop.round.started")).toEqual([]);
   });
 
   it("treats a continuation with no stored files as a fresh attempt carrying the note", async () => {

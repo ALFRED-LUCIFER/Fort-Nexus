@@ -35,6 +35,8 @@ const h = vi.hoisted(() => ({
   agentArgv: undefined as [string, ...string[]] | undefined,
   verifyCalls: [] as { maxMs: number | undefined; only: string | undefined }[],
   realEngine: undefined as ((o: ClaudeTaskOptions) => Promise<ClaudeTaskResult>) | undefined,
+  // Most tests here use a repository with no test plan and let the agent run: the preflight is tested on its own.
+  realTestPlanCheck: false,
 }));
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -70,6 +72,8 @@ vi.mock("./verify.ts", async (importOriginal) => {
   const real = await importOriginal<typeof import("./verify.ts")>();
   return {
     ...real,
+    hasTestPlan: (gitDir: string, baseSha: string) =>
+      h.realTestPlanCheck ? real.hasTestPlan(gitDir, baseSha) : Promise.resolve(true),
     runVerification: (o: VerifyOptions) => {
       h.verifyCalls.push({ maxMs: o.maxMs, only: o.only });
       return real.runVerification(o);
@@ -219,6 +223,7 @@ afterEach(async () => {
   h.engineCalls.length = 0;
   h.agentArgv = undefined;
   h.verifyCalls.length = 0;
+  h.realTestPlanCheck = false;
 });
 
 describe("DEV_ISSUE_TO_PR job", () => {
@@ -507,6 +512,22 @@ describe("DEV_ISSUE_TO_PR job", () => {
       questions: ["Which currency?"],
     });
     expect(changesets).toEqual([]);
+    cleanedUp();
+  });
+
+  it("a base commit with no test plan stops before the agent, with the not_configured report", async () => {
+    h.realTestPlanCheck = true;
+    const { api, appends, changesets } = fakeApi();
+    await startJob(api, issueLease(), opts()).done;
+    expect(h.engineCalls).toEqual([]);
+    expect(h.verifyCalls).toEqual([]);
+    expect(changesets).toEqual([]);
+    expect(terminal(appends)).toEqual({ to: "FAILED", outcome: "ENVIRONMENT_BLOCKED" });
+    expect(eventsOf(appends, "job.failed")[0]?.payload).toMatchObject({
+      reason: "not_configured",
+      report: { rounds: [], nextStep: expect.stringContaining(".nexus.json") },
+    });
+    expect(eventsOf(appends, "loop.stopped")[0]?.payload).toEqual({ reason: "not_configured" });
     cleanedUp();
   });
 

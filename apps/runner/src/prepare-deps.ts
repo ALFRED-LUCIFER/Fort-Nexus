@@ -32,7 +32,7 @@ export type PrepareDepsOptions = {
   gitDir: string;
   baseSha: string;
   worktreePath: string;
-  /** Package-manager caches, kept across jobs; mounted at /workspace/cache. */
+  /** Package-manager caches for this job's install; mounted at /workspace/cache. */
   cacheDir: string;
   image?: string;
   runnerLabel?: string;

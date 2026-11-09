@@ -41,7 +41,7 @@ export interface LoopView {
   qa?: QaReview & { round: number | undefined };
   /** Feedback id -> the round that picked it up, from the runner's own event. */
   delivered: ReadonlyMap<string, number>;
-  stopped?: { reason: string; unusedFeedback: string[] };
+  stopped?: { reason: string; unusedFeedback: string[]; questions: string[] };
 }
 
 export function loopOf(events: readonly RunEvent[]): LoopView {
@@ -102,6 +102,9 @@ export function loopOf(events: readonly RunEvent[]): LoopView {
           reason: str(p.reason) ?? "unknown",
           unusedFeedback: Array.isArray(p.unusedFeedback)
             ? p.unusedFeedback.filter((x): x is string => typeof x === "string")
+            : [],
+          questions: Array.isArray(p.questions)
+            ? p.questions.filter((x): x is string => typeof x === "string")
             : [],
         };
         break;
@@ -178,8 +181,8 @@ export type KeepFixingState =
 
 /**
  * Whether Keep fixing applies, from what the drawer already has. The server decides; this only decides what is
- * offered: a stopped (or awaiting) issue job with stored changes whose NEXUS test result isn't a pass, or a job that
- * ended asking the owner a question.
+ * offered: a stopped (or awaiting) issue job with stored changes and no pass the owner can still approve, or a job
+ * that ended asking the owner a question.
  */
 export function keepFixingOf(
   job: Job,
@@ -201,7 +204,9 @@ export function keepFixingOf(
       return (changedFiles(e.payload).fileCount ?? 0) > 0;
     });
   const tests = verificationOf(events, approval);
-  if (!changeset || !tests || tests.status === "passed") return { kind: "no" };
+  if (!changeset || !tests) return { kind: "no" };
+  // A pass with an open approval is decided there; with none left, integrity problems or the owner's denial stopped it.
+  if (tests.status === "passed" && approval?.status === "PENDING") return { kind: "no" };
   if (tests.status === "not_configured")
     return { kind: "needs_setup", nextStep: stuckOf(events).report?.nextStep ?? NOT_CONFIGURED_STEP };
   return { kind: "eligible", withdraws: approval?.status === "PENDING", answers: false };
@@ -215,5 +220,6 @@ export function keepFixingListed({ job, tests, approval }: JobHistoryItem): bool
   if (job.request.jobType !== "DEV_ISSUE_TO_PR") return false;
   if (!isTerminal(job.status) && job.status !== "AWAITING_APPROVAL") return false;
   if (approval?.status === "EXECUTED" || approval?.status === "APPROVED") return false;
-  return tests === "failed" || tests === "error";
+  // Passed with FAILED_TESTS: integrity problems blocked the approval.
+  return tests === "failed" || tests === "error" || (tests === "passed" && job.outcome === "FAILED_TESTS");
 }

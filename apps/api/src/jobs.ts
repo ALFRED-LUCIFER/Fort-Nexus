@@ -263,7 +263,8 @@ export async function createJob(
     keepFixing?: {
       snapshot: IssueSnapshot;
       note: string | null;
-      beforeCreate: (tx: Tx) => Promise<{ continues: boolean }>;
+      /** `note`: what the new job's agent reads, when it is more than the owner's own words. */
+      beforeCreate: (tx: Tx) => Promise<{ continues: boolean; note?: string }>;
     };
   },
 ): Promise<JobRow> {
@@ -326,7 +327,7 @@ export async function createJob(
         agent: input.agent ?? defaultJobAgent(body.jobType),
         retryOfJobId: input.retryOfJobId ?? null,
         continuesChangeset: kept?.continues ?? false,
-        ownerNote: input.keepFixing?.note ?? null,
+        ownerNote: kept?.note ?? input.keepFixing?.note ?? null,
         status: "QUEUED",
         // RUNNER_DIAGNOSTIC: read-only fixed argv. DEV_ISSUE_TO_PR: sandboxed edits; the push is a separate R2 approval.
         riskTier: snapshot ? "R1" : "R0",
@@ -625,11 +626,12 @@ export async function appendRunnerEvents(
   const forbidden = body.events.find((e) => SERVER_ONLY_EVENTS.has(e.type));
   if (forbidden) throw new HttpError(400, "VALIDATION_FAILED", `Runners cannot emit ${forbidden.type}`);
   const t = body.transition;
-  if (t && (t.to === "COMPLETED" || t.to === "FAILED") !== (t.outcome !== undefined))
+  // A FAILED may have only a reason to give (job.failed carries it): the job's outcome then stays unset.
+  if (t && (t.to === "COMPLETED" ? t.outcome === undefined : t.to !== "FAILED" && t.outcome !== undefined))
     throw new HttpError(
       400,
       "VALIDATION_FAILED",
-      "outcome is required for COMPLETED/FAILED and only for them",
+      "outcome is required for COMPLETED and allowed only for COMPLETED and FAILED",
     );
 
   return db.transaction(async (tx) => {

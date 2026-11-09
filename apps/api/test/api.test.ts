@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import type { Job, LeaseResponse, RunEvent } from "@nexus/contracts";
+import { REPAIR_ROUNDS, StuckReport, type Job, type LeaseResponse, type RunEvent } from "@nexus/contracts";
 import type { Config } from "../src/config.ts";
 import { createDb, type Db } from "../src/db/index.ts";
 import { reapExpiredLeases } from "../src/jobs.ts";
@@ -330,7 +330,7 @@ describe("runner lifecycle", () => {
     expect(res.json().error.code).toBe("STALE_LEASE");
   });
 
-  it("rejects illegal transitions with 409 and server-only events with 400", async () => {
+  it("rejects illegal transitions with 409 and server-only events with 400, and takes a FAILED with no outcome", async () => {
     const { token } = await pairRunner();
     await createJob();
     const l = await lease(token);
@@ -339,11 +339,56 @@ describe("runner lifecycle", () => {
     expect(skip.json().error.code).toBe("INVALID_TRANSITION");
     const spoof = await append(token, l, { events: [ev("job.state.changed")] });
     expect(spoof.statusCode).toBe(400);
-    const noOutcome = await append(token, l, { transition: { to: "FAILED" } });
+    // COMPLETED needs an outcome; a job that only has a reason to give can't invent one.
+    const noOutcome = await append(token, l, { transition: { to: "COMPLETED" } });
     expect(noOutcome.statusCode).toBe(400);
+    const stray = await append(token, l, { transition: { to: "CANCELLED", outcome: "COMMAND_FAILED" } });
+    expect(stray.statusCode).toBe(400);
     // A runner that cannot start the job may fail it from PREPARING.
     const failed = await append(token, l, { transition: { to: "FAILED", outcome: "COMMAND_FAILED" } });
     expect(failed.json().status).toBe("FAILED");
+
+    // A FAILED with no outcome: the reason lands in job.failed and the job really ends.
+    await createJob();
+    const l1 = await lease(token);
+    const res = await append(token, l1, {
+      events: [ev("job.failed", { reason: "runner_shutdown" })],
+      transition: { to: "FAILED" },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().status).toBe("FAILED");
+    const j = (await owner("GET", `/v1/jobs/${l1.jobId}`)).json() as Job;
+    expect(j).toMatchObject({ status: "FAILED", outcome: null });
+    const { rows } = await sql.query(
+      `select payload from run_events where job_id = $1 and type = 'job.failed'`,
+      [l1.jobId],
+    );
+    expect(rows.map((r: { payload: unknown }) => r.payload)).toEqual([{ reason: "runner_shutdown" }]);
+
+    // The largest stuck report the contract allows, on the same runner.
+    const report = StuckReport.parse({
+      rounds: Array.from({ length: REPAIR_ROUNDS + 1 }, (_, i) => ({
+        round: i + 1,
+        tried: "t".repeat(1000),
+        result: "r".repeat(1000),
+      })),
+      stillFailing: "s".repeat(2000),
+      rootCauseGuess: "g".repeat(1000),
+      nextStep: "n".repeat(1000),
+    });
+    await createJob();
+    const l2 = await lease(token);
+    const reported = await append(token, l2, {
+      events: [ev("job.failed", { reason: "agent_failed", report })],
+      transition: { to: "FAILED" },
+    });
+    expect(reported.statusCode, reported.body).toBe(200);
+    expect(reported.json().status).toBe("FAILED");
+    const stored = await sql.query(
+      `select payload from run_events where job_id = $1 and type = 'job.failed'`,
+      [l2.jobId],
+    );
+    expect(stored.rows[0].payload).toEqual({ reason: "agent_failed", report });
   });
 
   it("returns 204 from lease when nothing is queued", async () => {

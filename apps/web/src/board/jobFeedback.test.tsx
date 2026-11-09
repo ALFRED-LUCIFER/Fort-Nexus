@@ -235,9 +235,18 @@ describe("run drawer: Keep fixing and answering", () => {
     });
   });
 
-  it("is absent when the tests passed or nothing was saved", async () => {
+  it("is absent when a passing change waits for approval", async () => {
+    const pending = { ...approval(), action: { ...approval().action, verification: tests("passed") } };
+    await open(issueJob({ status: "AWAITING_APPROVAL" }), {}, pending);
+    await screen.findByRole("region", { name: "Run output" });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Approve/ })).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "Keep fixing" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: /agent/ })).toBeNull();
+  });
+
+  it("is absent when nothing was saved", async () => {
     const { emit } = await open(issueJob({ status: "FAILED", outcome: "COMPLETED_NO_CHANGES" }));
-    emit(changed, event(2, "test.completed", tests("passed")));
+    emit(event(2, "test.completed", tests("passed")));
     await screen.findByRole("region", { name: "Run output" });
     expect(screen.queryByRole("button", { name: "Keep fixing" })).toBeNull();
     expect(screen.queryByRole("textbox", { name: /agent/ })).toBeNull();
@@ -372,6 +381,49 @@ describe("idempotency keys follow the intended action", () => {
 });
 
 describe("feedback delivery from the runner's own events", () => {
+  it("doesn't take the API's claim for a delivery: a claimed round may never have run", async () => {
+    messages = [message({ deliveredRound: 3 })];
+    await open(issueJob());
+    const list = await screen.findByRole("status", { name: "Your messages to the agent" });
+    expect(list.textContent).toMatch(/Waiting for the next round/);
+    expect(list.textContent).not.toMatch(/Delivered/);
+  });
+
+  it("a message posted after the loop stopped says it wasn't used, while the job is still finishing", async () => {
+    messages = [message({ deliveredRound: null })];
+    const { emit } = await open(issueJob({ status: "VERIFYING" }));
+    const list = await screen.findByRole("status", { name: "Your messages to the agent" });
+    expect(list.textContent).toMatch(/Waiting for the next round/);
+    emit(event(6, "loop.stopped", { reason: "passed" }));
+    await waitFor(() => expect(list.textContent).toMatch(/Not used: the job ended first/));
+  });
+
+  it("prefers the job's own running total for cost over the last agent's summary", async () => {
+    const { emit } = await open(issueJob({ estimatedCostUsd: 1.5 }));
+    emit(event(5, "agent.message", { kind: "summary", estimatedCostUsd: 0.1, turns: 3 }));
+    expect(await screen.findByText("$1.50 / $5")).toBeTruthy();
+  });
+
+  it("shows the Developer's report, not QA's, and never the NEXUS_RESULT line", async () => {
+    const { emit } = await open(issueJob());
+    emit(
+      event(4, "agent.started", { engine: "claude-agent-sdk" }),
+      event(5, "agent.message", {
+        kind: "summary",
+        text: 'Fixed the rounding.\nNEXUS_RESULT {"status":"done"}',
+      }),
+      event(6, "agent.started", { engine: "claude-agent-sdk", agent: "QA" }),
+      event(7, "agent.message", {
+        kind: "summary",
+        text: 'The diff looks right.\nNEXUS_RESULT {"status":"qa","verdict":"pass","defects":[]}',
+      }),
+    );
+    const report = await screen.findByRole("region", { name: "Agent report (unverified)" });
+    expect(report.textContent).toMatch(/Fixed the rounding\./);
+    expect(report.textContent).not.toMatch(/diff looks right/);
+    expect(report.textContent).not.toMatch(/NEXUS_RESULT/);
+  });
+
   it("shows the round from feedback.delivered while the API still says null", async () => {
     messages = [message({ deliveredRound: null })];
     const { emit } = await open(issueJob());
@@ -429,8 +481,8 @@ describe("scope and offline guards on paid or sending actions", () => {
 describe("Jobs page: Keep fixing", () => {
   const NOT_PASSED = "33333333-3333-4333-8333-333333333331";
   const PASSED = "33333333-3333-4333-8333-333333333332";
-  const row = (id: string, tests: Verification["status"]) => ({
-    job: issueJob({ id, status: "FAILED", outcome: "FAILED_TESTS" }),
+  const row = (id: string, tests: Verification["status"], outcome: Job["outcome"] = "FAILED_TESTS") => ({
+    job: issueJob({ id, status: outcome === "PR_CREATED" ? "COMPLETED" : "FAILED", outcome }),
     repositoryId: "101",
     repositoryFullName: "acme/web",
     durationMs: null,
@@ -445,7 +497,10 @@ describe("Jobs page: Keep fixing", () => {
       "GET /v1/runners": () => json({ items: [runner()] }),
       "GET /v1/jobs": () => json({ items: [], nextCursor: null }),
       "GET /v1/jobs/history": () =>
-        json({ items: [row(NOT_PASSED, "failed"), row(PASSED, "passed")], nextCursor: null }),
+        json({
+          items: [row(NOT_PASSED, "failed"), row(PASSED, "passed", "PR_CREATED")],
+          nextCursor: null,
+        }),
       [`POST /v1/jobs/${NOT_PASSED}/keep-fixing`]: () => json(QUEUED, 202),
       [`GET /v1/jobs/${NEW_JOB}`]: () => json(issueJob({ id: NEW_JOB, status: "QUEUED" })),
     });

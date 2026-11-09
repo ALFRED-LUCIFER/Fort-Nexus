@@ -152,6 +152,13 @@ async function checkoutTree(gitDir: string, tree: string, dest: string, index: s
   }
 }
 
+/** Whether the base commit names tests NEXUS can run. An unreadable plan counts as yes: the test run reports why. */
+export const hasTestPlan = (gitDir: string, baseSha: string): Promise<boolean> =>
+  readVerifyPlan(gitDir, baseSha).then(
+    (plan) => plan !== null,
+    () => true,
+  );
+
 export type VerifyOptions = {
   jobId: string;
   /** The worktree's trusted git dir (resolved before the agent ran). */

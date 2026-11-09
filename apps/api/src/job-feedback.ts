@@ -1,5 +1,6 @@
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import {
+  FEEDBACK_MAX,
   isTerminal,
   type ClaimFeedbackResponse,
   type IssueToPrTask,
@@ -10,7 +11,7 @@ import {
 import { resolveAgentProfile } from "./agents/service.ts";
 import { audit } from "./audit.ts";
 import type { Db, Tx } from "./db/index.ts";
-import { approvals, changesets, jobFeedback, jobs, runners } from "./db/schema.ts";
+import { approvals, changesets, jobFeedback, jobs, runEvents, runners } from "./db/schema.ts";
 import { HttpError, notFound } from "./errors.ts";
 import { LEASED, createJob, getJob, moveJob, ownerActor, usesDeveloperProfile, type JobRow } from "./jobs.ts";
 import type { RunnerRow } from "./runners.ts";
@@ -32,6 +33,33 @@ const toFeedbackDto = (f: FeedbackRow): JobFeedback => ({
 const conflict = (message: string, details?: Record<string, unknown>) =>
   new HttpError(409, "CONFLICT", message, details);
 
+const ASKED = "The agent asked: ";
+const ANSWERED = "\n\nThe owner answered: ";
+
+/** The agent's questions from the job's last job.failed event; [] if it recorded none. */
+async function agentQuestions(tx: Tx, jobId: string): Promise<string[]> {
+  const [failed] = await tx
+    .select({ payload: runEvents.payload })
+    .from(runEvents)
+    .where(and(eq(runEvents.jobId, jobId), eq(runEvents.type, "job.failed")))
+    .orderBy(desc(runEvents.sequence))
+    .limit(1);
+  const asked = failed?.payload.questions;
+  return Array.isArray(asked) ? asked.filter((q): q is string => typeof q === "string") : [];
+}
+
+/**
+ * What the agent of the new job reads: the question and its answer, within the limit of a note. The owner's words are
+ * never cut, so the questions are what gives way; with no room for any of them, the answer stands alone.
+ */
+function answeredNote(questions: string[], answer: string): string | undefined {
+  const asked = questions.join(" ");
+  const room = FEEDBACK_MAX - ASKED.length - ANSWERED.length - answer.length;
+  if (!asked || room <= 0) return undefined;
+  const shown = asked.length > room ? `${asked.slice(0, room - 1)}…` : asked;
+  return `${ASKED}${shown}${ANSWERED}${answer}`;
+}
+
 /**
  * What Keep fixing may do with the locked job: continue its stored changeset (`continues`), or answer the questions
  * of a NEEDS_INFO job (nothing to continue). Throws the owner-facing refusal otherwise.
@@ -51,7 +79,7 @@ async function keepFixingPlan(tx: Tx, job: JobRow, note: string | null) {
       throw new HttpError(400, "VALIDATION_FAILED", "Answer the agent's questions in a note", {
         field: "note",
       });
-    return { continues: false, pending: [] };
+    return { continues: false, pending: [], note: answeredNote(await agentQuestions(tx, job.id), note) };
   }
   const [stored] = await tx.select().from(changesets).where(eq(changesets.jobId, job.id));
   if (!stored) throw conflict("This job saved no changes to continue from. Use Run again to start over.");
@@ -60,13 +88,18 @@ async function keepFixingPlan(tx: Tx, job: JobRow, note: string | null) {
   const verification: Verification["status"] | undefined = (
     stored.verification ?? latest?.action.verification
   )?.status;
-  if (verification === "passed")
-    throw conflict("The tests passed for this change, so there is nothing to fix. Review it and approve it.");
+  // A passing change with no approval left to decide stays open to fixing: integrity problems blocked its approval,
+  // or the owner denied it or let it expire.
+  const now = new Date();
+  if (verification === "passed" && rows.some((a) => a.status === "PENDING" && a.expiresAt > now))
+    throw conflict(
+      "The tests passed and this change is waiting for your approval. Approve it, or deny it and then use Keep fixing.",
+    );
   if (verification === "not_configured")
     throw conflict(
       "This repository has no tests NEXUS can run at the base commit, and Keep fixing keeps that base. Add tests to the repository, then use Run again.",
     );
-  return { continues: true, pending: rows.filter((a) => a.status === "PENDING") };
+  return { continues: true, pending: rows.filter((a) => a.status === "PENDING"), note: undefined };
 }
 
 /**
@@ -126,7 +159,7 @@ export async function keepFixingJob(
         if (!locked) throw notFound("Job");
         const plan = await keepFixingPlan(tx, locked, note);
         if (plan.pending[0]) await withdraw(tx, locked, plan.pending[0].id, input);
-        return { continues: plan.continues };
+        return { continues: plan.continues, ...(plan.note ? { note: plan.note } : {}) };
       },
     },
   });

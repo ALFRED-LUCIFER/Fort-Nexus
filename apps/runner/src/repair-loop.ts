@@ -66,6 +66,7 @@ const PROVES_NOTHING: Finding = {
   repair: true,
 };
 const STOPPED: LoopResult = { kind: "stopped" };
+const NO_TEST_PLAN = "The base commit has no test script or .nexus.json verify section NEXUS can run.";
 
 type State = {
   spentUsd: number;
@@ -137,7 +138,9 @@ function buildReport(ctx: Ctx, reason: StopReason, failure?: Failure): StuckRepo
   const dirty = s.tested && !s.tested.integrity.clean ? s.tested.integrity.problems.join("; ") : "";
   const tests =
     v && v.status !== "passed" ? v.reason || v.outputTail.slice(-1800) || "The tests did not pass." : "";
-  const stillFailing = [tests, dirty].filter(Boolean).join("\n") || failure?.reason || reason;
+  const stillFailing =
+    [tests, dirty].filter(Boolean).join("\n") ||
+    (reason === "not_configured" ? NO_TEST_PLAN : failure?.reason || reason);
   return {
     rounds: s.rounds.slice(-(REPAIR_ROUNDS + 1)),
     stillFailing: cap(stillFailing, 2000),
@@ -380,6 +383,17 @@ async function loop(ctx: Ctx): Promise<LoopResult> {
   const { deps, input, s, left, enoughBudget, resuming, total } = ctx;
   const { issue, canRunTests } = input;
   const note = () => s.guidance.join("\n\n").slice(-NOTE_MAX) || undefined;
+
+  // The test plan comes from the base commit, so no round can change this: don't spend on an agent.
+  if (!(await deps.hasTestPlan())) {
+    if (deps.signal.aborted) return STOPPED;
+    return end(ctx, "not_configured", {
+      reason: "not_configured",
+      details: {},
+      outcome: "ENVIRONMENT_BLOCKED",
+    });
+  }
+  if (deps.signal.aborted) return STOPPED;
 
   let round = 0;
   let evidence = "";

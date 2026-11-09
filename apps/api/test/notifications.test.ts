@@ -136,7 +136,7 @@ async function succeed({ batch, append }: Awaited<ReturnType<typeof running>>) {
 
 const failWith = (
   reason: string,
-  outcome?: "TIMED_OUT" | "BUDGET_EXCEEDED",
+  outcome?: "TIMED_OUT" | "BUDGET_EXCEEDED" | "NEEDS_INFO",
   extra: Record<string, unknown> = {},
 ) => ({
   events: [
@@ -239,6 +239,28 @@ describe("job notifications", () => {
       expect(n!.body).toMatch(body);
     },
   );
+
+  it("NEEDS_INFO → says the agent needs an answer and where to give it", async () => {
+    const { job, batch, append } = await diagnostic();
+    await append(batch(failWith("needs_info", "NEEDS_INFO", { questions: ["Which region?"] })));
+    const [n, ...rest] = await forJob(job.id);
+    expect(rest).toEqual([]);
+    expect(n).toMatchObject({
+      category: "TASK_FAILED",
+      title: "Agent needs your answer · node-version diagnostic",
+    });
+    expect(n!.body).toMatch(/question only you can answer/);
+    expect(n!.body).toMatch(/answer it in the run/i);
+    expect(n!.body).not.toMatch(/Which region/);
+  });
+
+  it("not_configured → says why no agent ran and what to add", async () => {
+    const { job, batch, append } = await diagnostic();
+    await append(batch(failWith("not_configured")));
+    const [n] = await forJob(job.id);
+    expect(n!.body).toMatch(/no tests NEXUS can run/);
+    expect(n!.body).toMatch(/test.*script|\.nexus\.json/);
+  });
 
   it("FAILED with a stuck report → what still fails and the next step, never the agent's guess", async () => {
     const { job, batch, append } = await diagnostic();

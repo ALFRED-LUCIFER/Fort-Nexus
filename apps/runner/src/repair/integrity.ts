@@ -124,7 +124,8 @@ export async function checkIntegrity(
     const before = await base(path);
     if (isRunnerConfig(path)) {
       if (before !== text) add(`Changed test configuration ${path}`);
-    } else if (name === "package.json") {
+    } else if (name === "package.json" && before !== null) {
+      // A new package.json replaces no test script, so it can't change what "test" meant.
       const next = packageJsonTestConfig(text);
       const prev = packageJsonTestConfig(before);
       if (next === null) add(`${path} is no longer valid JSON`);

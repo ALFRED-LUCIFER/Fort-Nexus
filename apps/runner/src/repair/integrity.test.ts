@@ -47,6 +47,11 @@ describe("checkIntegrity", () => {
     }
     expect((await checkIntegrity([del("src/latest.ts")], none)).clean).toBe(true);
   });
+  it("doesn't flag a new package.json that has a test script: it replaces nothing", async () => {
+    const created = JSON.stringify({ name: "pkg", scripts: { test: "vitest run" } });
+    const r = await checkIntegrity([file("packages/new/package.json", created, "added")], none);
+    expect(r).toEqual({ clean: true, problems: [], testFilesChanged: [] });
+  });
   it("flags a changed test script but not dependencies", async () => {
     const before = JSON.stringify({ scripts: { test: "vitest run" }, dependencies: { a: "1" } });
     const bad = JSON.stringify({ scripts: { test: "true" }, dependencies: { a: "1" } });

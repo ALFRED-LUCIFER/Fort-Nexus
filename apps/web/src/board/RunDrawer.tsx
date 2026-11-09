@@ -135,7 +135,8 @@ function RunBody({ jobId }: { jobId: string }) {
 
   const a = approval.data;
   const agent = issueReq ? agentFacts(events) : undefined;
-  const cost = agent?.costUsd ?? j.estimatedCostUsd ?? undefined;
+  // The job's own total across every round and QA; a summary only covers the agent run that wrote it.
+  const cost = j.estimatedCostUsd ?? agent?.costUsd;
   const verification = issueReq ? verificationOf(events, a) : undefined;
   const loop = issueReq ? loopOf(events) : undefined;
   const stuck = stuckOf(events);

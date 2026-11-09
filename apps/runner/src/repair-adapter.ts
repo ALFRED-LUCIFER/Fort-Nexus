@@ -12,7 +12,7 @@ import { checkIntegrity } from "./repair/integrity.ts";
 import { agentStatement } from "./repair-loop.ts";
 import type { ClaimedFeedback, LoopDeps } from "./repair-loop-types.ts";
 import { containerName } from "./sandbox.ts";
-import { runVerification, treeWithTestsOnly } from "./verify.ts";
+import { hasTestPlan, runVerification, treeWithTestsOnly } from "./verify.ts";
 import { git } from "./workspace.ts";
 
 // The repair loop's dependencies on the real runner: sandboxed agent, QA and test runs, and git through the trusted
@@ -177,6 +177,8 @@ export function createRepairAdapter(o: RepairAdapterOptions) {
   const summaries = new Map<string, string>();
 
   const deps: LoopDeps = {
+    hasTestPlan: () => hasTestPlan(gitDir, baseSha),
+
     async runAgent(prompt, budget) {
       await enter("RUNNING");
       lastSummary = "";

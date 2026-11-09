@@ -26,6 +26,8 @@ export type QaRun = { review: QaReview; costUsd: number; turns: number; fatal?: 
 export type ClaimedFeedback = { id: string; text: string };
 
 export type LoopDeps = {
+  /** Whether the base commit names tests NEXUS can run; asked once, before any agent spend. */
+  hasTestPlan(): Promise<boolean>;
   runAgent(prompt: string, budgetLeft: BudgetLeft): Promise<AgentRun>;
   buildChangeset(): Promise<Changeset>;
   verify(tree: string, label?: "base" | "red"): Promise<Verification>;

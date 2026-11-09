@@ -1,6 +1,6 @@
 # Self-healing runs and stronger coding agents
 
-Status: built on `feat/self-healing-runs` (2026-11-09), approved by the owner ("consider this also and start building"). Not yet merged; Talk integration for feedback not built. PRD: FR-RUN-06, FR-DEV-02/05/06, FR-AGT-02/03/06/09.
+Status: built and reviewed on `feat/self-healing-runs` (2026-11-09), approved by the owner ("consider this also and start building"). Not yet merged or run on a real job. Feedback is sent from the run drawer's box, typed or by its mic; the Talk integration is not built. PRD: FR-RUN-06, FR-DEV-02/05/06, FR-AGT-02/03/06/09.
 
 ## Why
 
@@ -95,13 +95,13 @@ An integrity problem goes back to the agent as a repair round, and if it remains
 - Otherwise the job ends `FAILED` with outcome `FAILED_TESTS`, or a new `ENVIRONMENT_BLOCKED` or `ALREADY_FAILING` outcome.
 - The test result is saved with the stored changeset, because failed jobs have no approval to hold it.
 - `decideApproval` refuses to approve anything whose recorded verification isn't `passed`. This also covers approvals pending from before this change, such as medvya #213.
-- A repository with no runnable tests is blocked too. The message says exactly what to add.
+- A repository with no runnable tests is blocked too, before any agent spend: the test plan comes from the base commit, so no round could change it. The message says exactly what to add.
 
 ### 5. Keep fixing
 
 `POST /v1/jobs/:id/keep-fixing`, with an Idempotency-Key and an optional `note` (up to 2,000 characters).
 
-- Available on a job that has a stored changeset that was not pushed and whose test result isn't `passed`, whatever its status. A pending approval from before this change, such as medvya #213, qualifies: Keep fixing withdraws that approval. (Claude's call.)
+- Available on a job that has a stored changeset that was not pushed, whatever its status, unless its tests passed and an approval can still be decided: that one is reviewed at the approval. A job whose tests passed but which integrity problems kept from an approval qualifies, as does one whose approval was denied or expired. A pending approval from before this change, such as medvya #213, qualifies: Keep fixing withdraws that approval. (Claude's call.)
 - Refused for `not_configured`, because the test plan comes from the base commit and Keep fixing keeps that base. The message points to Run again after the owner adds tests.
 - Creates a new job linked by `retryOfJobId`, on the **same base commit and issue snapshot**, starting from the stored changeset, with a fresh budget and 3 repair rounds.
 - **It starts with NEXUS's own test run, before any model spend.** If the blocker was outside the code, the tests now pass and the job goes straight to QA and approval. The drawer counts "Round N of 4" for a new job and "Round N of 3" for Keep fixing. (Claude's call.)
@@ -128,7 +128,7 @@ Each phase's output is reported as a structured event, so the drawer shows what 
 
 Repair rounds tell the agent to find the root cause and forbid weakening tests. The Developer's effective profile applies to jobs started directly: the budget is capped by the profile's limits and the job uses the profile's model when one is set.
 
-**When the agent needs the owner.** If the grill phase finds a blocking question, the job ends with outcome `NEEDS_INFO`, no changeset and the questions shown. The owner's answer in the feedback box starts a new linked job carrying that answer.
+**When the agent needs the owner.** If the grill phase finds a blocking question, the job ends with outcome `NEEDS_INFO`, no changeset and the questions shown. The owner's answer in the feedback box starts a new linked job carrying the questions and that answer. A question asked after a tree has already passed is shown in the drawer next to the approval for that tree.
 
 **The stuck report.** When the loop ends without a pass, whatever the reason, the owner gets a short report: what each round tried, what still fails, the agent's best guess at the root cause (labelled as a guess), and the recommended next step. It appears in the run drawer and in the notification.
 

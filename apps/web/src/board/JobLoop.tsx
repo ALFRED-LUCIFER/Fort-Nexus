@@ -96,6 +96,18 @@ export function JobLoop({
               {STOP_WORD[view.stopped.reason] ?? view.stopped.reason.replaceAll("_", " ")}
             </p>
           )}
+          {view.stopped && view.stopped.questions.length > 0 && stuck.questions.length === 0 && (
+            <>
+              <p className="m-0 text-[12.5px] leading-[1.5] font-medium text-ink">The agent asked:</p>
+              <ol className="m-0 flex list-decimal flex-col gap-1 pl-5 text-[12.5px] leading-[1.5] text-ink2">
+                {view.stopped.questions.map((q, i) => (
+                  <li key={i} className="break-words">
+                    {q}
+                  </li>
+                ))}
+              </ol>
+            </>
+          )}
         </section>
       )}
       {view.checks.length > 0 && (
