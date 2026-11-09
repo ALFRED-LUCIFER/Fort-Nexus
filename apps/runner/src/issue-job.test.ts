@@ -34,6 +34,7 @@ const h = vi.hoisted(() => ({
   engineCalls: [] as ClaudeTaskOptions[],
   agentArgv: undefined as [string, ...string[]] | undefined,
   verifyCalls: [] as { maxMs: number | undefined; only: string | undefined }[],
+  realEngine: undefined as ((o: ClaudeTaskOptions) => Promise<ClaudeTaskResult>) | undefined,
 }));
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -55,6 +56,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 // Fake Claude engine by default; the real one (with a fake in-container agent) when h.engine is unset.
 vi.mock("./claude.ts", async (importOriginal) => {
   const real = await importOriginal<typeof import("./claude.ts")>();
+  h.realEngine = real.runClaudeTask;
   return {
     ...real,
     runClaudeTask: (o: ClaudeTaskOptions) => {
@@ -961,6 +963,50 @@ describe.skipIf(!dockerUp)("DEV_ISSUE_TO_PR in the real sandbox (fake in-contain
     expect(eventsOf(appends, "test.completed")[0]?.payload.status).toBe("passed");
     expect(eventsOf(appends, "job.failed")[0]?.payload).toMatchObject({ reason: "secret_leak_detected" });
     expect(changesets).toEqual([]);
+    cleanedUp();
+  }, 180_000);
+
+  it("a round that repoints .git at its own git dir changes nothing the host does in the next round", async () => {
+    await useFixture("github-evil-gitdir");
+    const marker = join(data, "host-code-ran");
+    const aiConfigFile = await inContainerAgent(
+      `const f=require('fs');f.writeFileSync('/workspace/repo/NOTES.md','bad again\\n');f.writeFileSync('/workspace/repo/leak.txt',${JSON.stringify(FAKE_KEY)});${report}`,
+    );
+    let round = 0;
+    h.engine = async (o) => {
+      if (++round > 1) return h.realEngine!({ ...o, agentArgv: h.agentArgv });
+      // What an agent can do from inside the container: a git dir of its own, and .git pointing at it.
+      const wt = o.worktreePath;
+      const evil = join(wt, "evil");
+      await writeFile(join(wt, "NOTES.md"), "bad\n");
+      const at = ["--git-dir", evil, "--work-tree", wt];
+      git(["init", "-q", "--bare", evil]);
+      git([...at, "add", "NOTES.md"]);
+      git([...at, "commit", "-q", "-m", "x"]);
+      await writeFile(join(evil, "config"), `[filter "x"]\n\tclean = "touch ${marker}; cat"\n`);
+      await writeFile(join(evil, "info", "attributes"), "* filter=x\n");
+      await writeFile(join(evil, "info", "exclude"), "leak.txt\n");
+      await writeFile(join(evil, "gitdir"), `${join(wt, ".git")}\n`);
+      await writeFile(join(wt, ".git"), `gitdir: ${evil}\n`);
+      return { status: "COMPLETED", finalText: 'Done.\nNEXUS_RESULT {"status":"done"}' };
+    };
+    const { api, appends, changesets } = fakeApi();
+    await startJob(api, issueLease(), { ...realDocker(), aiConfigFile }).done;
+
+    expect(round).toBe(2);
+    expect(existsSync(marker)).toBe(false);
+    const artifact = eventsOf(appends, "artifact.created")[0]?.payload as {
+      files: { path: string }[];
+      secretLeak: boolean;
+    };
+    expect(artifact.files.map((f) => f.path)).toContain("leak.txt");
+    expect(artifact.secretLeak).toBe(true);
+    expect(eventsOf(appends, "job.failed")[0]?.payload).toMatchObject({
+      reason: "secret_leak_detected",
+      files: ["leak.txt"],
+    });
+    expect(changesets).toEqual([]);
+    expect(JSON.stringify(appends)).not.toContain(FAKE_KEY);
     cleanedUp();
   }, 180_000);
 

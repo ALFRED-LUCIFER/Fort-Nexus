@@ -76,11 +76,11 @@ export async function applyStoredFiles(
   const tree = await withScratchIndex(gitDir, null, async (g, tmp) => {
     await g(["read-tree", baseSha]);
     const blob = join(tmp, "blob");
+    // Deletions first: a file can replace a directory whose files sort after it.
+    for (const f of files)
+      if (f.change === "deleted") await g(["update-index", "--force-remove", "--", f.path]);
     for (const f of files) {
-      if (f.change === "deleted") {
-        await g(["update-index", "--force-remove", "--", f.path]);
-        continue;
-      }
+      if (f.change === "deleted") continue;
       await writeFile(blob, Buffer.from(f.contentBase64, "base64"));
       const sha = await g(["hash-object", "-w", "--no-filters", "--", blob]);
       await g(["update-index", "--add", "--cacheinfo", `${f.mode},${sha},${f.path}`]);
@@ -184,6 +184,7 @@ export function createRepairAdapter(o: RepairAdapterOptions) {
         ...agentConfig,
         jobId,
         worktreePath,
+        gitDir,
         prompt,
         budget,
         depsCache: o.depsCache,

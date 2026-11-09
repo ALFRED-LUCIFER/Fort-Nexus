@@ -39,7 +39,12 @@ describe("runQaReview", () => {
       finalText: qa({ verdict: "defects", defects: [{ severity: "minor", file: "a", evidence: "e" }] }),
     });
     const { review: r } = await runQaReview(opts);
-    expect(run.mock.calls[0]?.[0]).toMatchObject({ agent: "QA", jobId: "j", budget: opts.budget });
+    expect(run.mock.calls[0]?.[0]).toMatchObject({
+      agent: "QA",
+      jobId: "j",
+      budget: opts.budget,
+      gitDir: "/g",
+    });
     expect(r).toEqual({
       status: "reviewed",
       verdict: "defects",

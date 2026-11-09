@@ -84,6 +84,27 @@ describe("applyStoredFiles", () => {
     expect(existsSync(join(path, "sub"))).toBe(false);
   });
 
+  it("replaces a directory with a file, even though the addition sorts before the deletion", async () => {
+    await mkdir(join(path, "a"));
+    await writeFile(join(path, "a/b"), "nested\n");
+    await writeFile(join(path, "a/c"), "nested\n");
+    const mirror = join(data, "repos", "acme", "demo.git");
+    git(["-C", mirror, "--work-tree", path, "add", "a"]);
+    const tree = git(["-C", mirror, "write-tree"]);
+    const base = git(["-C", mirror, "commit-tree", tree, "-p", baseSha, "-m", "dir"]);
+    await rm(join(path, "a"), { recursive: true });
+    await restoreTree(path, gitDir, tree);
+
+    await applyStoredFiles(path, gitDir, base, [
+      { change: "added", path: "a", mode: "100644", contentBase64: b64("now a file\n") },
+      { change: "deleted", path: "a/b" },
+      { change: "deleted", path: "a/c" },
+    ]);
+
+    expect(lstatSync(join(path, "a")).isFile()).toBe(true);
+    expect(readFileSync(join(path, "a"), "utf8")).toBe("now a file\n");
+  });
+
   it("does nothing for an answered question (no files)", async () => {
     const before = await treeOf();
     await applyStoredFiles(path, gitDir, baseSha, []);

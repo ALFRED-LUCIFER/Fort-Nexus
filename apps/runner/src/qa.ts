@@ -13,8 +13,6 @@ export type QaOptions = Omit<ClaudeTaskOptions, "prompt" | "agent"> & {
   issue: IssueSnapshot;
   /** The change under review as a unified diff. Untrusted data for the model. */
   diff: string;
-  /** Where the tested tree is built from, to prove the review changed nothing. */
-  gitDir: string;
   baseSha: string;
 };
 
@@ -68,7 +66,8 @@ export async function runQaReview(opts: QaOptions): Promise<QaRun> {
   let spend = { costUsd: 0, turns: 0 };
   const done = (review: QaReview): QaRun => ({ review, ...spend });
   try {
-    const { issue, diff, gitDir, baseSha, ...task } = opts;
+    const { issue, diff, baseSha, ...task } = opts;
+    const { gitDir } = task;
     const before = (await buildChangeset(task.worktreePath, gitDir, baseSha)).tree;
     const r = await runClaudeTask({ ...task, agent: "QA", prompt: qaPrompt(issue, diff) });
     spend = { costUsd: r.summary?.estimatedCostUsd ?? 0, turns: r.summary?.turns ?? 0 };

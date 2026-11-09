@@ -426,6 +426,11 @@ export type ClaudeTaskOptions = {
   jobId: string;
   /** A worktree from createWorkspaces().prepareWorktree, mounted read-write at /workspace/repo. */
   worktreePath: string;
+  /**
+   * The worktree's git dir, from worktreeGitDir before anything could write to the worktree. Never resolved here:
+   * by a later round the `.git` file is the agent's, and host-side git must not open a repository it chose.
+   */
+  gitDir: string;
   /** May contain untrusted issue text: it is data for the model, never policy. */
   prompt: string;
   budget: ClaudeBudget;
@@ -480,7 +485,7 @@ export function depsCacheSpec(depsCache: string | undefined): {
 const Prompt = z.string().min(1).max(200_000);
 
 export async function runClaudeTask(opts: ClaudeTaskOptions): Promise<ClaudeTaskResult> {
-  const { jobId, worktreePath, onEvent, signal, runnerLabel = "local", image = SANDBOX_IMAGE } = opts;
+  const { jobId, worktreePath, gitDir, onEvent, signal, runnerLabel = "local", image = SANDBOX_IMAGE } = opts;
   const { killGraceMs = 5_000, log = defaultLog, aiConfigFile = AI_CONFIG_FILE } = opts;
   const budget = ClaudeBudget.parse(opts.budget);
   const prompt = Prompt.parse(opts.prompt);
@@ -513,13 +518,6 @@ export async function runClaudeTask(opts: ClaudeTaskOptions): Promise<ClaudeTask
       image,
       message: `Sandbox image ${image} is missing on the runner host. Build it with: ${SANDBOX_BUILD_COMMAND}`,
     });
-  let gitDir: string;
-  try {
-    gitDir = await worktreeGitDir(worktreePath);
-  } catch (err) {
-    return fail("worktree_invalid", { message: errorMessage(err) });
-  }
-
   if (signal?.aborted) return { status: "STOPPED" };
 
   const model = opts.model ?? provider.model;
