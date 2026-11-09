@@ -59,6 +59,9 @@ const OUTCOME: Record<JobOutcome, string> = {
   COMPLETED_NO_CHANGES: "Completed, no changes",
   APPROVAL_DENIED: "Approval denied",
   BUDGET_EXCEEDED: "Budget exceeded",
+  ENVIRONMENT_BLOCKED: "Tests couldn't run",
+  ALREADY_FAILING: "Already failing before this change",
+  NEEDS_INFO: "Needs your answer",
 };
 
 const money = (n: number) => `$${n.toFixed(2)} est.`;

@@ -23,6 +23,12 @@ export const RunEventType = z.enum([
   "job.failed",
   "job.cancelled",
   "job.recovery_required",
+  "phase.completed",
+  "loop.round.started",
+  "loop.round.completed",
+  "loop.stopped",
+  "qa.completed",
+  "feedback.delivered",
 ]);
 export type RunEventType = z.infer<typeof RunEventType>;
 

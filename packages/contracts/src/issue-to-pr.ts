@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { RepoId } from "./github.ts";
+import { QaReview, StuckReport } from "./job-loop.ts";
 
 // ENG-07 issue → draft PR. The runner only ever holds a short-lived READ token; the API alone pushes and opens the
 // draft PR, and only after the owner approves the exact action hash (PRD §10.3 R2, FR-DEV-07/08, SEC-G04).
@@ -20,25 +21,6 @@ export const IssueSnapshot = z.object({
 export type IssueSnapshot = z.infer<typeof IssueSnapshot>;
 
 export const WORK_BRANCH_PREFIX = "nexus/";
-
-// Sent with the lease of a DEV_ISSUE_TO_PR job only.
-export const IssueToPrTask = z.object({
-  kind: z.literal("issue_to_pr"),
-  snapshot: IssueSnapshot,
-  workBranch: z.string().startsWith(WORK_BRANCH_PREFIX).max(255),
-  git: z.object({
-    cloneUrl: z.url(),
-    // Installation token restricted to this one repository with contents:read only. Host-side fetch only — never
-    // passed into the sandbox, never logged.
-    token: z.string().min(1),
-    expiresAt: z.iso.datetime(),
-  }),
-});
-export type IssueToPrTask = z.infer<typeof IssueToPrTask>;
-
-export const CHANGESET_MAX_FILES = 300;
-// Sum of decoded (raw) file bytes. Base64 adds ~4/3, so the upload route's body limit must allow ≈14 MB + JSON.
-export const CHANGESET_MAX_BYTES = 10 * 1024 * 1024;
 
 const SafePath = z
   .string()
@@ -64,6 +46,31 @@ export const ChangesetFile = z.discriminatedUnion("change", [
   z.strictObject({ change: z.literal("deleted"), path: SafePath }),
 ]);
 export type ChangesetFile = z.infer<typeof ChangesetFile>;
+
+// Sent with the lease of a DEV_ISSUE_TO_PR job only.
+export const IssueToPrTask = z.object({
+  kind: z.literal("issue_to_pr"),
+  snapshot: IssueSnapshot,
+  workBranch: z.string().startsWith(WORK_BRANCH_PREFIX).max(255),
+  git: z.object({
+    cloneUrl: z.url(),
+    // Installation token restricted to this one repository with contents:read only. Host-side fetch only — never
+    // passed into the sandbox, never logged.
+    token: z.string().min(1),
+    expiresAt: z.iso.datetime(),
+  }),
+  // "Keep fixing": the stopped run's saved changes to start from, and the owner's note.
+  continuation: z.object({ files: z.array(ChangesetFile), note: z.string().nullable() }).optional(),
+  // Model the runner should use for this job.
+  model: z.string().min(1).max(128).optional(),
+});
+export type IssueToPrTask = z.infer<typeof IssueToPrTask>;
+
+export const CHANGESET_MAX_FILES = 300;
+// Sum of decoded (raw) file bytes. Base64 adds ~4/3, so the upload route's body limit must allow ≈14 MB + JSON.
+export const CHANGESET_MAX_BYTES = 10 * 1024 * 1024;
+
+
 
 // Optional per-repo `.nexus.json` at the repository root. The runner reads it from the BASE commit, never from the
 // agent's worktree, so the agent can't change what gets verified. argv arrays only, run inside the sandbox.
@@ -95,6 +102,10 @@ export const Verification = z.object({
   durationMs: z.int().nonnegative(),
   // Redacted tail of the test output, for the PR body and the approval.
   outputTail: z.string().max(8000),
+  // Why a non-passing run didn't pass. Optional so approvals stored before this field still parse.
+  failureKind: z
+    .enum(["test_failed", "test_timeout", "environment", "install_failed", "needs_dependency", "not_configured"])
+    .optional(),
 });
 export type Verification = z.infer<typeof Verification>;
 
@@ -110,6 +121,11 @@ export const UploadChangesetRequest = z.strictObject({
   // The agent's own final summary — untrusted text, shown labelled as such, never used as authority.
   agentSummary: z.string().max(4000),
   verification: Verification,
+  qa: QaReview.optional(),
+  integrity: z.strictObject({ clean: z.boolean(), problems: z.array(z.string().max(500)).max(50) }).optional(),
+  // Set when the run stopped without a passing result; the changeset is kept for review or "keep fixing".
+  report: StuckReport.optional(),
+  terminalOutcome: z.enum(["FAILED_TESTS", "ENVIRONMENT_BLOCKED", "ALREADY_FAILING"]).optional(),
 });
 export type UploadChangesetRequest = z.infer<typeof UploadChangesetRequest>;
 
@@ -139,6 +155,8 @@ export const PushDraftPrAction = z.object({
   stats: z.object({ added: z.int(), removed: z.int() }),
   // Part of the approved hash: the owner approves code AND the verification result shown with it.
   verification: Verification,
+  qa: QaReview.optional(),
+  testFilesChanged: z.array(z.string()).optional(),
 });
 export type PushDraftPrAction = z.infer<typeof PushDraftPrAction>;
 

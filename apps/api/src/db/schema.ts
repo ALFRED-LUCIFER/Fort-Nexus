@@ -32,6 +32,7 @@ import type {
   PushDraftPrAction,
   RunStage,
   UploadChangesetRequest,
+  Verification,
   WorkspaceMode,
 } from "@nexus/contracts";
 
@@ -221,6 +222,9 @@ export const jobs = pgTable(
     agent: text("agent").$type<AgentKey>().notNull(),
     // The finished job this one reruns; the original keeps its own history.
     retryOfJobId: uuid("retry_of_job_id").references((): AnyPgColumn => jobs.id),
+    // "Keep fixing": the run starts from the previous run's saved changes, with the owner's note.
+    continuesChangeset: boolean("continues_changeset").notNull().default(false),
+    ownerNote: text("owner_note"),
     startedAt: ts("started_at"),
     finishedAt: ts("finished_at"),
     stateVersion: integer("state_version").notNull().default(0),
@@ -306,8 +310,32 @@ export const changesets = pgTable("changesets", {
   files: jsonb("files").$type<ChangesetFile[]>().notNull(),
   stats: jsonb("stats").$type<UploadChangesetRequest["stats"]>().notNull(),
   agentSummary: text("agent_summary").notNull(),
+  // Null for changesets stored before the verification result was kept here.
+  verification: jsonb("verification").$type<Verification>(),
   createdAt: ts("created_at").notNull().defaultNow(),
 });
+
+// Owner messages sent to a running job; the runner claims them at the start of a repair round.
+export const jobFeedback = pgTable(
+  "job_feedback",
+  {
+    id: id(),
+    jobId: uuid("job_id")
+      .notNull()
+      .references(() => jobs.id),
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => user.id),
+    text: text("text").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    deliveredRound: integer("delivered_round"),
+    createdAt: ts("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("job_feedback_owner_idempotency_key_uq").on(t.ownerId, t.idempotencyKey),
+    index("job_feedback_job_idx").on(t.jobId, t.createdAt),
+  ],
+);
 
 // Owner approvals of exact actions (FR-INB-02). action/action_hash are immutable (trigger in its migration).
 export const approvals = pgTable(
