@@ -281,6 +281,28 @@ describe.skipIf(!dockerUp)("runVerification in the real sandbox", () => {
     await gone(r.jobId);
   }, 120_000);
 
+  it("verify: a test script that calls pnpm directly runs", async () => {
+    // A repository's own scripts call `pnpm` (not `corepack pnpm`): the shim must be on PATH and corepack fetches pnpm
+    // through the proxy from the real registry.
+    const r = await repo(
+      {
+        "package.json": JSON.stringify({
+          name: "fixture",
+          private: true,
+          packageManager: "pnpm@10.0.0",
+          scripts: { test: "pnpm --version" },
+        }),
+        ".nexus.json": nexusJson({ test: ["npm", "test"], egress: ["registry.npmjs.org"] }),
+      },
+      { "NOTES.md": "x\n" },
+    );
+    const { verification } = await verify(r, { runnerLabel }).result;
+    expect(verification).toMatchObject({ status: "passed", exitCode: 0 });
+    expect(verification.outputTail).toContain("10.0.0");
+    expect(verification.outputTail).not.toContain("not found");
+    await gone(r.jobId);
+  }, 180_000);
+
   it("failed: a non-zero test exit, with the redacted output tail capped at 8000 chars", async () => {
     const r = await repo(
       {

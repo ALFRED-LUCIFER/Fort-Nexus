@@ -19,6 +19,10 @@ RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 COPY agent/nexus-agent.mjs agent/nexus-proxy.mjs ./
 RUN chmod 0755 nexus-agent.mjs nexus-proxy.mjs && ln -s /opt/nexus/nexus-agent.mjs /usr/local/bin/nexus-agent
 
+# pnpm and yarn shims, so a repository's own scripts can call `pnpm`/`yarn` directly (not only `corepack pnpm`).
+# Corepack still fetches the package manager itself: verification sets COREPACK_HOME and has registry egress.
+RUN corepack enable --install-directory /usr/local/bin
+
 ENV HOME=/tmp
 # The nexus user's login shell is nologin, and a host uid has no passwd entry: name the shell explicitly.
 ENV SHELL=/bin/bash

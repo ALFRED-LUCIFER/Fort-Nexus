@@ -41,7 +41,7 @@ export type VerifyPlan = {
 const FORBIDDEN_HOST =
   /(^|\.)(github\.com|githubusercontent\.com|ghcr\.io|anthropic\.com|claude\.ai|claude\.com|services\.ai\.azure\.com|openai\.azure\.com|cognitiveservices\.azure\.com)$/;
 
-// Auto-detection for Node projects: first lockfile wins. pnpm/yarn come through corepack (not on the image's PATH).
+// Auto-detection for Node projects: first lockfile wins. pnpm/yarn come through corepack (its shims are on the image's PATH, so repository scripts can call them directly).
 const NODE_PMS: readonly [lockfile: string, install: string[], test: string[], egress: string[]][] = [
   [
     "pnpm-lock.yaml",
