@@ -206,13 +206,20 @@ export async function failJob(
 // ── Owner operations ──
 // Creation and lists are scoped by project (FR-WKS-02); single-object reads stay owner-scoped and return projectId.
 
+/**
+ * Every issue job the owner (or an automation, draft or Talk on the owner's behalf) starts follows the Developer's
+ * effective profile: the budget cap and the model. Only an approved plan's steps keep their own behaviour; their
+ * idempotency keys are `plan:<id>:<index>`. The one predicate for both the cap and the lease's model.
+ */
+export const usesDeveloperProfile = (idempotencyKey: string) => !idempotencyKey.startsWith("plan:");
+
 /** A direct issue job's budget never exceeds what the Developer's effective profile allows (spec §6). */
 async function withProfileLimits(
   db: Db,
-  input: { ownerId: string; body: CreateJobRequest; applyProfile?: boolean },
+  input: { ownerId: string; body: CreateJobRequest; idempotencyKey: string },
 ): Promise<CreateJobRequest> {
   const { body } = input;
-  if (!input.applyProfile || body.jobType !== "DEV_ISSUE_TO_PR") return body;
+  if (!usesDeveloperProfile(input.idempotencyKey) || body.jobType !== "DEV_ISSUE_TO_PR") return body;
   const { settings } = await resolveAgentProfile(db, input.ownerId, body.projectId, "DEVELOPER");
   return {
     ...body,
@@ -239,8 +246,6 @@ export async function createJob(
     agent?: AgentKey;
     /** `retryJob` and `keepFixingJob` only: the finished job this one reruns. */
     retryOfJobId?: string;
-    /** Direct issue jobs (the owner's route, Run again, Keep fixing): the agent's effective profile caps the budget. */
-    applyProfile?: boolean;
     /**
      * `keepFixingJob` only: the new job starts from the original's issue snapshot (never pinned again), continues its
      * stored changeset unless `beforeCreate` says it has nothing to continue (NEEDS_INFO), and carries the owner's note. `beforeCreate` runs in the creating
@@ -415,7 +420,6 @@ export async function retryJob(
     body: pin && !pinned ? { ...original.request, runnerId: undefined } : original.request,
     agent: original.agent,
     retryOfJobId: original.id,
-    applyProfile: true,
   });
 }
 

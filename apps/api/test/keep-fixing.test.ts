@@ -168,6 +168,45 @@ describe("keep fixing", () => {
     expect((await keepFixing(jobId)).statusCode).toBe(202);
   });
 
+  it("a concurrent approve and Keep fixing queue behind each other: no deadlock, no 500", async () => {
+    for (let i = 0; i < 6; i++) {
+      const { jobId, approval } = await legacyPendingApproval();
+      const [decided, kept] = await Promise.all([
+        k.owner("POST", `/v1/approvals/${approval.id}/decision`, {
+          body: { decision: "approve", actionHash: approval.actionHash },
+        }),
+        keepFixing(jobId),
+      ]);
+      // The approval's tests failed, so approving is always refused; Keep fixing either wins or sees the refusal.
+      expect(decided.statusCode, decided.body).toBe(409);
+      expect([202, 409], kept.body).toContain(kept.statusCode);
+      await k.sql.query(
+        `update jobs set status = 'FAILED', lease_expires_at = null where status in ('PREPARING','RUNNING','VERIFYING')`,
+      );
+      await k.reset();
+    }
+  });
+
+  it("waits for the approval's lock before taking the job's, in the order approve does", async () => {
+    const { jobId, approval } = await legacyPendingApproval();
+    const c = await k.sql.connect();
+    try {
+      await c.query("begin");
+      await c.query(`select 1 from approvals where id = $1 for update`, [approval.id]);
+      const waiting = keepFixing(jobId);
+      await new Promise((r) => setTimeout(r, 400));
+      // Keep fixing is stuck on the approval; had it already locked the job, an approve holding the approval
+      // and reaching for the job would deadlock with it.
+      await c.query(`select 1 from jobs where id = $1 for update nowait`, [jobId]);
+      await c.query("commit");
+      const res = await waiting;
+      expect(res.statusCode, res.body).toBe(202);
+    } finally {
+      await c.query("rollback").catch(() => undefined);
+      c.release();
+    }
+  });
+
   it("refuses not_configured and points to Run again", async () => {
     const id = await k.stoppedJob(NOT_CONFIGURED);
     const res = await keepFixing(id);

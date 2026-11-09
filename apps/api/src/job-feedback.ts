@@ -12,7 +12,7 @@ import { audit } from "./audit.ts";
 import type { Db, Tx } from "./db/index.ts";
 import { approvals, changesets, jobFeedback, jobs, runners } from "./db/schema.ts";
 import { HttpError, notFound } from "./errors.ts";
-import { LEASED, createJob, getJob, moveJob, ownerActor, type JobRow } from "./jobs.ts";
+import { LEASED, createJob, getJob, moveJob, ownerActor, usesDeveloperProfile, type JobRow } from "./jobs.ts";
 import type { RunnerRow } from "./runners.ts";
 
 // Spec §5 (Keep fixing) and §6a (feedback): what the owner can say to an issue job, and how the runner picks it up.
@@ -106,14 +106,23 @@ export async function keepFixingJob(
     body: pin && !pinned ? { ...original.request, runnerId: undefined } : original.request,
     agent: original.agent,
     retryOfJobId: original.id,
-    applyProfile: true,
     pinIssue: () => Promise.reject(new Error("Keep fixing never pins the issue again")),
     keepFixing: {
       snapshot,
       note,
       // Judged on the locked job, inside the creating transaction (never on a replay).
       beforeCreate: async (tx) => {
-        const [locked] = await tx.select().from(jobs).where(eq(jobs.id, original.id)).for("update");
+        // Same lock shape as decideApproval (the approvals joined to the job, in one statement), so a concurrent
+        // approve and Keep fixing queue behind each other instead of deadlocking. No approval: the job alone.
+        const [joined] = await tx
+          .select({ job: jobs })
+          .from(approvals)
+          .innerJoin(jobs, eq(jobs.id, approvals.jobId))
+          .where(eq(approvals.jobId, original.id))
+          .for("update");
+        const [locked] = joined
+          ? [joined.job]
+          : await tx.select().from(jobs).where(eq(jobs.id, original.id)).for("update");
         if (!locked) throw notFound("Job");
         const plan = await keepFixingPlan(tx, locked, note);
         if (plan.pending[0]) await withdraw(tx, locked, plan.pending[0].id, input);
@@ -181,7 +190,7 @@ export async function leaseContinuation(
 
 /** The Developer's model for a directly started job; a plan step's job keeps the runner's default. */
 export async function leaseModel(db: Db, job: JobRow): Promise<string | undefined> {
-  if (job.idempotencyKey.startsWith("plan:")) return undefined;
+  if (!usesDeveloperProfile(job.idempotencyKey)) return undefined;
   const { settings } = await resolveAgentProfile(db, job.initiatorId, job.projectId, "DEVELOPER");
   return settings.model;
 }
@@ -213,6 +222,11 @@ export async function createFeedback(
     }
     if (job.jobType !== "DEV_ISSUE_TO_PR") throw conflict("Only an issue run takes feedback.");
     if (isTerminal(job.status)) throw conflict("This job has finished. Use Keep fixing to continue it.");
+    // No runner holds it and none will claim again: the message would wait forever.
+    if (job.status === "AWAITING_APPROVAL")
+      throw conflict(
+        "This job is waiting for your approval, so no round will read a message. Use Keep fixing to continue it.",
+      );
 
     const [row] = await tx
       .insert(jobFeedback)

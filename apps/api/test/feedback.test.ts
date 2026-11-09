@@ -112,6 +112,15 @@ describe("owner feedback", () => {
     expect((await list(id)).items).toEqual([]);
   });
 
+  it("refuses a job waiting for approval: no round will read it, so Keep fixing is the way on", async () => {
+    const l = await k.runningJob();
+    expect((await k.upload(l)).statusCode).toBe(200); // tests passed: AWAITING_APPROVAL
+    const res = await send(l.jobId, "one more thing");
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json().error.message).toMatch(/Keep fixing/);
+    expect((await list(l.jobId)).items).toEqual([]);
+  });
+
   it("replays a message already stored even after the job finished", async () => {
     const l = await k.runningJob();
     const key = randomUUID();

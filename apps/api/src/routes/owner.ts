@@ -100,7 +100,6 @@ export async function ownerRoutes(app: FastifyInstance, deps: Deps) {
         body: req.body,
         correlationId: req.id,
         timezone: config.ownerTimezone,
-        applyProfile: true,
         pinIssue: (b) =>
           requireGithub(deps.github).issueSnapshot(b.repositoryId, b.issueNumber, b.baseBranch),
       });

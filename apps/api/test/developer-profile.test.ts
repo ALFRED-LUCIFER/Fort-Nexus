@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { createJob } from "../src/jobs.ts";
 import { issueRunKit } from "./helpers/issue-run.ts";
 
 // Spec §6: the Developer's effective profile applies to jobs started directly (POST /v1/jobs and Run again):
@@ -93,5 +94,33 @@ describe("Developer profile for direct issue jobs", () => {
       `plan:${randomUUID()}:0`,
     ]);
     expect((await k.lease()).task?.model).toBeUndefined();
+  });
+});
+
+describe("the profile covers every owner-started issue job, not plan steps", () => {
+  it("caps a draft-created and an automation-created job, keeps a smaller budget, and leaves plan steps alone", async () => {
+    expect((await setProfile()).statusCode).toBe(200);
+    const seed = await k.createIssueJob();
+    const [row] = (
+      await k.sql.query(`select issue_snapshot, request from jobs where id = $1`, [seed.json().jobId])
+    ).rows as { issue_snapshot: never; request: never }[];
+    const { issue_snapshot: snapshot, request } = row!;
+    const make = async (idempotencyKey: string, maxCostUsd: number) => {
+      const body = { ...(request as object), budget: { maxCostUsd, maxTurns: 60, maxWallClockMinutes: 45 } };
+      const job = await createJob(k.db, {
+        ownerId: (await k.sql.query(`select initiator_id from jobs where id = $1`, [seed.json().jobId]))
+          .rows[0].initiator_id as string,
+        idempotencyKey,
+        body: body as never,
+        correlationId: randomUUID(),
+        timezone: "UTC",
+        pinIssue: async () => snapshot,
+      });
+      return (job.request as { budget: { maxCostUsd: number; maxTurns: number } }).budget;
+    };
+    expect(await make(`job-draft:${randomUUID()}`, 5)).toMatchObject({ maxCostUsd: 1.5, maxTurns: 10 });
+    expect(await make(`automation:${randomUUID()}:x`, 5)).toMatchObject({ maxCostUsd: 1.5, maxTurns: 10 });
+    expect(await make(`automation:${randomUUID()}:y`, 0.5)).toMatchObject({ maxCostUsd: 0.5, maxTurns: 10 });
+    expect(await make(`plan:${randomUUID()}:0`, 5)).toMatchObject({ maxCostUsd: 5, maxTurns: 60 });
   });
 });
