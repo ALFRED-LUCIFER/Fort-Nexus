@@ -893,11 +893,13 @@ describe.skipIf(!dockerUp)("DEV_ISSUE_TO_PR in the real sandbox (fake in-contain
     cleanedUp();
   }, 180_000);
 
-  it("a continuation applies the stored files at the base commit and verifies before any agent start", async () => {
+  it("a continuation applies the stored files at the base commit, verifies first, and gives the agent the note", async () => {
     await useFixture("github-continue", { ".nexus.json": CHECK_NOTES, "old.txt": "old\n" });
     const seen: string[] = [];
+    const prompts: string[] = [];
     h.engine = async (o) => {
       seen.push(o.agent ?? "agent", await readFile(join(o.worktreePath, "NOTES.md"), "utf8"));
+      prompts.push(o.prompt);
       return QA_PASS;
     };
     const files = [
@@ -908,10 +910,12 @@ describe.skipIf(!dockerUp)("DEV_ISSUE_TO_PR in the real sandbox (fake in-contain
     const { api, appends, changesets } = fakeApi();
     await startJob(api, leaseWith({ continuation: { files, note: CONTINUE_NOTE } }), realDocker()).done;
 
-    expect(seen).toEqual(["QA", "good\n"]); // only QA ran an agent, and it saw the restored file
+    // The note goes to a repair round; it changed nothing, so QA reviews the restored, passing tree.
+    expect(seen).toEqual(["agent", "good\n", "QA", "good\n"]);
+    expect(prompts[0]).toContain(CONTINUE_NOTE);
     const types = timeline(appends);
-    expect(types).not.toContain("loop.round.started");
     expect(types.indexOf("test.completed")).toBeGreaterThan(types.indexOf("→VERIFYING"));
+    expect(types.indexOf("loop.round.started")).toBeGreaterThan(types.indexOf("test.completed"));
     expect(changesets[0]).toMatchObject({
       verification: { status: "passed" },
       qa: { status: "reviewed", verdict: "pass" },

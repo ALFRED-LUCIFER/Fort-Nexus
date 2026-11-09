@@ -66,6 +66,8 @@ const PROVES_NOTHING: Finding = {
   repair: true,
 };
 const STOPPED: LoopResult = { kind: "stopped" };
+const NOTE_UNUSED =
+  "Your Keep fixing note wasn't used: no repair round or budget was left for the agent to read it.";
 const NO_TEST_PLAN = "The base commit has no test script or .nexus.json verify section NEXUS can run.";
 
 type State = {
@@ -293,6 +295,12 @@ async function afterPass(
   if (finding) tested.notes = [finding.note];
   if (finding?.repair && ctx.canRepair(round))
     return { result: "red_check", summary: finding.evidence, evidence: finding.evidence };
+
+  // Keep fixing's opening run passed. A note is still work for the agent; this tree stays the last passing one.
+  if (round === 0 && ctx.input.continuation?.note?.trim()) {
+    if (ctx.canRepair(round)) return feedbackStep;
+    tested.notes = [...(tested.notes ?? []), NOTE_UNUSED];
+  }
 
   const nextRound = () => (ctx.canRepair(round) ? round + 1 : 0);
   await claim(ctx, nextRound());

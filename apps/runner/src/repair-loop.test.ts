@@ -656,6 +656,66 @@ describe("runRepairLoop", () => {
     expect(h.ofType("loop.round.started")).toEqual([]);
   });
 
+  describe("a Keep fixing note on a change whose opening run passes", () => {
+    const NOTE = "Use the other approach";
+    const resumed = (over: Fakes = {}): Fakes => ({
+      startTree: "stored",
+      startFiles: CODE_AND_TEST,
+      input: { continuation: { files: CODE_AND_TEST, note: NOTE } },
+      ...over,
+    });
+
+    it("starts a round so the agent reads the note", async () => {
+      const h = harness(resumed({ agent: trees("t1") }));
+      const r = expectUpload(await h.run());
+      expect(h.count("agent")).toBe(1);
+      expect(h.prompts[0]).toContain(NOTE);
+      expect(h.ofType("loop.round.started")).toEqual([{ round: 1, of: 3, kind: "repair" }]);
+      expect(r.changeset.tree).toBe("t1");
+      expect(r.notes).toBeUndefined();
+    });
+
+    it("keeps the opening tree as the last passing tree when the round makes things worse", async () => {
+      const h = harness(
+        resumed({
+          agent: trees("t1", "t2", "t3"),
+          results: { t1: failed("a"), t2: failed("b"), t3: failed("c") },
+        }),
+      );
+      const r = expectUpload(await h.run());
+      expect(r.changeset.tree).toBe("stored");
+      expect(r.verification.status).toBe("passed");
+      expect(r.terminalOutcome).toBeUndefined();
+    });
+
+    it("goes straight to QA with no note", async () => {
+      const h = harness(
+        resumed({ agent: trees("t1"), input: { continuation: { files: CODE_AND_TEST, note: null } } }),
+      );
+      const r = expectUpload(await h.run());
+      expect(h.count("agent")).toBe(0);
+      expect(h.count("qa")).toBe(1);
+      expect(r.changeset.tree).toBe("stored");
+      expect(h.ofType("loop.round.started")).toEqual([]);
+    });
+
+    it.each([
+      ["no rounds", { rounds: 0 }],
+      [
+        "no budget",
+        { budget: { maxCostUsd: MIN_ROUND_COST_USD / 2, maxTurns: 200, maxWallClockMs: 3_600_000 } },
+      ],
+    ])("with %s left, says the note wasn't used instead of dropping it", async (_, limits) => {
+      const h = harness(
+        resumed({ input: { continuation: { files: CODE_AND_TEST, note: NOTE }, ...limits } }),
+      );
+      const r = expectUpload(await h.run());
+      expect(h.count("agent")).toBe(0);
+      expect(r.changeset.tree).toBe("stored");
+      expect(r.notes).toEqual([expect.stringMatching(/note wasn't used/)]);
+    });
+  });
+
   it("treats a continuation with no stored files as a fresh attempt carrying the note", async () => {
     const h = harness({
       agent: trees("t1"),
