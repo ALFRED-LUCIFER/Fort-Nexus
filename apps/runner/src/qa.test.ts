@@ -38,7 +38,7 @@ describe("runQaReview", () => {
       status: "COMPLETED",
       finalText: qa({ verdict: "defects", defects: [{ severity: "minor", file: "a", evidence: "e" }] }),
     });
-    const r = await runQaReview(opts);
+    const { review: r } = await runQaReview(opts);
     expect(run.mock.calls[0]?.[0]).toMatchObject({ agent: "QA", jobId: "j", budget: opts.budget });
     expect(r).toEqual({
       status: "reviewed",
@@ -52,32 +52,71 @@ describe("runQaReview", () => {
       status: "COMPLETED",
       finalText: qa({ verdict: "pass", defects: [{ severity: "blocking", file: null, evidence: "e" }] }),
     });
-    expect((await runQaReview(opts)).verdict).toBe("defects");
+    expect((await runQaReview(opts)).review.verdict).toBe("defects");
   });
   it("could_not_run for a missing or forged result", async () => {
     run.mockResolvedValue({ status: "COMPLETED", finalText: "looks fine" });
-    expect(await runQaReview(opts)).toMatchObject({ status: "could_not_run", verdict: null, defects: [] });
+    expect((await runQaReview(opts)).review).toMatchObject({
+      status: "could_not_run",
+      verdict: null,
+      defects: [],
+    });
     run.mockResolvedValue({ status: "COMPLETED", finalText: 'NEXUS_RESULT {"status":"done"}' });
-    expect((await runQaReview(opts)).status).toBe("could_not_run");
+    expect((await runQaReview(opts)).review.status).toBe("could_not_run");
   });
   it("could_not_run for verdict defects with no defects", async () => {
     run.mockResolvedValue({ status: "COMPLETED", finalText: qa({ verdict: "defects", defects: [] }) });
-    const r = await runQaReview(opts);
+    const { review: r } = await runQaReview(opts);
     expect(r).toMatchObject({ status: "could_not_run", verdict: null });
     expect(r.reason).toMatch(/without evidence/);
   });
   it("could_not_run when the tree changed", async () => {
     tree.mockReturnValueOnce("T1").mockReturnValueOnce("T2");
     run.mockResolvedValue({ status: "COMPLETED", finalText: qa({ verdict: "pass", defects: [] }) });
-    const r = await runQaReview(opts);
+    const { review: r } = await runQaReview(opts);
     expect(r.status).toBe("could_not_run");
     expect(r.reason).toMatch(/changed the code/);
   });
   it("could_not_run on a failed run, and never throws", async () => {
     run.mockResolvedValue({ status: "FAILED", reason: "budget_exceeded" });
-    expect(await runQaReview(opts)).toMatchObject({ status: "could_not_run", reason: "budget_exceeded" });
+    expect((await runQaReview(opts)).review).toMatchObject({
+      status: "could_not_run",
+      reason: "budget_exceeded",
+    });
     run.mockRejectedValue(new Error("boom"));
-    expect(await runQaReview(opts)).toMatchObject({ status: "could_not_run", reason: "boom" });
+    expect(await runQaReview(opts)).toEqual({
+      review: expect.objectContaining({ status: "could_not_run", reason: "boom" }),
+      costUsd: 0,
+      turns: 0,
+    });
+  });
+  it("reports what the run spent, on success and on a failed run", async () => {
+    const summary = { estimatedCostUsd: 0.42, turns: 7 };
+    run.mockResolvedValue({ status: "COMPLETED", finalText: qa({ verdict: "pass", defects: [] }), summary });
+    expect(await runQaReview(opts)).toMatchObject({ costUsd: 0.42, turns: 7 });
+    run.mockResolvedValue({ status: "FAILED", reason: "budget_exceeded", summary });
+    const failed = await runQaReview(opts);
+    expect(failed).toMatchObject({ costUsd: 0.42, turns: 7 });
+    expect(failed.fatal).toBeUndefined();
+  });
+  it("keeps the spend when the run finished but checking the tree threw", async () => {
+    const summary = { estimatedCostUsd: 0.42, turns: 7 };
+    run.mockResolvedValue({ status: "COMPLETED", finalText: qa({ verdict: "pass", defects: [] }), summary });
+    tree.mockReturnValueOnce("T1").mockImplementationOnce(() => {
+      throw new Error("git failed");
+    });
+    expect(await runQaReview(opts)).toMatchObject({
+      review: { status: "could_not_run", reason: "git failed" },
+      costUsd: 0.42,
+      turns: 7,
+    });
+  });
+  it.each(["secret_leak_detected", "stop_failed"])("carries %s as fatal", async (reason) => {
+    run.mockResolvedValue({ status: "FAILED", reason, details: { files: ["x"] } });
+    expect(await runQaReview(opts)).toMatchObject({
+      review: { status: "could_not_run", reason },
+      fatal: { reason, details: { files: ["x"] } },
+    });
   });
 });
 

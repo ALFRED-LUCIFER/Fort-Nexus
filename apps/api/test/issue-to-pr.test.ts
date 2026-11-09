@@ -657,6 +657,19 @@ describe("push gate", () => {
     expect(stored.rows[0].verification).toEqual(PASSED);
   });
 
+  it("copies the runner's notes into the approval's action only when sent", async () => {
+    const notes = ["These tests also pass on the old code, so they may not prove this change."];
+    const withNotes = await runningJob();
+    expect((await upload(withNotes.token, withNotes.l, { notes })).statusCode).toBe(200);
+    const [a] = (await owner("GET", `/v1/approvals?jobId=${withNotes.l.jobId}`)).json().items as [Approval];
+    expect(a.action.notes).toEqual(notes);
+
+    const without = await runningJob();
+    expect((await upload(without.token, without.l)).statusCode).toBe(200);
+    const [b] = (await owner("GET", `/v1/approvals?jobId=${without.l.jobId}`)).json().items as [Approval];
+    expect(b.action).not.toHaveProperty("notes");
+  });
+
   it("refuses to approve a stored failing result with a readable 409, while deny still works", async () => {
     const { l, approvalId, actionHash } = await pendingApproval();
     // An approval from before the gate, whose recorded result was not a pass.

@@ -1,16 +1,10 @@
 import type { ChangesetFile, IssueSnapshot, QaReview, Verification } from "@nexus/contracts";
 import { StuckReport } from "@nexus/contracts";
 import { describe, expect, it } from "vitest";
+import { ApiCallError } from "./api.ts";
 import { ChangesetError, type Changeset } from "./changeset.ts";
-import {
-  MIN_ROUND_COST_USD,
-  runRepairLoop,
-  type AgentRun,
-  type BudgetLeft,
-  type LoopDeps,
-  type LoopInput,
-  type LoopResult,
-} from "./repair-loop.ts";
+import { MIN_ROUND_COST_USD, runRepairLoop } from "./repair-loop.ts";
+import type { AgentRun, BudgetLeft, LoopDeps, LoopInput, LoopResult, QaRun } from "./repair-loop-types.ts";
 import type { IntegrityResult } from "./repair/integrity.ts";
 
 const issue: IssueSnapshot = {
@@ -78,10 +72,13 @@ type Fakes = {
   red?: Verification;
   /** Integrity per tree; a tree not listed is clean, with its test files listed. */
   integrity?: Record<string, IntegrityResult>;
-  qa?: QaReview[];
+  qa?: (QaReview | { fatal: NonNullable<QaRun["fatal"]> })[];
+  onQa?: () => void;
   startTree?: string;
   startFiles?: ChangesetFile[];
   abortOn?: string;
+  /** Thrown when this call is reached. */
+  throwOn?: { op: string; error: Error };
   /** Thrown by buildChangeset on this call (1-based). */
   changesetError?: { call: number; error: Error };
   onVerify?: (tree: string, label?: string) => void;
@@ -100,6 +97,7 @@ function harness(f: Fakes) {
   const hit = (op: string) => {
     calls.push(op);
     if (f.abortOn === op) ac.abort();
+    if (f.throwOn?.op === op) throw f.throwOn.error;
   };
   const agentSteps = [...(f.agent ?? [])];
   const qaSteps = [...(f.qa ?? [])];
@@ -153,7 +151,11 @@ function harness(f: Fakes) {
     },
     runQa: async (t) => {
       hit(`qa:${t}`);
-      return { review: qaSteps.shift() ?? qaPass, costUsd: 0.5, turns: 1 };
+      f.onQa?.();
+      const step = qaSteps.shift() ?? qaPass;
+      return "fatal" in step
+        ? { review: qaFailedToRun, costUsd: 0.5, turns: 1, fatal: step.fatal }
+        : { review: step, costUsd: 0.5, turns: 1 };
     },
     claimFeedback: async (round) => {
       hit(`claim:${round}`);
@@ -182,6 +184,7 @@ function harness(f: Fakes) {
     waiting,
     ofType: (type: string) => events.filter((e) => e.type === type).map((e) => e.payload),
     count: (prefix: string) => calls.filter((c) => c.startsWith(prefix)).length,
+    throwError: f.throwOn?.error,
     run: () => runRepairLoop(deps, input),
   };
 }
@@ -191,6 +194,7 @@ function expectUpload(r: LoopResult): Extract<LoopResult, { kind: "upload" }> {
   return r;
 }
 
+const staleLease = () => new ApiCallError("old token", 409, "STALE_LEASE", false);
 const trees = (...names: string[]): AgentStep[] => names.map((tree) => ({ tree }));
 const STORED = { files: CODE_AND_TEST, note: null };
 
@@ -653,6 +657,7 @@ describe("runRepairLoop", () => {
       ["building the changeset", { ...fresh, abortOn: "build" }],
       ["the integrity check", { ...fresh, abortOn: "integrity" }],
       ["the test run", { ...fresh, abortOn: "verify:t1" }],
+      ["the feedback claim before the base run", { ...failing, abortOn: "claim:2" }],
       ["the base run", { ...failing, abortOn: "verify:base" }],
       ["building the red tree", { ...fresh, abortOn: "redTree" }],
       ["the red run", { ...fresh, abortOn: "verify:red" }],
@@ -698,17 +703,59 @@ describe("runRepairLoop", () => {
     });
   });
 
-  it("rethrows a dep failure that is not an abort", async () => {
-    const h = harness({
-      agent: [
-        {
-          onRun: () => {
-            throw new Error("git exploded");
-          },
-        },
-      ],
+  describe("a dep that throws", () => {
+    it("fails with a report when nothing was tested yet", async () => {
+      const h = harness({ agent: trees("t1"), throwOn: { op: "agent", error: new Error("git exploded") } });
+      expect(await h.run()).toMatchObject({
+        kind: "failed",
+        reason: "runner_error",
+        details: { message: "git exploded" },
+        report: { nextStep: expect.stringContaining("runner log") },
+      });
     });
-    await expect(h.run()).rejects.toThrow("git exploded");
+
+    it("keeps the passing tree when a later verify throws", async () => {
+      const h = harness({
+        agent: trees("t1", "t2"),
+        qa: [qaBlocking],
+        throwOn: { op: "verify:t2", error: new Error("docker is gone") },
+      });
+      const r = expectUpload(await h.run());
+      expect(r.changeset.tree).toBe("t1");
+      expect(r.qa).toEqual(qaBlocking);
+      expect(r.terminalOutcome).toBeUndefined();
+      expect(h.ofType("loop.stopped")).toEqual([{ reason: "runner_error" }]);
+    });
+
+    it("keeps the passing tree when claiming feedback after a pass throws, and still reviews it", async () => {
+      const h = harness({ agent: trees("t1"), throwOn: { op: "claim:2", error: new Error("HTTP 500") } });
+      const r = expectUpload(await h.run());
+      expect(r.changeset.tree).toBe("t1");
+      expect(r.verification.status).toBe("passed");
+      expect(r.qa).toEqual(qaPass);
+    });
+
+    it("still uploads when the review itself keeps throwing", async () => {
+      const h = harness({ agent: trees("t1"), throwOn: { op: "qa:t1", error: new Error("boom") } });
+      const r = expectUpload(await h.run());
+      expect(r.changeset.tree).toBe("t1");
+      expect(r.qa.status).toBe("could_not_run");
+    });
+
+    it("does not lose the result when only the closing feedback claim fails", async () => {
+      const h = harness({ agent: trees("t1"), throwOn: { op: "claim:0", error: new Error("HTTP 500") } });
+      expect(expectUpload(await h.run()).changeset.tree).toBe("t1");
+      expect(h.ofType("loop.stopped")).toEqual([{ reason: "passed" }]);
+    });
+
+    it.each(["verify:t2", "claim:3", "claim:0"])("rethrows a stale lease from %s", async (op) => {
+      const h = harness({
+        agent: op === "claim:0" ? trees("t1") : trees("t1", "t2"),
+        qa: op === "claim:0" ? [qaPass] : [qaBlocking],
+        throwOn: { op, error: staleLease() },
+      });
+      await expect(h.run()).rejects.toBe(h.throwError);
+    });
   });
 
   it("uploads the earlier tested tree when an agent run dies with budget exceeded", async () => {
@@ -825,6 +872,298 @@ describe("runRepairLoop", () => {
     const r = expectUpload(await h.run());
     expect(r.report?.rounds[1]?.tried).toBe("The agent did not describe this round.");
     expect(r.report?.rootCauseGuess).toBe("Tried A.");
+  });
+
+  describe("a fatal end to the review", () => {
+    it.each(["secret_leak_detected", "stop_failed"] as const)(
+      "%s uploads nothing and starts no further round, even with feedback waiting",
+      async (reason) => {
+        const h = harness({
+          agent: trees("t1", "t2"),
+          qa: [{ fatal: { reason, details: { files: ["x"] } } }],
+          onQa: () => h.waiting.push({ id: "f1", text: "One more thing." }),
+        });
+        const r = await h.run();
+        expect(r).toMatchObject({ kind: "failed", reason, details: { files: ["x"] } });
+        expect(h.count("agent")).toBe(1);
+        expect(h.ofType("qa.completed")).toEqual([]);
+        expect(h.ofType("loop.stopped")).toEqual([{ reason, unusedFeedback: ["f1"] }]);
+      },
+    );
+
+    it("outranks a cancel, so the leak is what gets reported", async () => {
+      const h = harness({
+        agent: trees("t1"),
+        abortOn: "qa:t1",
+        qa: [{ fatal: { reason: "secret_leak_detected", details: {} } }],
+      });
+      expect(await h.run()).toMatchObject({ kind: "failed", reason: "secret_leak_detected" });
+    });
+
+    it("also applies to the review of a kept passing tree", async () => {
+      const h = harness({
+        agent: trees("t1", "t2"),
+        red: passed,
+        results: { t2: failed("sh: pnpm: not found", { failureKind: "environment" }) },
+        qa: [{ fatal: { reason: "secret_leak_detected", details: {} } }],
+      });
+      expect(await h.run()).toMatchObject({ kind: "failed", reason: "secret_leak_detected" });
+    });
+  });
+
+  describe("feedback that arrives before the loop ends", () => {
+    const late = { id: "late", text: "One more thing." };
+    const arrive = (h: () => ReturnType<typeof harness>) => () => void h().waiting.push(late);
+    const noRoom = { budget: { maxCostUsd: 1.5, maxTurns: 200, maxWallClockMs: 3_600_000 } };
+    const needsInfo = 'NEXUS_RESULT {"status":"needs_info","questions":["Which region?"]}';
+    const env = failed("sh: pnpm: not found", { failureKind: "environment" });
+    const dead = { status: "FAILED", reason: "agent_failed" } as const;
+
+    it.each<[string, (a: () => void) => Fakes, string]>([
+      [
+        "rounds running out",
+        (a) => ({
+          agent: trees("t1", "t2", "t3", "t4"),
+          results: { t1: failed("a"), t2: failed("b"), t3: failed("c"), t4: failed("d") },
+          onVerify: (t) => t === "t4" && a(),
+        }),
+        "rounds_exhausted",
+      ],
+      [
+        "too little budget",
+        (a) => ({
+          agent: [{ tree: "t1", costUsd: 1.4, onRun: a }],
+          results: { t1: failed("a") },
+          input: noRoom,
+        }),
+        "budget",
+      ],
+      [
+        "a round that changes nothing",
+        (a) => ({ agent: [{ tree: "t1" }, { onRun: a }], results: { t1: failed("a") } }),
+        "no_change",
+      ],
+      [
+        "an environment failure",
+        (a) => ({ agent: [{ tree: "t1", onRun: a }], results: { t1: env } }),
+        "environment",
+      ],
+      [
+        "already failing tests",
+        (a) => ({
+          agent: trees("t1"),
+          results: { t1: failed("a") },
+          base: failed("base"),
+          onVerify: (_t, label) => label === "base" && a(),
+        }),
+        "already_failing",
+      ],
+      [
+        "a repeated failure",
+        (a) => ({
+          agent: trees("t1", "t2"),
+          results: { t1: failed("same"), t2: failed("same") },
+          onVerify: (t) => t === "t2" && a(),
+        }),
+        "repeated_failure",
+      ],
+      [
+        "an agent run that dies",
+        (a) => ({ agent: [{ tree: "t1" }, { ...dead, onRun: a }], results: { t1: failed("a") } }),
+        "agent_failed",
+      ],
+      [
+        "a secret leak",
+        (a) => ({ agent: [{ status: "FAILED", reason: "secret_leak_detected", onRun: a }] }),
+        "secret_leak_detected",
+      ],
+      [
+        "a question with no passing tree",
+        (a) => ({ agent: [{ tree: "t1", finalText: needsInfo, onRun: a }] }),
+        "needs_info",
+      ],
+      [
+        "a question after a passing tree",
+        (a) => ({
+          agent: [{ tree: "t1" }, { tree: "t2", finalText: needsInfo, onRun: a }],
+          qa: [qaBlocking],
+        }),
+        "needs_info",
+      ],
+      ["no changes at all", (a) => ({ agent: [{ onRun: a }] }), "no_changes"],
+    ])("reports it unused after %s", async (_name, fakes, reason) => {
+      const h: ReturnType<typeof harness> = harness(fakes(arrive(() => h)));
+      await h.run();
+      expect(h.ofType("feedback.delivered")).toEqual([]);
+      expect(h.ofType("loop.stopped")).toEqual([
+        expect.objectContaining({ reason, unusedFeedback: ["late"] }),
+      ]);
+      expect(h.count("claim:0")).toBeGreaterThan(0);
+    });
+  });
+
+  describe("feedback and the base check", () => {
+    const fixThem = { id: "f1", text: "Please fix the failing tests as well." };
+
+    it("skips the base run for feedback waiting at the first failure, and delivers it next round", async () => {
+      const h: ReturnType<typeof harness> = harness({
+        agent: [{ tree: "t1", onRun: () => h.waiting.push(fixThem) }, { tree: "t2" }],
+        results: { t1: failed("boom") },
+        base: failed("boom on base"),
+      });
+      const r = expectUpload(await h.run());
+      expect(h.count("verify:base")).toBe(0);
+      expect(h.count("agent")).toBe(2);
+      expect(r.terminalOutcome).toBeUndefined();
+      expect(h.prompts[1]).toContain("Please fix the failing tests as well.");
+      expect(h.ofType("feedback.delivered")).toEqual([{ ids: ["f1"], round: 2 }]);
+    });
+
+    it("still runs the base check for unrelated waiting feedback, then delivers it", async () => {
+      const h: ReturnType<typeof harness> = harness({
+        agent: [
+          { tree: "t1", onRun: () => h.waiting.push({ id: "f2", text: "Rename the helper." }) },
+          { tree: "t2" },
+        ],
+        results: { t1: failed("boom") },
+      });
+      expectUpload(await h.run());
+      expect(h.count("verify:base")).toBe(1);
+      expect(h.prompts[1]).toContain("Rename the helper.");
+    });
+  });
+
+  describe("a passing tree that was never reviewed", () => {
+    const envFail = failed("sh: pnpm: not found", { failureKind: "environment" });
+
+    it("is reviewed before the upload when budget remains", async () => {
+      const h = harness({
+        agent: trees("t1", "t2"),
+        red: passed,
+        results: { t2: envFail },
+        qa: [qaBlocking],
+      });
+      const r = expectUpload(await h.run());
+      expect(r.changeset.tree).toBe("t1");
+      expect(h.count("qa:t1")).toBe(1);
+      expect(r.qa).toEqual(qaBlocking);
+      expect(h.ofType("qa.completed")).toHaveLength(1);
+    });
+
+    it("is stopped, not uploaded, when the job is cancelled during that review", async () => {
+      const h = harness({
+        agent: trees("t1", "t2"),
+        red: passed,
+        results: { t2: envFail },
+        abortOn: "qa:t1",
+      });
+      expect(await h.run()).toEqual({ kind: "stopped" });
+    });
+
+    it("says so when no budget remains for a review", async () => {
+      const h = harness({
+        agent: [{ tree: "t1" }, { tree: "t2", costUsd: 4 }],
+        red: passed,
+        results: { t2: failed("broken") },
+        input: { budget: { maxCostUsd: 5.1, maxTurns: 200, maxWallClockMs: 3_600_000 } },
+      });
+      const r = expectUpload(await h.run());
+      expect(r.changeset.tree).toBe("t1");
+      expect(h.count("qa:")).toBe(0);
+      expect(r.qa.status).toBe("could_not_run");
+    });
+  });
+
+  describe("findings the owner sees at the approval", () => {
+    const edited = (content: string): ChangesetFile[] =>
+      [file("src/a.ts"), { ...file("src/a.test.ts"), contentBase64: content }] as ChangesetFile[];
+
+    it("notes tests that also pass on the old code when no round is left to fix it", async () => {
+      const h = harness({ agent: trees("t1"), red: passed, input: { rounds: 0 } });
+      const r = expectUpload(await h.run());
+      expect(h.count("agent")).toBe(1);
+      expect(r.notes).toEqual(["These tests also pass on the old code, so they may not prove this change."]);
+    });
+
+    it("keeps the note on the kept tree when the repair that followed failed", async () => {
+      const h = harness({
+        agent: trees("t1", "t2"),
+        red: passed,
+        results: { t2: failed("sh: pnpm: not found", { failureKind: "environment" }) },
+      });
+      expect(expectUpload(await h.run()).notes).toHaveLength(1);
+    });
+
+    it("carries the note to a later tree whose tests did not change, without another repair", async () => {
+      const h = harness({ agent: trees("t1", "t2"), red: passed });
+      const r = expectUpload(await h.run());
+      expect(r.changeset.tree).toBe("t2");
+      expect(h.count("agent")).toBe(2);
+      expect(h.count("verify:red")).toBe(1);
+      expect(r.notes).toHaveLength(1);
+    });
+
+    it("drops the note when the repair changed the tests", async () => {
+      const h = harness({
+        agent: [
+          { tree: "t1", files: edited("YQ==") },
+          { tree: "t2", files: edited("Yg==") },
+        ],
+        red: passed,
+      });
+      expect(expectUpload(await h.run()).notes).toBeUndefined();
+    });
+
+    it("notes a code change with no test when no round is left", async () => {
+      const h = harness({ agent: [{ tree: "t1", files: [file("src/a.ts")] }], input: { rounds: 0 } });
+      expect(expectUpload(await h.run()).notes).toEqual(["This code change has no test change."]);
+    });
+
+    it("runs the static no-test check on later passing trees too", async () => {
+      const h = harness({
+        agent: [
+          { tree: "t1", files: CODE_AND_TEST },
+          { tree: "t2", files: [file("src/a.ts")] },
+          { tree: "t3", files: CODE_AND_TEST },
+        ],
+        qa: [qaBlocking, qaPass],
+      });
+      const r = expectUpload(await h.run());
+      expect(h.count("agent")).toBe(3);
+      expect(h.prompts[2]).toMatch(/no test change/i);
+      expect(h.count("verify:red")).toBe(1);
+      expect(r.changeset.tree).toBe("t3");
+      expect(r.notes).toBeUndefined();
+    });
+
+    it("has no notes on a clean pass", async () => {
+      expect(expectUpload(await harness({ agent: trees("t1") }).run()).notes).toBeUndefined();
+    });
+
+    it("does not send back a change of tests and docs", async () => {
+      const h = harness({ agent: [{ tree: "t1", files: [file("src/a.test.ts"), file("README.md")] }] });
+      const r = expectUpload(await h.run());
+      expect(h.count("agent")).toBe(1);
+      expect(h.count("redTree")).toBe(0);
+      expect(r.notes).toBeUndefined();
+    });
+  });
+
+  it("says why an unreviewed tree was not reviewed: tests or integrity", async () => {
+    const dirty = { clean: false, problems: ["Changed the test script"], testFilesChanged: [] };
+    const integrity = harness({
+      agent: trees("t1", "t2", "t3", "t4"),
+      integrity: { t1: dirty, t2: dirty, t3: dirty, t4: dirty },
+    });
+    const r = expectUpload(await integrity.run());
+    expect(r.qa.reason).toMatch(/integrity/);
+    expect(r.qa.reason).not.toMatch(/tests did not pass/);
+
+    const tests = harness({
+      agent: trees("t1"),
+      results: { t1: failed("x", { failureKind: "environment" }) },
+    });
+    expect(expectUpload(await tests.run()).qa.reason).toMatch(/tests did not pass/);
   });
 
   it("returns no_changes when the first attempt changes nothing", async () => {

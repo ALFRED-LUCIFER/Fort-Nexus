@@ -127,7 +127,10 @@ export function buildAction(
   jobId: string,
   s: IssueSnapshot,
   files: ChangesetFile[],
-  changeset: Pick<UploadChangesetRequest, "stats" | "agentSummary" | "verification" | "qa" | "integrity">,
+  changeset: Pick<
+    UploadChangesetRequest,
+    "stats" | "agentSummary" | "verification" | "qa" | "integrity" | "notes"
+  >,
   changesetSha256: string,
 ): PushDraftPrAction {
   const lines: string[] = [];
@@ -174,6 +177,7 @@ export function buildAction(
     ...(changeset.integrity?.testFilesChanged
       ? { testFilesChanged: changeset.integrity.testFilesChanged }
       : {}),
+    ...(changeset.notes ? { notes: changeset.notes } : {}),
   };
 }
 

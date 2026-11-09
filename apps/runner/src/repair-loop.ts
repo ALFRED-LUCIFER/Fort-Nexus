@@ -1,21 +1,29 @@
 import {
   CHANGESET_MAX_FILES,
   REPAIR_ROUNDS,
-  type ChangesetFile,
-  type IssueSnapshot,
-  type IssueToPrTask,
   type JobOutcome,
   type QaReview,
-  type RunEventType,
   type StuckReport,
   type Verification,
 } from "@nexus/contracts";
 import { parsePhaseLine, parseResult } from "./agent-result.ts";
+import { isStaleLease } from "./api.ts";
 import { ChangesetError, type Changeset } from "./changeset.ts";
-import type { ClaudeBudget, ClaudeTaskResult } from "./claude.ts";
 import { issuePrompt } from "./issue-prompt.ts";
+import { errorMessage } from "./log.ts";
+import { redact } from "./output.ts";
 import { classifyFailure, fingerprint } from "./repair/classify.ts";
-import type { IntegrityResult } from "./repair/integrity.ts";
+import { isTestFile, type IntegrityResult } from "./repair/integrity.ts";
+import {
+  NEXT_STEP,
+  type BudgetLeft,
+  type ClaimedFeedback,
+  type LoopDeps,
+  type LoopInput,
+  type LoopResult,
+  type QaFatal,
+  type StopReason,
+} from "./repair-loop-types.ts";
 import { repairPrompt } from "./repair-prompt.ts";
 
 // The bounded repair loop of one job: agent attempt, NEXUS's own checks, up to `rounds` repairs.
@@ -27,102 +35,6 @@ export const MIN_ROUND_TURNS = 5;
 
 const NOTE_MAX = 8_000;
 const PATH_MAX = 500;
-
-export type BudgetLeft = ClaudeBudget;
-/** `costUsd` and `turns` are this run's own totals (the ClaudeTaskResult summary, 0 when it has none). */
-export type AgentRun = Pick<ClaudeTaskResult, "status" | "reason" | "details" | "outcome" | "finalText"> & {
-  costUsd: number;
-  turns: number;
-};
-export type QaRun = { review: QaReview; costUsd: number; turns: number };
-export type ClaimedFeedback = { id: string; text: string };
-
-export type LoopDeps = {
-  runAgent(prompt: string, budgetLeft: BudgetLeft): Promise<AgentRun>;
-  buildChangeset(): Promise<Changeset>;
-  verify(tree: string, label?: "base" | "red"): Promise<Verification>;
-  /** The base commit with only these test files taken from `tree`. */
-  redTree(tree: string, testPaths: string[]): Promise<string>;
-  checkIntegrity(files: ChangesetFile[]): Promise<IntegrityResult>;
-  runQa(tree: string, budgetLeft: BudgetLeft): Promise<QaRun>;
-  /** Round 0 means no round will use it: the loop reports those items as unused. */
-  claimFeedback(round: number): Promise<ClaimedFeedback[]>;
-  event(type: RunEventType, payload: Record<string, unknown>): void;
-  signal: AbortSignal;
-  now(): number;
-};
-
-export type LoopInput = {
-  issue: IssueSnapshot;
-  budget: BudgetLeft;
-  /** Repair rounds, after the first attempt of a new job. */
-  rounds: number;
-  /** The base commit's tree, for the already-failing check. */
-  baseTree: string;
-  /** Stored files start with a test run and no attempt; with none (an answered question) it is a new attempt. */
-  continuation?: IssueToPrTask["continuation"];
-  canRunTests: boolean;
-};
-
-export type LoopResult =
-  | {
-      kind: "upload";
-      changeset: Changeset;
-      verification: Verification;
-      qa: QaReview;
-      integrity: IntegrityResult;
-      report?: StuckReport;
-      terminalOutcome?: "FAILED_TESTS" | "ENVIRONMENT_BLOCKED" | "ALREADY_FAILING";
-    }
-  | {
-      kind: "failed";
-      reason: string;
-      details: Record<string, unknown>;
-      outcome?: JobOutcome;
-      report: StuckReport;
-    }
-  | { kind: "needs_info"; questions: string[] }
-  | { kind: "stopped" }
-  | { kind: "no_changes" };
-
-type StopReason =
-  | "passed"
-  | "rounds_exhausted"
-  | "repeated_failure"
-  | "no_change"
-  | "budget"
-  | "environment"
-  | "needs_dependency"
-  | "not_configured"
-  | "already_failing"
-  | "needs_info"
-  | "agent_failed"
-  | "secret_leak_detected"
-  | "stop_failed";
-
-const NEXT_STEP: Record<StopReason, string> = {
-  passed: "Review the change and decide on the push approval.",
-  rounds_exhausted:
-    "Read what still fails, then use Keep fixing with a note, or change the issue and use Run again.",
-  repeated_failure:
-    "The same failure came back twice, so use Keep fixing with a note that points at the cause.",
-  no_change: "The last round changed nothing, so use Keep fixing with a note that says what to try.",
-  budget: "Not enough budget was left for another round. Use Keep fixing, which starts with a fresh budget.",
-  environment:
-    "The tests could not run because of the environment, not the code. Fix that, then use Keep fixing.",
-  needs_dependency:
-    "The change needs a package this run cannot install. Add it to the repository, then use Run again.",
-  not_configured:
-    "Add a `test` script to package.json with a committed lockfile, or a .nexus.json with a `verify` section, then use Run again.",
-  already_failing:
-    "These tests fail on the base commit too. Use Keep fixing and say in the note to fix the existing failures.",
-  needs_info: "Answer the agent's question in the feedback box.",
-  agent_failed: "The agent run ended early. Check the run log, then use Keep fixing or Run again.",
-  secret_leak_detected:
-    "A credential appeared in the changed files, so nothing was kept. Find out how before running again.",
-  stop_failed:
-    "The sandbox could not be confirmed stopped. Check the runner machine before starting another run.",
-};
 
 // Shortcut, not comprehension: a phrase match on the owner's own words, which only skips the base check.
 const FIX_EXISTING = /\bfix\w*\b[^.\n]{0,60}\b(?:existing|pre-?existing|already|failing|failures)\b/i;
@@ -137,17 +49,35 @@ const isNonSource = (path: string) => NON_SOURCE.some((re) => re.test(path));
 
 type Tested = { changeset: Changeset; verification: Verification; integrity: IntegrityResult };
 type Failure = { reason: string; details: Record<string, unknown>; outcome?: JobOutcome };
+type Passing = Tested & { qa?: QaReview; notes?: string[] };
 type RepairStep = { result: string; summary: string; evidence: string };
+/** What a passing tree doesn't prove: `evidence` for the agent, `note` for the owner. */
+type Finding = { evidence: string; note: string; repair: boolean };
+
+const NO_TEST: Finding = {
+  evidence: "This code change has no test change. Add or update a test that fails without the change.",
+  note: "This code change has no test change.",
+  repair: true,
+};
+const PROVES_NOTHING: Finding = {
+  evidence:
+    "The changed tests pass without the source change, so they prove nothing. Make them fail for the right reason on the old code.",
+  note: "These tests also pass on the old code, so they may not prove this change.",
+  repair: true,
+};
+const STOPPED: LoopResult = { kind: "stopped" };
 
 type State = {
   spentUsd: number;
   spentTurns: number;
   rounds: StuckReport["rounds"];
   tested?: Tested;
-  passing?: Tested & { qa?: QaReview };
+  passing?: Passing;
   lastFingerprint: string | null;
   sawFailure: boolean;
   redChecked: boolean;
+  /** The test files the red run found proving nothing, to keep the note while they stay the same. */
+  unprovenTests?: string;
   /** Delivered owner guidance, repeated in later prompts because each round starts a fresh agent. */
   guidance: string[];
   /** Claimed but not yet given to a round. */
@@ -162,6 +92,9 @@ type Ctx = {
   deps: LoopDeps;
   input: LoopInput;
   s: State;
+  resuming: boolean;
+  /** Rounds shown to the owner. */
+  total: number;
   left: () => BudgetLeft;
   enoughBudget: () => boolean;
   /** Whether another round can follow `round`. */
@@ -218,28 +151,42 @@ const forUpload = (i: IntegrityResult): IntegrityResult => ({
   testFilesChanged: i.testFilesChanged.slice(0, CHANGESET_MAX_FILES).map((p) => p.slice(0, PATH_MAX)),
 });
 
-function finish(
-  ctx: Ctx,
-  reason: StopReason,
-  failure?: Failure,
-  extra: Record<string, unknown> = {},
-): LoopResult {
+const keepsNothing = (reason: StopReason) => reason === "secret_leak_detected" || reason === "stop_failed";
+
+function finish(ctx: Ctx, reason: StopReason, failure?: Failure, questions?: string[]): LoopResult {
   const { deps, s } = ctx;
   const unused = s.waiting.map((i) => i.id);
-  deps.event("loop.stopped", { reason, ...extra, ...(unused.length ? { unusedFeedback: unused } : {}) });
+  deps.event("loop.stopped", {
+    reason,
+    ...(questions ? { questions } : {}),
+    ...(unused.length ? { unusedFeedback: unused } : {}),
+  });
+  if (reason === "no_changes") return { kind: "no_changes" };
   const report = buildReport(ctx, reason, failure);
-  const keepNothing = reason === "secret_leak_detected" || reason === "stop_failed";
+  const keepNothing = keepsNothing(reason);
   if (s.passing && !keepNothing) {
-    const { changeset, verification, integrity, qa } = s.passing;
+    const { changeset, verification, integrity, qa, notes } = s.passing;
     const review = qa ?? qaSkipped("The run ended before the review.");
-    return { kind: "upload", changeset, verification, qa: review, integrity: forUpload(integrity) };
+    return {
+      kind: "upload",
+      changeset,
+      verification,
+      qa: review,
+      integrity: forUpload(integrity),
+      ...(notes ? { notes } : {}),
+    };
   }
+  if (reason === "needs_info" && questions) return { kind: "needs_info", questions };
   if (s.tested && !keepNothing) {
     const blocked = reason === "environment" || reason === "needs_dependency" || reason === "not_configured";
     const terminalOutcome =
       reason === "already_failing" ? "ALREADY_FAILING" : blocked ? "ENVIRONMENT_BLOCKED" : "FAILED_TESTS";
     const { changeset, verification, integrity } = s.tested;
-    const qa = qaSkipped("The tests did not pass, so the change was not reviewed.");
+    const qa = qaSkipped(
+      verification.status === "passed"
+        ? "The change failed NEXUS's integrity checks, so it was not reviewed."
+        : "The tests did not pass, so the change was not reviewed.",
+    );
     return {
       kind: "upload",
       changeset,
@@ -259,62 +206,107 @@ function finish(
   };
 }
 
-/** The evidence for a repair when the red check fails, or null when it finds nothing. */
-async function redProblem(ctx: Ctx, { changeset, integrity }: Tested): Promise<string | null> {
-  const { deps } = ctx;
-  if (changeset.files.every((f) => isNonSource(f.path))) return null;
-  if (integrity.testFilesChanged.length === 0)
-    return "This code change has no test change. Add or update a test that fails without the change.";
-  if (ctx.left().maxWallClockMs < MIN_ROUND_MS) return null;
-  const tree = await deps.redTree(changeset.tree, integrity.testFilesChanged);
-  if (tree === changeset.tree || deps.signal.aborted) return null; // A tests-only change has nothing left out.
-  const red = await deps.verify(tree, "red");
-  return red.status === "passed"
-    ? "The changed tests pass without the source change, so they prove nothing. Make them fail for the right reason on the old code."
-    : null;
+/**
+ * Every way the loop ends apart from a cancel. A passing tree that hasn't been reviewed is reviewed first,
+ * and feedback nothing can use any more is claimed, so it is reported as unused.
+ */
+async function end(
+  ctx: Ctx,
+  reason: StopReason,
+  failure?: Failure,
+  questions?: string[],
+): Promise<LoopResult> {
+  const { deps, s } = ctx;
+  if (!keepsNothing(reason) && s.passing && !s.passing.qa && ctx.enoughBudget()) {
+    const outcome = await review(ctx, s.passing, s.rounds.at(-1)?.round ?? 0);
+    if (outcome === "stopped") return STOPPED;
+    if (outcome) return end(ctx, outcome.reason, outcome);
+  }
+  try {
+    await claim(ctx, 0);
+  } catch (err) {
+    // Only the unused list is at stake, so a failed claim must not cost the result.
+    if (isStaleLease(err)) throw err;
+  }
+  if (deps.signal.aborted && !keepsNothing(reason)) return STOPPED;
+  return finish(ctx, reason, failure, questions);
 }
 
-/** The first passing tree's checks and QA. Null: upload this tree. "stopped": the job was cancelled. */
-async function afterPass(ctx: Ctx, tested: Tested, round: number): Promise<RepairStep | "stopped" | null> {
+function recordQa(ctx: Ctx, passing: Passing, qa: QaReview, round: number): void {
+  passing.qa = qa;
+  const { status, verdict, defects, reason } = qa;
+  ctx.deps.event("qa.completed", { status, verdict, defects, reason, round });
+}
+
+/** One QA run on a passing tree. Null when it produced a review (even "could not run"). */
+async function review(ctx: Ctx, passing: Passing, round: number): Promise<QaFatal | "stopped" | null> {
+  const { deps, s } = ctx;
+  const run = await deps.runQa(passing.changeset.tree, ctx.left());
+  s.spentUsd += run.costUsd;
+  s.spentTurns += run.turns;
+  if (run.fatal) return run.fatal;
+  // A review cut off by the stop comes back as could_not_run: it is a cancellation, not a QA result.
+  if (deps.signal.aborted) return "stopped";
+  recordQa(ctx, passing, run.review, round);
+  return null;
+}
+
+const testFilesOf = ({ changeset, integrity }: Tested) =>
+  JSON.stringify(changeset.files.filter((f) => integrity.testFilesChanged.includes(f.path)));
+
+/** Whether the tests prove this change. The no-test check is per tree, the red run once per job. */
+async function proofFinding(ctx: Ctx, tested: Tested): Promise<Finding | null> {
+  const { deps, s } = ctx;
+  const { changeset, integrity } = tested;
+  const firstPass = !s.redChecked;
+  s.redChecked = true;
+  if (changeset.files.every((f) => isTestFile(f.path) || isNonSource(f.path))) return null;
+  if (integrity.testFilesChanged.length === 0) return NO_TEST;
+  if (!firstPass)
+    return s.unprovenTests === testFilesOf(tested) ? { ...PROVES_NOTHING, repair: false } : null;
+  if (ctx.left().maxWallClockMs < MIN_ROUND_MS) return null;
+  const tree = await deps.redTree(changeset.tree, integrity.testFilesChanged);
+  if (deps.signal.aborted) return null;
+  const red = await deps.verify(tree, "red");
+  if (red.status !== "passed") return null;
+  s.unprovenTests = testFilesOf(tested);
+  return PROVES_NOTHING;
+}
+
+/** A passing tree's checks and QA. Null: upload this tree. */
+async function afterPass(
+  ctx: Ctx,
+  tested: Passing,
+  round: number,
+): Promise<RepairStep | QaFatal | "stopped" | null> {
   const { deps, s } = ctx;
   const feedbackStep: RepairStep = {
     result: "feedback",
     summary: "The tests passed. The owner sent more guidance.",
     evidence: "NEXUS's tests pass on the current tree. The owner sent more guidance: apply it.",
   };
-  if (!s.redChecked) {
-    s.redChecked = true;
-    const problem = ctx.canRepair(round) ? await redProblem(ctx, tested) : null;
-    if (deps.signal.aborted) return "stopped";
-    if (problem) return { result: "red_check", summary: problem, evidence: problem };
-  }
+  const finding = await proofFinding(ctx, tested);
+  if (deps.signal.aborted) return "stopped";
+  if (finding) tested.notes = [finding.note];
+  if (finding?.repair && ctx.canRepair(round))
+    return { result: "red_check", summary: finding.evidence, evidence: finding.evidence };
+
   const nextRound = () => (ctx.canRepair(round) ? round + 1 : 0);
   await claim(ctx, nextRound());
   if (deps.signal.aborted) return "stopped";
   if (s.waiting.length && ctx.canRepair(round)) return feedbackStep;
 
-  let qa = qaSkipped("Not enough budget was left for the review.");
   if (ctx.enoughBudget()) {
-    const run = await deps.runQa(tested.changeset.tree, ctx.left());
-    s.spentUsd += run.costUsd;
-    s.spentTurns += run.turns;
-    qa = run.review;
-    // A review cut off by the stop comes back as could_not_run: it is a cancellation, not a QA result.
-    if (deps.signal.aborted) return "stopped";
+    const outcome = await review(ctx, tested, round);
+    if (outcome) return outcome;
+  } else {
+    recordQa(ctx, tested, qaSkipped("Not enough budget was left for the review."), round);
   }
-  if (s.passing) s.passing.qa = qa;
-  deps.event("qa.completed", {
-    status: qa.status,
-    verdict: qa.verdict,
-    defects: qa.defects,
-    reason: qa.reason,
-    round,
-  });
   await claim(ctx, nextRound());
   if (deps.signal.aborted) return "stopped";
 
   if (!ctx.canRepair(round)) return null;
-  const blocking = blockingDefects(qa);
+  const blocking = tested.qa ? blockingDefects(tested.qa) : [];
   if (blocking.length) {
     const lines = blocking.map((d) => `${d.file ?? "(no file)"}: ${d.evidence}`).join("\n");
     return {
@@ -327,17 +319,24 @@ async function afterPass(ctx: Ctx, tested: Tested, round: number): Promise<Repai
 }
 
 export async function runRepairLoop(deps: LoopDeps, input: LoopInput): Promise<LoopResult> {
+  const ctx = createContext(deps, input);
   try {
-    return await loop(deps, input);
+    return await loop(ctx);
   } catch (err) {
-    if (deps.signal.aborted) return { kind: "stopped" };
-    throw err;
+    if (isStaleLease(err)) throw err;
+    if (deps.signal.aborted) return STOPPED;
+    const failure = { reason: "runner_error", details: { message: cap(redact(errorMessage(err)), 500) } };
+    try {
+      return await end(ctx, "runner_error", failure);
+    } catch (again) {
+      if (isStaleLease(again)) throw again;
+      return deps.signal.aborted ? STOPPED : finish(ctx, "runner_error", failure);
+    }
   }
 }
 
-async function loop(deps: LoopDeps, input: LoopInput): Promise<LoopResult> {
-  const { issue, canRunTests, continuation, budget } = input;
-  const STOPPED: LoopResult = { kind: "stopped" };
+function createContext(deps: LoopDeps, input: LoopInput): Ctx {
+  const { continuation, budget } = input;
   const resuming = (continuation?.files.length ?? 0) > 0;
   const total = resuming ? input.rounds : input.rounds + 1;
   const deadline = deps.now() + budget.maxWallClockMs;
@@ -365,7 +364,21 @@ async function loop(deps: LoopDeps, input: LoopInput): Promise<LoopResult> {
       b.maxCostUsd >= MIN_ROUND_COST_USD && b.maxTurns >= MIN_ROUND_TURNS && b.maxWallClockMs >= MIN_ROUND_MS
     );
   };
-  const ctx: Ctx = { deps, input, s, left, enoughBudget, canRepair: (r) => r < total && enoughBudget() };
+  return {
+    deps,
+    input,
+    s,
+    resuming,
+    total,
+    left,
+    enoughBudget,
+    canRepair: (r) => r < total && enoughBudget(),
+  };
+}
+
+async function loop(ctx: Ctx): Promise<LoopResult> {
+  const { deps, input, s, left, enoughBudget, resuming, total } = ctx;
+  const { issue, canRunTests } = input;
   const note = () => s.guidance.join("\n\n").slice(-NOTE_MAX) || undefined;
 
   let round = 0;
@@ -374,8 +387,8 @@ async function loop(deps: LoopDeps, input: LoopInput): Promise<LoopResult> {
     if (deps.signal.aborted) return STOPPED;
     if (!skipAgent) {
       const repairing = round > 0 || resuming;
-      if (round >= total) return finish(ctx, "rounds_exhausted");
-      if (repairing && !enoughBudget()) return finish(ctx, "budget");
+      if (round >= total) return end(ctx, "rounds_exhausted");
+      if (repairing && !enoughBudget()) return end(ctx, "budget");
       round += 1;
       await claim(ctx, round);
       if (deps.signal.aborted) return STOPPED;
@@ -400,20 +413,18 @@ async function loop(deps: LoopDeps, input: LoopInput): Promise<LoopResult> {
       const failure: Failure = { reason: run.reason ?? "agent_failed", details: run.details ?? {} };
       if (run.reason === "secret_leak_detected" || run.reason === "stop_failed") {
         closeRound(ctx, round, "failed", `The agent run ended: ${failure.reason}.`);
-        return finish(ctx, run.reason, failure);
+        return end(ctx, run.reason, failure);
       }
       if (deps.signal.aborted || run.status === "STOPPED") return STOPPED;
       if (run.status === "FAILED") {
         closeRound(ctx, round, "agent_failed", `The agent run ended: ${failure.reason}.`);
         const outcome = run.outcome ?? (failure.reason === "budget_exceeded" ? "BUDGET_EXCEEDED" : undefined);
-        return finish(ctx, "agent_failed", { ...failure, ...(outcome ? { outcome } : {}) });
+        return end(ctx, "agent_failed", { ...failure, ...(outcome ? { outcome } : {}) });
       }
       const result = run.finalText ? parseResult(run.finalText) : null;
       if (result?.status === "needs_info") {
         closeRound(ctx, round, "needs_info", "The agent has a question only the owner can answer.");
-        if (s.passing) return finish(ctx, "needs_info", undefined, { questions: result.questions });
-        deps.event("loop.stopped", { reason: "needs_info" });
-        return { kind: "needs_info", questions: result.questions };
+        return end(ctx, "needs_info", undefined, result.questions);
       }
     }
 
@@ -423,16 +434,13 @@ async function loop(deps: LoopDeps, input: LoopInput): Promise<LoopResult> {
     } catch (err) {
       if (!(err instanceof ChangesetError)) throw err;
       closeRound(ctx, round, "agent_failed", err.message);
-      return finish(ctx, "agent_failed", { reason: err.reason, details: err.details });
+      return end(ctx, "agent_failed", { reason: err.reason, details: err.details });
     }
     if (deps.signal.aborted) return STOPPED;
     if (changeset.files.length === 0 || changeset.tree === s.tested?.changeset.tree) {
-      if (!s.tested) {
-        deps.event("loop.stopped", { reason: "no_changes" });
-        return { kind: "no_changes" };
-      }
+      if (!s.tested) return end(ctx, "no_changes");
       closeRound(ctx, round, "no_change", "The round changed nothing.");
-      return finish(ctx, "no_change");
+      return end(ctx, "no_change");
     }
 
     const integrity = await deps.checkIntegrity(changeset.files);
@@ -449,7 +457,11 @@ async function loop(deps: LoopDeps, input: LoopInput): Promise<LoopResult> {
       if (step === "stopped") return STOPPED;
       if (step === null) {
         closeRound(ctx, round, "passed", "The tests passed.");
-        return finish(ctx, "passed");
+        return end(ctx, "passed");
+      }
+      if ("reason" in step) {
+        closeRound(ctx, round, "failed", `The review run ended: ${step.reason}.`);
+        return end(ctx, step.reason, step);
       }
       closeRound(ctx, round, step.result, step.summary);
       evidence = step.evidence;
@@ -473,23 +485,28 @@ async function loop(deps: LoopDeps, input: LoopInput): Promise<LoopResult> {
     const summary = verification.reason ?? "The tests failed.";
     if (kind !== "repair") {
       closeRound(ctx, round, kind, summary);
-      return finish(ctx, kind);
+      return end(ctx, kind);
     }
     if (!s.sawFailure) {
       s.sawFailure = true;
-      if (!s.passing && !FIX_EXISTING.test(s.guidance.join("\n")) && left().maxWallClockMs >= MIN_ROUND_MS) {
-        const base = await deps.verify(input.baseTree, "base");
+      if (!s.passing) {
+        await claim(ctx, ctx.canRepair(round) ? round + 1 : 0);
         if (deps.signal.aborted) return STOPPED;
-        if (base.status !== "passed" && classifyFailure(base, []) === "repair") {
-          closeRound(ctx, round, "already_failing", "The tests fail on the base commit too.");
-          return finish(ctx, "already_failing");
+        const words = [...s.guidance, ...s.waiting.map((i) => i.text)].join("\n");
+        if (!FIX_EXISTING.test(words) && left().maxWallClockMs >= MIN_ROUND_MS) {
+          const base = await deps.verify(input.baseTree, "base");
+          if (deps.signal.aborted) return STOPPED;
+          if (base.status !== "passed" && classifyFailure(base, []) === "repair") {
+            closeRound(ctx, round, "already_failing", "The tests fail on the base commit too.");
+            return end(ctx, "already_failing");
+          }
         }
       }
     }
     const print = fingerprint(verification.outputTail);
     if (print !== null && print === s.lastFingerprint) {
       closeRound(ctx, round, "failed", "The same failure as the previous round.");
-      return finish(ctx, "repeated_failure");
+      return end(ctx, "repeated_failure");
     }
     s.lastFingerprint = print;
     closeRound(ctx, round, "failed", summary);

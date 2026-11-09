@@ -67,6 +67,8 @@ export const IssueToPrTask = z.object({
 export type IssueToPrTask = z.infer<typeof IssueToPrTask>;
 
 export const CHANGESET_MAX_FILES = 300;
+// NEXUS's own unresolved findings about a change, shown at the approval.
+export const ChangeNotes = z.array(z.string().max(500)).max(5);
 // Sum of decoded (raw) file bytes. Base64 adds ~4/3, so the upload route's body limit must allow ≈14 MB + JSON.
 export const CHANGESET_MAX_BYTES = 10 * 1024 * 1024;
 
@@ -135,6 +137,7 @@ export const UploadChangesetRequest = z.strictObject({
       testFilesChanged: z.array(z.string().max(500)).max(CHANGESET_MAX_FILES).optional(),
     })
     .optional(),
+  notes: ChangeNotes.optional(),
   // Set when the run stopped without a passing result; the changeset is kept for review or "keep fixing".
   report: StuckReport.optional(),
   terminalOutcome: z.enum(["FAILED_TESTS", "ENVIRONMENT_BLOCKED", "ALREADY_FAILING"]).optional(),
@@ -173,6 +176,7 @@ export const PushDraftPrAction = z.object({
   verification: Verification,
   qa: QaReview.optional(),
   testFilesChanged: z.array(z.string()).optional(),
+  notes: ChangeNotes.optional(),
 });
 export type PushDraftPrAction = z.infer<typeof PushDraftPrAction>;
 

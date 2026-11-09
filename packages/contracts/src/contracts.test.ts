@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  PushDraftPrAction,
+  UploadChangesetRequest,
   AgentProfileSettings,
   MetricDictionary,
   toolForAction,
@@ -304,6 +306,17 @@ describe("self-healing run contracts", () => {
   it("rejects feedback over the limit", () => {
     expect(JobFeedbackRequest.safeParse({ text: "a".repeat(FEEDBACK_MAX) }).success).toBe(true);
     expect(JobFeedbackRequest.safeParse({ text: "a".repeat(FEEDBACK_MAX + 1) }).success).toBe(false);
+  });
+
+  it.each([
+    ["upload", () => UploadChangesetRequest.shape.notes],
+    ["push action", () => PushDraftPrAction.shape.notes],
+  ] as const)("caps the %s notes at 5 entries of 500 characters, and they stay optional", (_name, schema) => {
+    const notes = schema();
+    expect(notes.safeParse(undefined).success).toBe(true);
+    expect(notes.safeParse(Array.from({ length: 5 }, () => "a".repeat(500))).success).toBe(true);
+    expect(notes.safeParse(Array.from({ length: 6 }, () => "a")).success).toBe(false);
+    expect(notes.safeParse(["a".repeat(501)]).success).toBe(false);
   });
 
   it("lets a verifying run go back to running", () => {

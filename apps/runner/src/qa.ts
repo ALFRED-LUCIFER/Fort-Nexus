@@ -4,6 +4,7 @@ import { buildChangeset } from "./changeset.ts";
 import { runClaudeTask, type ClaudeTaskOptions } from "./claude.ts";
 import { errorMessage } from "./log.ts";
 import { fenceBlock, newFence } from "./issue-prompt.ts";
+import type { QaRun } from "./repair-loop-types.ts";
 
 const DIFF_MAX = 120_000;
 const REASON_MAX = 500;
@@ -60,29 +61,35 @@ export function qaPrompt(issue: IssueSnapshot, diff: string): string {
 
 /**
  * One review run in the sandbox, attributed to QA. The verdict is a model's opinion, never a verified fact,
- * and the review is discarded when the tree changed. Every failure comes back as `could_not_run`.
+ * and the review is discarded when the tree changed. Every failure comes back as `could_not_run`, with what
+ * the run spent, and a secret leak or an unconfirmed stop also as `fatal`.
  */
-export async function runQaReview(opts: QaOptions): Promise<QaReview> {
+export async function runQaReview(opts: QaOptions): Promise<QaRun> {
+  let spend = { costUsd: 0, turns: 0 };
+  const done = (review: QaReview): QaRun => ({ review, ...spend });
   try {
     const { issue, diff, gitDir, baseSha, ...task } = opts;
     const before = (await buildChangeset(task.worktreePath, gitDir, baseSha)).tree;
     const r = await runClaudeTask({ ...task, agent: "QA", prompt: qaPrompt(issue, diff) });
-    if (r.status !== "COMPLETED") return couldNot(r.reason ?? r.status.toLowerCase());
+    spend = { costUsd: r.summary?.estimatedCostUsd ?? 0, turns: r.summary?.turns ?? 0 };
+    if (r.reason === "secret_leak_detected" || r.reason === "stop_failed")
+      return { ...done(couldNot(r.reason)), fatal: { reason: r.reason, details: r.details ?? {} } };
+    if (r.status !== "COMPLETED") return done(couldNot(r.reason ?? r.status.toLowerCase()));
     const after = (await buildChangeset(task.worktreePath, gitDir, baseSha)).tree;
-    if (after !== before) return couldNot("The review changed the code, so it was discarded.");
+    if (after !== before) return done(couldNot("The review changed the code, so it was discarded."));
     const parsed = r.finalText ? parseResult(r.finalText) : null;
-    if (parsed?.status !== "qa") return couldNot("The review did not report a result.");
+    if (parsed?.status !== "qa") return done(couldNot("The review did not report a result."));
     if (parsed.verdict === "defects" && parsed.defects.length === 0)
-      return couldNot("The review reported defects without evidence.");
+      return done(couldNot("The review reported defects without evidence."));
     const blocking = parsed.defects.some((d) => d.severity === "blocking");
-    return {
+    return done({
       status: "reviewed",
       // A "pass" that lists a blocking defect contradicts itself: the defect wins.
       verdict: parsed.verdict === "pass" && blocking ? "defects" : parsed.verdict,
       defects: parsed.defects,
       reason: null,
-    };
+    });
   } catch (err) {
-    return couldNot(errorMessage(err));
+    return done(couldNot(errorMessage(err)));
   }
 }

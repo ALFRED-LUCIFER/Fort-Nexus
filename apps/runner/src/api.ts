@@ -36,6 +36,10 @@ export class ApiCallError extends Error {
   }
 }
 
+/** This runner no longer holds the job: anything it would still report is refused. */
+export const isStaleLease = (err: unknown): boolean =>
+  err instanceof ApiCallError && err.code === "STALE_LEASE";
+
 export const isAuthError = (err: unknown): boolean =>
   err instanceof ApiCallError && (err.status === 401 || err.status === 403);
 
